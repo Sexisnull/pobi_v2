@@ -1,0 +1,60 @@
+Write Python code to file and execute in sandboxed WebAssembly environment. Combines file writing and execution in single operation.
+
+## USAGE
+
+Execute Python scripts for security testing in isolated environment with automatic package management.
+
+**Parameters** (all required):
+- `code`: Python source code to execute
+- `filename`: Name for the file (e.g., "exploit.py", "fuzzer.py")
+- `packages`: List of required packages (e.g., `["requests", "beautifulsoup4"]`)
+
+## WHEN TO USE
+
+- Execute Python exploits, payloads, or analysis scripts
+- Batch HTTP request testing (10-1000+ requests)
+- Complex security testing requiring Python logic
+- Custom fuzzing, data processing, or analysis scripts
+
+## PACKAGE REQUIREMENTS
+
+**MANDATORY**: Extract ALL external packages from your code before calling tool.
+
+- **Standard library** (os, sys, json, re, urllib, itertools) → Do NOT include
+- **Third-party** (requests, numpy, beautifulsoup4) → MUST include
+- If no external packages needed → use empty list `[]`
+
+**Example**:
+```python
+import requests       # Third-party → include
+import json          # Standard library → skip
+from bs4 import BeautifulSoup  # Third-party → include as "beautifulsoup4"
+
+# packages = ["requests", "beautifulsoup4"]
+```
+
+## FEATURES
+
+- Automatic file management (saves to `~/.cache/pobi/python/`)
+- Sandboxed execution (isolated WebAssembly environment)
+- Package installation (auto-installs before execution)
+- JSON results (structured output with stdout, stderr, return values)
+- Session support (maintains state across runs with `_session_id`)
+
+## EXAMPLE
+
+```python
+run_python_file(
+    code="import requests\nresponse = requests.get('https://example.com')\nprint(response.status_code)",
+    filename="test.py",
+    packages=["requests"]
+)
+```
+
+## NOTES
+
+- All three parameters required in single call
+- Missing packages cause ImportError
+- Complete isolation from host system
+- Files saved to `~/.cache/pobi/python/<filename>`
+- Session ID optional (auto-generated if not provided)

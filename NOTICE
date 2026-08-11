@@ -1,0 +1,24 @@
+Pobi v2 — 独立的 AI 渗透测试 Web 平台
+
+版权声明与许可证
+
+本项目（Pobi v2）以 GNU Affero General Public License v3（AGPL-3.0）
+发布。完整许可证文本见随附的 LICENSE 文件。
+
+版权归属
+- 项目整体：Copyright (C) 2025 当前项目维护者（Pobi v2）
+- 内嵌的 pobi_agent/ 子目录：衍生自上游项目 pobi
+  （https://github.com/Sexisnull/pobi），其原始版权归
+  Copyright (C) 2025 Yassine Bargach 所有，以 AGPL-3.0 许可。
+
+衍生说明
+- Pobi v2 是一个独立项目，非上游仓库的分支。
+- pobi_agent/ 为内嵌的上游决策内核副本（CoreAgent、DeadEndAgent、
+  EventHooks、工具链与置信度护栏），本项目的 Web 平台层（pobi_v2/、
+  web/、pobi_prompts/）为独立新增代码。
+- 依据 AGPL-3.0 第 13 条（远程网络交互），若本项目以网络服务形式
+  向公众提供，须向用户提供对应源代码获取途径。
+
+许可证兼容性
+- 本项目整体以 AGPL-3.0 发布，与上游 pobi 的许可证一致。
+- 任何对本项目的再分发或修改，均须在同一许可证下提供完整源代码。

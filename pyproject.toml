@@ -1,0 +1,89 @@
+[project]
+name = "pobi-v2"
+version = "1.0.0"
+description = "Pobi v2 - 前后端分离的 AI 渗透测试 Web 平台（重构自 pobi / deadend-cli）"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # --- pobi_v2 自身依赖 ---
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sqlalchemy>=2.0.41",
+    "alembic>=1.13.0",
+    "pydantic>=2.11.5",
+    "pydantic-settings>=2.6.0",
+    "psycopg[binary]>=3.2.0",
+    "sse-starlette>=2.1.0",
+    "redis>=5.0.0",
+    "arq>=0.25.0",
+    "python-multipart>=0.0.9",
+    "bcrypt>=4.1.0",       # M4 密码哈希
+    "pyjwt>=2.8.0",        # M4 JWT
+    "email-validator>=2.1.0",  # M4 EmailStr 支持
+    "pyyaml>=6.0.2",       # scope.yaml / 配置读写
+    "tldextract>=5.1.0",   # scope 域名解析
+
+    # --- 内嵌的 pobi_agent（原 pobi/pobi_agent，作为本仓库子包）运行依赖 ---
+    # 以下依赖随 pobi_agent / pobi_prompts 源码一并复制到 pobi_v2/pobi_v2/ 下，
+    # 不再作为外部包安装；但运行所需的三方依赖必须在此声明。
+    "aiofiles>=24.1.0",
+    "aiohttp>=3.12.14",
+    "aiolimiter>=1.2.0",
+    "aiosqlite>=0.20.0",
+    "asgiref>=3.8.1",
+    "beautifulsoup4>=4.13.4",
+    "cssbeautifier>=1.15.4",
+    "docker>=7.1.0",
+    "dotenv>=0.9.9",
+    "google-genai>=1.18.0",
+    "griffe>=1.15.0,<2",
+    "httptools>=0.6.4",
+    "instructor>=1.15.1",
+    "jsbeautifier>=1.15.4",
+    "litellm>=1.83.0",
+    "lxml>=6.0.0",
+    "nest-asyncio>=1.6.0",
+    "numpy>=2.0.0,<2.3.0",
+    "opentelemetry-api>=1.39.1",
+    "opentelemetry-exporter-otlp>=1.39.1",
+    "opentelemetry-sdk>=1.39.1",
+    "playwright>=1.56.0",
+    "pydantic-ai-slim[google,openrouter]>=1.35.0",
+    "readchar>=4.2.1",
+    "ripgrepy>=2.2.0",
+    "rich>=14.0.0",
+    "semantic-text-splitter>=0.27.0",
+    "tenacity>=9.1.2",
+    "tiktoken>=0.9.0",
+    "python-frontmatter>=1.1.0",  # pobi_prompts 运行时需要
+    "tree-sitter-css>=0.23.2",
+    "tree-sitter-html>=0.23.2",
+    "tree-sitter-javascript>=0.23.1",
+    "tree-sitter-markdown>=0.5.1",
+    "tree-sitter-typescript>=0.23.2",
+    "typer>=0.15.4",
+    "typing-extensions>=4.15.0",
+    "pydoll-python>=2.22.1",
+    "jinja2>=3.1.6",      # pobi_prompts 依赖
+
+    # 注：python-sandbox-client 未发布 PyPI，已作为源码子包复制到
+    # pobi_v2/pobi_v2/python_sandbox_client（与 pobi_agent/pobi_prompts 同目录）。
+    # 故不在 dependencies 中声明，避免 uv 去 PyPI/workspace 寻找。
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.27.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pobi_v2", "pobi_agent", "pobi_prompts", "python_sandbox_client"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

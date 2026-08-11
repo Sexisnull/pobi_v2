@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 测试 / 类型检查缓存
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 环境变量与敏感凭证（AGENTS.md 规范）
+.env
+.env.*
+server.txt
+
+# 本地数据 / 运行时产物
+*.sqlite
+*.db
+.cache/
+
+# uv
+uv.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store

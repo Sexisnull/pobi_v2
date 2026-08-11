@@ -1,0 +1,74 @@
+## TOOL SELECTION PRIORITY
+
+Choose the most efficient tool for each task type. Prefer specialized tools over generic ones.
+
+### HTTP Request Testing
+
+**Single payload test** (1-5 requests):
+1. `send_payload` - Specialized for request testing and raw HTTP request (priority 1)
+2. `sandboxed_shell_tool` - Using curl (priority 2)
+
+**Batch testing** (10-1000 requests):
+1. `run_python_file` - Write Python script for deterministic fuzzing (priority 1)
+2. `send_payload` - Only if batch tool unavailable or a fuzzing tool (priority 2)
+
+**High-volume fuzzing** (>1000 requests):
+1. `sandboxed_shell_tool` + specialized fuzzing tools (ffuf, gobuster) (priority 1)
+2. `run_python_file` - For custom fuzzing logic (priority 2)
+
+### Code Analysis
+
+**Semantic search** (finding patterns, endpoints):
+1. `webapp_code_rag` - Semantic search over indexed code (priority 1)
+
+**Pattern matching** (regex, specific strings):
+1. `webapp_code_rag` - If pattern is in indexed code (priority 1)
+
+**File reading** (specific files):
+1. `source_code_browser` - Direct file access (priority 1)
+2. `webapp_code_rag` - If file is indexed (priority 2)
+
+### Reconnaissance
+
+**Web reconnaissance** (forms, endpoints, architecture):
+1. `webapp_code_rag` - Fast, no HTTP requests, pre-indexed (priority 1)
+2. `send_payload` - For real-time verification (priority 2)
+3. `run_python_file` - For complex analysis
+
+**System reconnaissance** (ports, services, infrastructure):
+1. `sandboxed_shell_tool` - Use nmap, sqlmap, specialized tools, curl (priority 1)
+2. `run_python_file` - Only if shell tools insufficient (priority 2)
+
+### Exploitation
+
+**Simple exploits** (single payload):
+1. `send_payload` - Raw HTTP requests (priority 1)
+2. `sandboxed_shell_tool` - can send requests with curl (priority 2)
+
+**Complex exploits** (multi-stage, timing, logic):
+1. `run_python_file` - Full control, complex logic (priority 1)
+2. `send_payload` - For individual stages (priority 2)
+
+**System exploits** (command execution, file operations):
+1. `sandboxed_shell_tool` - Use appropriate security tools (priority 1)
+2. `run_python_file` - If shell tools insufficient (priority 2)
+
+### Decision Tree
+
+```
+Need to make HTTP request?
+├─ Single test → send_payload
+├─ Batch (10-1000) → run_python_file
+└─ High-volume (>1000) → sandboxed_shell_tool (ffuf/gobuster)
+
+Need to search code?
+├─ Semantic/pattern → webapp_code_rag
+└─ Specific file → source_code_browser
+
+Need to exploit?
+├─ Simple (1 payload) → send_payload
+├─ Complex (multi-stage) → run_python_file
+└─ System-level → sandboxed_shell_tool
+```
+
+**Rule**: Start with specialized tool, escalate to generic only if specialized fails. Priorities are specified with (priority N)

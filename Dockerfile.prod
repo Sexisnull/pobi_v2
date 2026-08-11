@@ -1,0 +1,58 @@
+# Pobi v2 生产镜像 —— 多阶段构建（AGENTS.md 强制要求）
+# 彻底隔离编译工具与纯净运行时，极限压缩镜像体积。
+
+# ---------- 阶段 1：构建器 ----------
+FROM python:3.12-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /build
+
+# 系统级构建依赖（仅用于编译器阶段，运行时剔除）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# 先用 uv 解析并安装全部依赖到隔离前缀（含 Playwright/tree-sitter 等编译型包）
+RUN pip install --no-cache-dir uv
+COPY pyproject.toml README.md ./
+RUN uv venv /opt/venv \
+    && uv pip install --python /opt/venv/bin/python --no-install-project --no-cache .
+
+# ---------- 阶段 2：运行时 ----------
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    PYTHONPATH="/app"
+
+WORKDIR /app
+
+# 仅运行时所需的最小系统库（Playwright/浏览器可选；默认不装以缩减体积）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# 从构建器复制纯净的虚拟环境
+COPY --from=builder /opt/venv /opt/venv
+
+# 复制应用源码（含内嵌 pobi_agent / pobi_prompts / web）
+COPY pobi_v2 ./pobi_v2
+COPY pobi_agent ./pobi_agent
+COPY pobi_prompts ./pobi_prompts
+COPY python_sandbox_client ./python_sandbox_client
+COPY alembic ./alembic
+COPY alembic.ini ./alembic.ini
+COPY web ./web
+
+# 健康检查（API 就绪）
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/health || exit 1
+
+# 默认启动 API（worker 通过 command 覆盖）
+EXPOSE 8000
+CMD ["gunicorn", "pobi_v2.main:app", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--workers", "2", "--bind", "0.0.0.0:8000", "--timeout", "3600"]

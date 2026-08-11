@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pobi v2 · AI 渗透测试平台</title>
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body>
+  <!-- 登录视图 -->
+  <div id="login-view" class="login-view hidden" data-od-id="login-view">
+    <div class="login-card" data-od-id="login-card">
+      <div class="brand" data-od-id="brand">
+        <span class="brand-mark">P</span>
+        <div>
+          <h1>Pobi v2</h1>
+          <p class="brand-sub">AI 渗透测试协作平台</p>
+        </div>
+      </div>
+      <div class="tabs">
+        <button class="tab active" data-tab="login">登录</button>
+        <button class="tab" data-tab="register">注册</button>
+      </div>
+      <form id="login-form" class="auth-form">
+        <label>邮箱<input type="email" name="email" required placeholder="you@corp.com" /></label>
+        <label>密码<input type="password" name="password" required placeholder="••••••••" /></label>
+        <button type="submit" class="btn primary" data-od-id="cta-login">登录</button>
+      </form>
+      <form id="register-form" class="auth-form hidden">
+        <label>邮箱<input type="email" name="email" required placeholder="you@corp.com" /></label>
+        <label>密码<input type="password" name="password" required minlength="8" placeholder="至少 8 位" /></label>
+        <label>姓名<input type="text" name="full_name" placeholder="可选" /></label>
+        <label>租户标识 (slug)<input type="text" name="tenant_slug" required placeholder="acme" /></label>
+        <button type="submit" class="btn primary" data-od-id="cta-register">创建账户</button>
+      </form>
+      <p id="auth-error" class="form-error"></p>
+    </div>
+  </div>
+
+  <!-- 主应用视图 -->
+  <div id="app-view" class="app-view hidden" data-od-id="app-view">
+    <aside class="sidebar" data-od-id="sidebar">
+      <div class="sidebar-brand"><span class="brand-mark">P</span> Pobi v2</div>
+      <nav data-od-id="sidebar-nav">
+        <button class="nav-item active" data-view="tasks">任务</button>
+        <button class="nav-item" data-view="targets">授权目标</button>
+        <button class="nav-item" data-view="approvals">审批</button>
+        <button class="nav-item" data-view="audit">审计</button>
+      </nav>
+      <div class="sidebar-footer">
+        <div id="user-info" class="user-info"></div>
+        <button id="logout-btn" class="btn ghost small">退出</button>
+      </div>
+    </aside>
+
+    <main class="content">
+      <!-- 任务视图 -->
+      <section id="view-tasks" class="view" data-od-id="view-tasks">
+        <header class="view-head">
+          <h2>渗透任务</h2>
+          <button class="btn primary" data-action="new-task" data-od-id="cta-new-task">+ 新建任务</button>
+        </header>
+        <div id="task-list" class="card-grid"></div>
+      </section>
+
+      <!-- 目标视图 -->
+      <section id="view-targets" class="view hidden" data-od-id="view-targets">
+        <header class="view-head">
+          <h2>授权目标</h2>
+          <button class="btn primary" data-action="new-target" data-od-id="cta-new-target">+ 新建目标</button>
+        </header>
+        <div id="target-list" class="card-grid"></div>
+      </section>
+
+      <!-- 审批视图 -->
+      <section id="view-approvals" class="view hidden" data-od-id="view-approvals">
+        <header class="view-head">
+          <h2>高危操作审批</h2>
+          <button class="btn ghost small" data-action="refresh-approvals">刷新</button>
+        </header>
+        <div id="approval-list" class="card-grid"></div>
+      </section>
+
+      <!-- 审计视图 -->
+      <section id="view-audit" class="view hidden" data-od-id="view-audit">
+        <header class="view-head">
+          <h2>审计日志</h2>
+          <button class="btn ghost small" data-action="refresh-audit">刷新</button>
+        </header>
+        <div id="audit-list" class="table-wrap"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 通用模态层 -->
+  <div id="modal-root" class="modal-root hidden">
+    <div class="modal-backdrop" data-close></div>
+    <div id="modal-body" class="modal"></div>
+  </div>
+
+  <!-- 任务详情抽屉 -->
+  <div id="drawer-root" class="drawer-root hidden">
+    <div class="drawer-backdrop" data-close></div>
+    <div id="drawer-body" class="drawer"></div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

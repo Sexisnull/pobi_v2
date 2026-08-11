@@ -1,0 +1,45 @@
+Search for regex patterns in session log files (requester.jsonl and python_interpreter.jsonl).
+
+## USAGE
+
+Search for patterns in current session's logs to find previous requests, responses, tokens, errors, or data from prior tool executions.
+
+**Parameters**:
+- `pattern`: Python regex pattern (e.g., `"token.*[A-Za-z0-9]+"`, `"status.*200"`, `"error|Error"`)
+
+**Search Locations**:
+- `requester.jsonl`: HTTP request/response data
+- `python_interpreter.jsonl`: Python script execution results
+
+## WHEN TO USE
+
+- Find authentication tokens, cookies, session IDs from previous requests
+- Search for specific endpoints, URLs, or request patterns
+- Extract status codes, error messages, or response patterns
+- Retrieve Python script output or errors
+- Identify recurring patterns or anomalies across session history
+
+## OUTPUT
+
+Returns formatted string with:
+- Total matches found
+- For each match: file name, line number, matched text, position, context (first 200 chars)
+
+## EXAMPLE PATTERNS
+
+```
+"token.*[A-Za-z0-9]{20,}"           # Find auth tokens
+"/api/.*"                            # Search for API endpoints
+"status.*code.*[0-9]{3}"            # Extract status codes
+"error|Error|ERROR|exception"       # Find error messages
+"password|secret|api_key"           # Find sensitive data
+"(?i)content-type.*application/json" # Case-insensitive header search
+```
+
+## NOTES
+
+- Case-sensitive by default (use `(?i)` for case-insensitive)
+- Session-scoped (only searches current session logs)
+- Gracefully handles missing files
+- Read-only (doesn't modify logs)
+- Use valid Python regex syntax

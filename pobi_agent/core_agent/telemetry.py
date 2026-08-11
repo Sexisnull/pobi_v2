@@ -1,0 +1,285 @@
+# Copyright (C) 2025 Yassine Bargach
+# Licensed under the GNU Affero General Public License v3
+# See LICENSE file for full license information.
+
+"""OpenTelemetry telemetry setup with multi-backend support.
+
+Supports simultaneous export to:
+- Console (for development/debugging)
+- OTLP endpoint (for Jaeger, Honeycomb, Grafana, etc.)
+- File (JSON logs for local analysis)
+
+Configuration via environment variables:
+- OTEL_CONSOLE_ENABLED: Enable console export (default: true)
+- OTEL_EXPORTER_OTLP_ENDPOINT: OTLP endpoint URL (optional)
+- OTEL_FILE_EXPORT_PATH: Path for file export (optional)
+- OTEL_SERVICE_NAME: Service name for traces (default: pobi-agent)
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import json
+from pathlib import Path
+from typing import Sequence
+
+
+def _log(msg: str) -> None:
+    """Log message to stderr to avoid breaking RPC communication."""
+    print(msg, file=sys.stderr)
+
+try:
+    from opentelemetry import trace
+    from opentelemetry.trace import SpanKind
+    from opentelemetry.sdk.trace import TracerProvider, ReadableSpan
+    from opentelemetry.sdk.trace.export import (
+        BatchSpanProcessor,
+        SpanExporter,
+        SpanExportResult,
+    )
+    from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+
+    OTEL_AVAILABLE = True
+except ImportError:
+    OTEL_AVAILABLE = False
+    from enum import IntEnum
+    class SpanKind(IntEnum):
+        INTERNAL = 1
+        SERVER = 2
+        CLIENT = 3
+        PRODUCER = 4
+        CONSUMER = 5
+    # Fallback no-op implementation
+    class NoOpSpan:
+        def set_attribute(self, key, value): pass
+        def set_status(self, status): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    class NoOpTracer:
+        def start_as_current_span(self, name, **kwargs):
+            return NoOpSpan()
+
+
+class StderrSpanExporter(SpanExporter):
+    """Exports spans to stderr instead of stdout.
+
+    This is critical for RPC-based applications where stdout is used for
+    JSON-RPC communication. The standard ConsoleSpanExporter writes to stdout
+    which breaks the RPC protocol.
+    """
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        """Export spans to stderr.
+
+        Args:
+            spans: Sequence of spans to export
+
+        Returns:
+            SpanExportResult indicating success
+        """
+        for span in spans:
+            trace_id = format(span.context.trace_id, '032x')
+            span_id = format(span.context.span_id, '016x')
+            status = span.status.status_code.name if span.status else "UNSET"
+
+            # Simple one-line format for stderr
+            _log(f"[SPAN] {span.name} trace={trace_id[:8]} span={span_id[:8]} status={status}")
+
+            # Log attributes if any (but not the full stacktrace)
+            if span.attributes:
+                for key, value in span.attributes.items():
+                    # Skip exception stacktrace to avoid cluttering output
+                    if key == "exception.stacktrace":
+                        continue
+                    _log(f"  {key}={value}")
+
+        return SpanExportResult.SUCCESS
+
+    def shutdown(self):
+        """Shutdown exporter."""
+        pass
+
+
+class FileSpanExporter(SpanExporter):
+    """Exports spans to JSON files for local analysis."""
+
+    def __init__(self, export_path: str):
+        """Initialize file exporter.
+
+        Args:
+            export_path: Directory path where span files will be written
+        """
+        self.export_path = Path(export_path).expanduser()
+        self.export_path.mkdir(parents=True, exist_ok=True)
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        """Export spans to JSON file.
+
+        Args:
+            spans: Sequence of spans to export
+
+        Returns:
+            SpanExportResult indicating success or failure
+        """
+        try:
+            # Group spans by trace_id for better organization
+            for span in spans:
+                trace_id = format(span.context.trace_id, '032x')
+                file_path = self.export_path / f"trace_{trace_id}.jsonl"
+
+                span_data = {
+                    "name": span.name,
+                    "trace_id": trace_id,
+                    "span_id": format(span.context.span_id, '016x'),
+                    "parent_id": format(span.parent.span_id, '016x') if span.parent else None,
+                    "start_time": span.start_time,
+                    "end_time": span.end_time,
+                    "duration_ns": span.end_time - span.start_time if span.end_time else None,
+                    "attributes": dict(span.attributes) if span.attributes else {},
+                    "status": {
+                        "status_code": span.status.status_code.name,
+                        "description": span.status.description,
+                    },
+                }
+
+                # Append to file (JSONL format)
+                with open(file_path, "a") as f:
+                    json.dump(span_data, f)
+                    f.write("\n")
+
+            return SpanExportResult.SUCCESS
+        except Exception as e:
+            _log(f"FileSpanExporter error: {e}")
+            return SpanExportResult.FAILURE
+
+    def shutdown(self):
+        """Shutdown exporter."""
+        pass
+
+
+class MultiSpanExporter(SpanExporter):
+    """Sends spans to multiple exporters simultaneously."""
+
+    def __init__(self, exporters: list[SpanExporter]):
+        """Initialize multi-exporter.
+
+        Args:
+            exporters: List of span exporters to send to
+        """
+        self.exporters = exporters
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        """Export spans to all configured exporters.
+
+        Args:
+            spans: Sequence of spans to export
+
+        Returns:
+            SpanExportResult.SUCCESS if at least one exporter succeeds
+        """
+        results = []
+        for exporter in self.exporters:
+            try:
+                result = exporter.export(spans)
+                results.append(result)
+            except Exception as e:
+                _log(f"Exporter {exporter.__class__.__name__} error: {e}")
+                results.append(SpanExportResult.FAILURE)
+
+        # Return success if at least one succeeded
+        return (
+            SpanExportResult.SUCCESS
+            if SpanExportResult.SUCCESS in results
+            else SpanExportResult.FAILURE
+        )
+
+    def shutdown(self):
+        """Shutdown all exporters."""
+        for exporter in self.exporters:
+            try:
+                exporter.shutdown()
+            except Exception as e:
+                _log(f"Exporter shutdown error: {e}")
+
+
+def setup_telemetry() -> trace.Tracer | NoOpTracer:
+    """Configure multi-backend OpenTelemetry.
+
+    When DEADEND_OTEL_USE_GLOBAL=1 (e.g. when pobi uses Phoenix), uses the
+    already-registered global tracer provider instead of creating a new one, so
+    all spans go to Phoenix.
+
+    Otherwise reads configuration from environment variables:
+    - OTEL_CONSOLE_ENABLED: Enable console export (default: "true")
+    - OTEL_EXPORTER_OTLP_ENDPOINT: OTLP endpoint (e.g., http://localhost:4317)
+    - OTEL_FILE_EXPORT_PATH: File export path (e.g., ~/.cache/pobi/agents/{agent_id}/traces/)
+    - OTEL_SERVICE_NAME: Service name (default: "pobi-agent")
+
+    Returns:
+        Configured tracer instance, or NoOpTracer if OpenTelemetry unavailable
+    """
+    if not OTEL_AVAILABLE:
+        _log("OpenTelemetry not available, using no-op tracer")
+        return NoOpTracer()
+
+    # Use global provider (e.g. Phoenix) when pobi registered it first
+    if os.getenv("DEADEND_OTEL_USE_GLOBAL", "").strip() == "1":
+        try:
+            tracer = trace.get_tracer(__name__)
+            _log("OpenTelemetry: Using global tracer provider (e.g. Phoenix)")
+            return tracer
+        except Exception as e:
+            _log(f"OpenTelemetry: Failed to get global tracer: {e}")
+
+    exporters = []
+
+    # Console exporter (for development) - uses stderr to avoid breaking RPC
+    if os.getenv("OTEL_CONSOLE_ENABLED", "true").lower() == "true":
+        exporters.append(StderrSpanExporter())
+        _log("OpenTelemetry: Stderr exporter enabled")
+
+    # OTLP exporter (for production backends)
+    if endpoint := os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        try:
+            exporters.append(OTLPSpanExporter(endpoint=endpoint))
+            _log(f"OpenTelemetry: OTLP exporter enabled (endpoint: {endpoint})")
+        except Exception as e:
+            _log(f"OpenTelemetry: OTLP exporter error: {e}")
+
+    # File exporter (for local analysis)
+    if path := os.getenv("OTEL_FILE_EXPORT_PATH"):
+        try:
+            exporters.append(FileSpanExporter(path))
+            _log(f"OpenTelemetry: File exporter enabled (path: {path})")
+        except Exception as e:
+            _log(f"OpenTelemetry: File exporter error: {e}")
+
+    if not exporters:
+        _log("OpenTelemetry: No exporters configured, using no-op tracer")
+        return NoOpTracer()
+
+    # Create tracer provider with service name
+    service_name = os.getenv("OTEL_SERVICE_NAME", "pobi-agent")
+    resource = Resource(attributes={SERVICE_NAME: service_name})
+    provider = TracerProvider(resource=resource)
+
+    # Add batch processor with multi-exporter
+    if len(exporters) == 1:
+        provider.add_span_processor(BatchSpanProcessor(exporters[0]))
+    else:
+        provider.add_span_processor(BatchSpanProcessor(MultiSpanExporter(exporters)))
+
+    # Set as global provider
+    trace.set_tracer_provider(provider)
+
+    # Return tracer
+    tracer = trace.get_tracer(__name__)
+    _log(f"OpenTelemetry: Tracer initialized for service '{service_name}' with {len(exporters)} exporter(s)")
+    return tracer
+
+
+# Global tracer instance
+tracer = setup_telemetry()

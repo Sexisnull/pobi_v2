@@ -1,0 +1,91 @@
+# Pobi v2 生产编排
+# 注意（AGENTS.md 规范）：所有镜像强制使用阿里云 ACR 前缀拉取内网镜像，
+# 严禁使用官方裸镜像（如 postgres:16-alpine）。下方 ${ACR_REGISTRY} 需替换为
+# 真实 ACR 地址（如 registry.cn-hangzhou.aliyuncs.com/your-ns）。
+# 镜像构建：docker build -f Dockerfile.prod -t ${ACR_REGISTRY}/pobi_v2:1.0.0 .
+
+services:
+  postgres:
+    image: ${ACR_REGISTRY:-registry.cn-hangzhou.aliyuncs.com/your-ns}/postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POBI_V2_DB_USER:-pobi}
+      POSTGRES_PASSWORD: ${POBI_V2_DB_PASSWORD:-pobi}
+      POSTGRES_DB: ${POBI_V2_DB_NAME:-pobi_v2}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pobi_v2_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POBI_V2_DB_USER:-pobi}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: ${ACR_REGISTRY:-registry.cn-hangzhou.aliyuncs.com/your-ns}/redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - pobi_v2_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ---- API（FastAPI + gunicorn/uvicorn）----
+  api:
+    image: ${ACR_REGISTRY:-registry.cn-hangzhou.aliyuncs.com/your-ns}/pobi_v2:1.0.0
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    env_file: .env
+    environment:
+      POBI_V2_DATABASE_URL: postgresql+psycopg://${POBI_V2_DB_USER:-pobi}:${POBI_V2_DB_PASSWORD:-pobi}@postgres:5432/${POBI_V2_DB_NAME:-pobi_v2}
+      POBI_V2_REDIS_URL: redis://redis:6379/0
+      POBI_V2_EVENT_BUS_BACKEND: redis
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  # ---- Worker（ARQ 异步任务执行）----
+  worker:
+    image: ${ACR_REGISTRY:-registry.cn-hangzhou.aliyuncs.com/your-ns}/pobi_v2:1.0.0
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    env_file: .env
+    command: ["arq", "pobi_v2.engine.worker.WorkerSettings"]
+    environment:
+      POBI_V2_DATABASE_URL: postgresql+psycopg://${POBI_V2_DB_USER:-pobi}:${POBI_V2_DB_PASSWORD:-pobi}@postgres:5432/${POBI_V2_DB_NAME:-pobi_v2}
+      POBI_V2_REDIS_URL: redis://redis:6379/0
+      POBI_V2_EVENT_BUS_BACKEND: redis
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---- Web（nginx 静态托管 + 反代 + Gzip）----
+  web:
+    image: ${ACR_REGISTRY:-registry.cn-hangzhou.aliyuncs.com/your-ns}/nginx:1.27-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./web:/usr/share/nginx/html:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pobi_v2_pg:
+  pobi_v2_redis:
