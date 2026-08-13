@@ -32,6 +32,7 @@ from pobi_v2.db.session import AsyncSessionLocal
 from pobi_v2.engine.approval import make_approval_callback
 from pobi_v2.engine.cancel_state import clear_cancel, is_cancelled_sync
 from pobi_v2.engine.deadend_runner import run_deadend_agent
+from pobi_v2.engine.event_bus import get_session_usage, reset_session_usage
 
 
 def _utcnow() -> datetime:
@@ -132,6 +133,11 @@ async def run_task(ctx, task_id: str) -> dict:
                     t.status = _status
                     t.error = _err
                     t.finished_at = _utcnow()
+                    # 兜底落库已消耗 token（反映运行中断前的真实用量）
+                    _fu = await get_session_usage(str(tid))
+                    t.prompt_tokens = _fu["prompt_tokens"]
+                    t.completion_tokens = _fu["completion_tokens"]
+                    t.total_tokens = _fu["total_tokens"]
                     await record_audit(
                         s2, action="task.terminated",
                         outcome="error" if _status == TaskStatus.failed else "success",
@@ -176,6 +182,8 @@ async def _run_task_body(tid: UUID) -> dict:
 
         task.status = TaskStatus.running
         task.started_at = _utcnow()
+        # 清空会话级 token 累计（避免跨任务 / 续跑污染）
+        await reset_session_usage(str(tid))
         await session.commit()
 
         # 取全局事件钩子（已在应用启动时 install_event_hooks 安装，按 session_id==task_id 分发）
@@ -244,6 +252,11 @@ async def _run_task_body(tid: UUID) -> dict:
         task.result = serialize_result(outcome.get("summary")) or ""
         task.confidence = outcome.get("confidence")
         task.finished_at = _utcnow()
+        # 落库 token 用量（发送=prompt / 接收=completion）
+        usage = await get_session_usage(str(tid))
+        task.prompt_tokens = usage["prompt_tokens"]
+        task.completion_tokens = usage["completion_tokens"]
+        task.total_tokens = usage["total_tokens"]
         await _persist_outcome(session, task, target, outcome)
         await record_audit(
             session, action="task.completed", outcome="success",

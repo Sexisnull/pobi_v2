@@ -160,6 +160,10 @@ class Task(Base):
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_agent_session: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Token 用量（由 CoreAgent.run 的累计 usage 落库；prompt=发送 / completion=接收）
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # 审计
     operator: Mapped[str] = mapped_column(String(128), default="web-operator")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
@@ -333,4 +337,22 @@ class AuditEvent(Base):
     meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, index=True
+    )
+
+
+class PricingConfig(Base):
+    """全局 LLM 价格配置（每百万 token 单价，单位：元/美元由用户自定义）。
+
+    单条记录（id 固定为 DEFAULT_ID），供 Token 用量页估算成本。
+    price_input = 输入（prompt）单价；price_output = 输出（completion）单价。
+    """
+
+    __tablename__ = "pricing_config"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default="default")
+    price_input: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    price_output: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), default="USD", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )

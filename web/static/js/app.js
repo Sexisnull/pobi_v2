@@ -173,6 +173,7 @@
         if (v === "targets") loadTargets();
         if (v === "approvals") loadApprovals();
         if (v === "audit") loadAudit();
+        if (v === "tokens") loadTokens();
       });
     });
 
@@ -184,6 +185,7 @@
       if (a === "new-target") openTargetModal();
       if (a === "refresh-approvals") loadApprovals();
       if (a === "refresh-audit") loadAudit();
+      if (a === "refresh-tokens") loadTokens();
       if (a === "reconcile") triggerReconcile();
     });
 
@@ -197,6 +199,131 @@
         }
       });
     });
+
+    // 价格配置表单提交
+    const priceForm = $("#price-form");
+    if (priceForm) {
+      priceForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(priceForm);
+        const payload = {
+          price_input: Number(fd.get("price_input")) || 0,
+          price_output: Number(fd.get("price_output")) || 0,
+        };
+        const btn = priceForm.querySelector('button[type="submit"]');
+        btn.disabled = true;
+        try {
+          await api("PUT", "/api/v1/pricing", payload);
+          toast("价格已保存", "ok");
+          // 重新计算成本展示
+          const summary = await api("GET", "/api/v1/tasks/usage/summary");
+          await applyPricingToUI(summary);
+        } catch (err) {
+          toast("保存失败: " + (err.message || err), "err");
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    }
+  }
+
+  // ---- Token 用量页 ----
+  function fmtNum(n) {
+    return Number(n || 0).toLocaleString("en-US");
+  }
+  function fmtCost(value, currency) {
+    if (!value || value <= 0) return "—";
+    return (
+      (value).toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 4,
+      }) +
+      " " +
+      (currency || "USD")
+    );
+  }
+  function estimateCost(promptTokens, completionTokens, price) {
+    const p = (Number(promptTokens) || 0) * (Number(price.price_input) || 0) / 1e6;
+    const c = (Number(completionTokens) || 0) * (Number(price.price_output) || 0) / 1e6;
+    return p + c;
+  }
+  async function loadTokens() {
+    const sumEl = $("#sum-total");
+    if (sumEl) sumEl.textContent = "…";
+    try {
+      const [summary, pricing] = await Promise.all([
+        api("GET", "/api/v1/tasks/usage/summary"),
+        api("GET", "/api/v1/pricing"),
+      ]);
+      renderTokenSummary(summary, pricing);
+      renderTokenTasks(pricing);
+    } catch (err) {
+      toast("加载 Token 用量失败: " + (err.message || err), "err");
+    }
+  }
+  async function applyPricingToUI(summary) {
+    const pricing = await api("GET", "/api/v1/pricing");
+    renderTokenSummary(summary, pricing);
+  }
+  function renderTokenSummary(summary, pricing) {
+    const p = Number(summary.total_prompt_tokens) || 0;
+    const c = Number(summary.total_completion_tokens) || 0;
+    const t = Number(summary.total_tokens) || 0;
+    const cost = estimateCost(p, c, pricing);
+    $("#sum-prompt").textContent = fmtNum(p);
+    $("#sum-completion").textContent = fmtNum(c);
+    $("#sum-total").textContent = fmtNum(t);
+    $("#sum-tasks").textContent = fmtNum(summary.task_count);
+    $("#sum-prompt-cost").textContent = fmtCost(
+      (p * (Number(pricing.price_input) || 0)) / 1e6, pricing.currency
+    );
+    $("#sum-completion-cost").textContent = fmtCost(
+      (c * (Number(pricing.price_output) || 0)) / 1e6, pricing.currency
+    );
+    $("#sum-total-cost").textContent = fmtCost(cost, pricing.currency);
+    $("#sum-task-cost").textContent = fmtCost(cost, pricing.currency);
+    // 回填价格表单
+    const form = $("#price-form");
+    if (form) {
+      form.price_input.value = pricing.price_input || 0;
+      form.price_output.value = pricing.price_output || 0;
+    }
+    $("#price-cur-input").textContent = pricing.currency || "USD";
+    $("#price-cur-output").textContent = pricing.currency || "USD";
+  }
+  async function renderTokenTasks(pricing) {
+    let tasks;
+    try {
+      tasks = await api("GET", "/api/v1/tasks");
+    } catch {
+      tasks = [];
+    }
+    const tbody = $("#token-task-table tbody");
+    const empty = $("#token-empty");
+    if (!tbody) return;
+    if (!tasks.length) {
+      tbody.innerHTML = "";
+      empty.classList.remove("hidden");
+      return;
+    }
+    empty.classList.add("hidden");
+    tbody.innerHTML = tasks
+      .map((tk) => {
+        const p = Number(tk.prompt_tokens) || 0;
+        const c = Number(tk.completion_tokens) || 0;
+        const t = Number(tk.total_tokens) || 0;
+        const cost = estimateCost(p, c, pricing);
+        return `<tr data-task-id="${tk.id}">
+          <td class="col-status"><span class="st ${tk.status}">${tk.status}</span></td>
+          <td class="cell-name" title="${(tk.name || "").replace(/"/g, "&quot;")}">${tk.name || "—"}</td>
+          <td class="col-tokens">${fmtNum(p)}</td>
+          <td class="col-tokens">${fmtNum(c)}</td>
+          <td class="col-tokens"><b>${fmtNum(t)}</b></td>
+          <td class="col-tokens cost">${fmtCost(cost, pricing.currency)}</td>
+          <td class="col-action"><button class="btn ghost small" data-open-task="${tk.id}">详情</button></td>
+        </tr>`;
+      })
+      .join("");
   }
 
   // ---- 模态 / 抽屉 ----
@@ -813,17 +940,22 @@
   // ---- 渗透任务实时监控控制台（全屏三栏） ----
   async function openTaskConsole(id) {
     try {
-      const [detail, live, plan, findings] = await Promise.all([
+      const [detail, live, plan, findings, usage] = await Promise.all([
         api("/tasks/" + id),
         api("/tasks/" + id + "/live"),
         api("/tasks/" + id + "/plan"),
         api("/tasks/" + id + "/findings"),
+        api("/tasks/" + id + "/usage").catch(() => null),
       ]);
 
       state.consoleId = id;
       const mode = detail.agent_mode || "hacker";
       const modeLabel = mode === "yolo" ? "主动验证" : "受控模式";
       const canControl = ["queued", "running"].includes(detail.status);
+
+      const up = Number(usage?.prompt_tokens) || 0;
+      const uc = Number(usage?.completion_tokens) || 0;
+      const ut = Number(usage?.total_tokens) || 0;
 
       $("#console-body").innerHTML = `
         <div class="console-shell">
@@ -861,6 +993,16 @@
               <button class="btn small" data-console-report>报告</button>
             </div>
           </header>
+
+          ${
+            ut > 0
+              ? `<div class="console-tokens">
+                  <div class="ctok ctok-send"><span class="ctok-num">${fmtNum(up)}</span><span class="ctok-lab">发送</span></div>
+                  <div class="ctok ctok-recv"><span class="ctok-num">${fmtNum(uc)}</span><span class="ctok-lab">接收</span></div>
+                  <div class="ctok ctok-total"><span class="ctok-num">${fmtNum(ut)}</span><span class="ctok-lab">总 Token</span></div>
+                </div>`
+              : ""
+          }
 
           <div class="console-grid">
             <!-- 左栏：执行计划 / 运行视图 -->

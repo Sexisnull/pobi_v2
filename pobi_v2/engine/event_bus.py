@@ -20,6 +20,16 @@ from pobi_agent.hooks import EventHooks
 from pobi_v2.core.config import settings
 
 
+def _truncate(text: Any, limit: int) -> str:
+    """截断超长文本，避免事件载荷刷屏。空值安全。"""
+    if text is None:
+        return ""
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "…"
+
+
 class EventBusBackend(ABC):
     @abstractmethod
     async def subscribe(self, session_id: str) -> asyncio.Queue: ...
@@ -282,12 +292,20 @@ class PobiV2EventHooks:
             bus.publish(session_id, _wrap("llm_input", session_id, **payload))
         )
 
-    def emit_llm_response(self, session_id, agent_name, response_text, thinking_text=None):
+    def emit_llm_response(self, session_id, agent_name, response_text, thinking_text=None,
+                           usage=None):
         """LLM 响应：模型返回的完整文本（含可选 thinking/reasoning）。
 
         response_text 截断至 3000 字符；thinking_text 截断至 2000 字符。
         前端以可折叠面板展示，保留可观测性同时避免刷屏。
+
+        usage（litellm/pydantic_ai 的 usage 对象，可选）用于累计会话级 token 用量，
+        供 executor 在任务结束时写回 Task 的 Token 三列。
         """
+        # 累计会话级 token 用量（发送=prompt / 接收=completion）
+        if usage is not None:
+            _accumulate_session_usage(session_id, usage)
+
         payload: dict[str, Any] = {
             "agent_name": agent_name,
             "response_text": _truncate(response_text, 3000),
@@ -345,3 +363,52 @@ async def persist_event_worker() -> None:
         except Exception:  # noqa: BLE001
             # 持久化失败不影响主流程与实时推送
             continue
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# 会话级 Token 用量累计（供 Token 用量页 / 任务落库）
+# ──────────────────────────────────────────────────────────────────────────
+class _SessionUsage:
+    """单个会话的累计 token 用量。prompt=发送，completion=接收。"""
+
+    __slots__ = ("prompt_tokens", "completion_tokens", "total_tokens")
+
+    def __init__(self) -> None:
+        self.prompt_tokens: int = 0
+        self.completion_tokens: int = 0
+        self.total_tokens: int = 0
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+        }
+
+
+_session_usage_store: dict[str, _SessionUsage] = {}
+_session_usage_lock = asyncio.Lock()
+
+
+def _accumulate_session_usage(session_id: str, usage: Any) -> None:
+    """把单次 LLM 响应的 usage 累加到会话计数器（线程/协程安全，O(1)）。"""
+    prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+    completion = int(getattr(usage, "completion_tokens", 0) or 0)
+    total = int(getattr(usage, "total_tokens", 0) or 0) or (prompt + completion)
+    store = _session_usage_store.setdefault(session_id, _SessionUsage())
+    store.prompt_tokens += prompt
+    store.completion_tokens += completion
+    store.total_tokens += total
+
+
+async def get_session_usage(session_id: str) -> dict[str, int]:
+    """读取会话累计 token 用量。"""
+    async with _session_usage_lock:
+        store = _session_usage_store.get(session_id)
+        return store.as_dict() if store else _SessionUsage().as_dict()
+
+
+async def reset_session_usage(session_id: str) -> None:
+    """清空会话累计（任务启动时调用，避免跨任务污染）。"""
+    async with _session_usage_lock:
+        _session_usage_store.pop(session_id, None)

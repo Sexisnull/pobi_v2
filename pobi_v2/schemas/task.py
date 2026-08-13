@@ -44,8 +44,37 @@ class TaskRead(BaseModel):
     updated_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    # Token 用量（发送=prompt_tokens / 接收=completion_tokens / 总计=total_tokens）
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
     model_config = {"from_attributes": True}
+
+
+class TaskUsage(BaseModel):
+    """单次任务的 token 用量明细。"""
+    task_id: str
+    name: str
+    status: str
+    model: str | None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class UsageSummary(BaseModel):
+    """全部任务 token 用量汇总。"""
+    task_count: int = 0
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    total_tokens: int = 0
+    # 按状态拆分（仅统计有意义的消耗）
+    completed_prompt_tokens: int = 0
+    completed_completion_tokens: int = 0
+    completed_total_tokens: int = 0
 
 
 class PlanStep(BaseModel):

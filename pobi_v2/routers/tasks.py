@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,6 +20,8 @@ from pobi_v2.schemas.task import (
     TaskCreate,
     TaskRead,
     TaskUpdate,
+    TaskUsage,
+    UsageSummary,
     PlanStep,
     PlanSummary,
     AgentRuntime,
@@ -110,6 +112,43 @@ async def list_tasks(
     return list(result.scalars().all())
 
 
+@router.get("/usage/summary", response_model=UsageSummary)
+async def usage_summary(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+) -> UsageSummary:
+    """全部任务的 token 用量汇总（发送 / 接收 / 总计，以及已完成任务拆分）。"""
+    rows = await session.execute(
+        select(
+            func.count(Task.id),
+            func.coalesce(func.sum(Task.prompt_tokens), 0),
+            func.coalesce(func.sum(Task.completion_tokens), 0),
+            func.coalesce(func.sum(Task.total_tokens), 0),
+        ).where(Task.tenant_id == user.tenant_id)
+    )
+    count, sum_prompt, sum_completion, sum_total = rows.first()
+    # 已完成任务单独统计
+    comp_rows = await session.execute(
+        select(
+            func.coalesce(func.sum(Task.prompt_tokens), 0),
+            func.coalesce(func.sum(Task.completion_tokens), 0),
+            func.coalesce(func.sum(Task.total_tokens), 0),
+        ).where(
+            Task.tenant_id == user.tenant_id, Task.status == TaskStatus.completed
+        )
+    )
+    comp_prompt, comp_completion, comp_total = comp_rows.first()
+    return UsageSummary(
+        task_count=int(count or 0),
+        total_prompt_tokens=int(sum_prompt or 0),
+        total_completion_tokens=int(sum_completion or 0),
+        total_tokens=int(sum_total or 0),
+        completed_prompt_tokens=int(comp_prompt or 0),
+        completed_completion_tokens=int(comp_completion or 0),
+        completed_total_tokens=int(comp_total or 0),
+    )
+
+
 @router.get("/{task_id}", response_model=TaskRead)
 async def get_task(
     task_id: str,
@@ -120,6 +159,27 @@ async def get_task(
     if task is None or task.tenant_id != user.tenant_id:
         raise NotFoundError("任务不存在")
     return task
+
+
+@router.get("/{task_id}/usage", response_model=TaskUsage)
+async def task_usage(
+    task_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+) -> TaskUsage:
+    """单次任务的 token 用量明细（发送 / 接收 / 总计）。"""
+    task = await session.get(Task, task_id)
+    if task is None or task.tenant_id != user.tenant_id:
+        raise NotFoundError("任务不存在")
+    return TaskUsage(
+        task_id=str(task.id),
+        name=task.name,
+        status=task.status.value if hasattr(task.status, "value") else str(task.status),
+        model=task.model,
+        prompt_tokens=task.prompt_tokens,
+        completion_tokens=task.completion_tokens,
+        total_tokens=task.total_tokens,
+    )
 
 
 @router.patch("/{task_id}", response_model=TaskRead)

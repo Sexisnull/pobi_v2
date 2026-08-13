@@ -750,3 +750,60 @@ tbody tr:hover { background: rgba(255,255,255,.03); }
 .btn.danger.small, .btn.small { padding: 7px 14px; font-size: 12px; }
 .btn.tiny.approve { background: linear-gradient(180deg, var(--primary), var(--primary-a)); color: var(--accent-on); border: none; }
 .btn.tiny.approve:hover { background: linear-gradient(180deg, var(--primary-h), var(--primary)); }
+
+/* ───────────────────────── Token 用量页 ───────────────────────── */
+/* 价格配置卡片 */
+.token-price-card {
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 20px; margin-bottom: 22px;
+}
+.token-price-card .section-head { margin-bottom: 16px; }
+.token-price-card .section-sub { font-size: 12px; color: var(--text-dim); }
+.price-grid {
+  display: grid; grid-template-columns: 1fr 1fr auto; gap: 18px; align-items: end;
+}
+.price-grid label {
+  display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-dim);
+}
+.price-input-wrap { position: relative; display: flex; align-items: center; }
+.price-input-wrap input {
+  width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 46px 10px 12px; color: var(--text); font-size: 14px; font-family: var(--font-mono);
+}
+.price-input-wrap input:focus { border-color: var(--primary); outline: none; }
+.price-cur {
+  position: absolute; right: 12px; font-size: 11px; color: var(--text-dim); pointer-events: none;
+}
+.price-hint { font-size: 11px; color: var(--text-dim); opacity: .75; }
+.price-actions { display: flex; align-items: center; }
+
+/* 任务明细表 */
+#token-task-table th.col-status { width: 96px; }
+#token-task-table th.col-tokens { width: 130px; text-align: right; }
+#token-task-table th.col-action { width: 72px; }
+#token-task-table td.col-tokens { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
+#token-task-table td.cell-name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#token-task-table .col-action { text-align: center; }
+
+/* 任务控制台内 token 卡片 */
+.console-tokens {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+  padding: 12px 22px; background: rgba(0,0,0,.28); border-bottom: 1px solid var(--border-soft);
+}
+.console-tokens .ctok {
+  display: flex; align-items: baseline; gap: 8px; padding: 10px 14px;
+  background: var(--bg-3); border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+}
+.console-tokens .ctok-num {
+  font-family: var(--font-mono); font-size: 18px; font-weight: 600;
+  letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+}
+.console-tokens .ctok-lab { font-size: 12px; color: var(--text-dim); }
+.console-tokens .ctok-send .ctok-num  { color: var(--low); }
+.console-tokens .ctok-recv .ctok-num  { color: var(--ok); }
+.console-tokens .ctok-total .ctok-num { color: var(--primary); }
+
+@media (max-width: 900px) {
+  .price-grid { grid-template-columns: 1fr; }
+  .token-price-card { padding: 16px; }
+}

@@ -517,6 +517,7 @@ class CoreAgent:
                     agent_name=self.name,
                     response_text=content,
                     thinking_text=thinking_content or None,
+                    usage=getattr(response, "usage", None),
                 )
 
                 # Emit agent thought event for CLI (include thinking if present)

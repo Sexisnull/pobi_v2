@@ -16,7 +16,18 @@ from pobi_v2.core.seed import seed_admin_if_needed
 from pobi_v2.db.session import Base, engine
 from pobi_v2.engine.agent_adapter import install_event_hooks
 from pobi_v2.engine.event_bus import persist_event_worker
-from pobi_v2.routers import targets, tasks, stream, persistence, auth, approval, report, system, instruction
+from pobi_v2.routers import (
+    targets,
+    tasks,
+    stream,
+    persistence,
+    auth,
+    approval,
+    report,
+    system,
+    instruction,
+    pricing,
+)
 
 # 前端静态资源目录（M6 引入的纯静态 SPA）
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -62,6 +73,7 @@ app.include_router(persistence.router)
 app.include_router(approval.router)
 app.include_router(report.router)
 app.include_router(system.router)
+app.include_router(pricing.router)
 
 
 @app.get("/health", tags=["meta"])
