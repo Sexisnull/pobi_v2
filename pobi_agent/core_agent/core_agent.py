@@ -361,6 +361,15 @@ class CoreAgent:
 
         while iteration < max_iterations:
             iteration += 1
+
+            # ── 可观测性：推送迭代开始事件（前端渲染为『Iteration N』标题）──
+            hooks.emit_llm_iteration(
+                session_id=session_id,
+                agent_name=self.name,
+                iteration=iteration,
+                message_count=len(messages),
+            )
+
             # Log LLM request
             try:
                 console.print(
@@ -381,6 +390,10 @@ class CoreAgent:
                             title="[bold blue]LLM Input - User[/bold blue]",
                             border_style="blue"
                         ))
+                        hooks.emit_llm_input(
+                            session_id=session_id, agent_name=self.name,
+                            role=role, content=content,
+                        )
                     elif role == "tool":
                         tool_name = last_msg.get("name", "unknown")
                         content = last_msg.get("content", "")
@@ -392,6 +405,10 @@ class CoreAgent:
                             title=f"[bold magenta]LLM Input - Tool Result ({tool_name})[/bold magenta]",
                             border_style="magenta"
                         ))
+                        hooks.emit_llm_input(
+                            session_id=session_id, agent_name=self.name,
+                            role=role, content=content, tool_name=tool_name,
+                        )
             except BlockingIOError:
                 pass
 
@@ -493,6 +510,14 @@ class CoreAgent:
                     ))
                 except BlockingIOError:
                     pass
+
+                # ── 可观测性：推送完整 LLM 响应（前端以可折叠面板展示）──
+                hooks.emit_llm_response(
+                    session_id=session_id,
+                    agent_name=self.name,
+                    response_text=content,
+                    thinking_text=thinking_content or None,
+                )
 
                 # Emit agent thought event for CLI (include thinking if present)
                 thought_text = content

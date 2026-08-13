@@ -43,8 +43,8 @@ class SandboxManager:
         self.sandboxes: Dict[uuid.UUID, Sandbox] = {}
 
     def create_sandbox(
-            self, 
-            image: str = "ubuntu:latest", 
+            self,
+            image: str | None = None,
             volume_path: str | None = None,
             network_name: str = "host"
         ):
@@ -57,7 +57,7 @@ class SandboxManager:
             image: Docker image name/tag to use for the container (default: "ubuntu:latest")
             volume_path: Optional path to mount as read-only volume at `/challenge`
             network_name: Docker network name to connect the container to (default: "host")
-            
+
         Returns:
             uuid.UUID: Unique identifier for the created sandbox
             
@@ -69,6 +69,10 @@ class SandboxManager:
             The sandbox is automatically started upon creation and ready for command execution.
         """
         sandbox_id = uuid.uuid4()
+
+        if image is None:
+            from pobi_v2.core.config import settings
+            image = settings.sandbox_image
 
         new_sb = Sandbox(
             docker_client=self.docker_client,

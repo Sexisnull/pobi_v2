@@ -1,41 +1,41 @@
-Probe a saved ``AuthContext`` (selected by ``profile``) to confirm it is still authenticated, and update the saved context's metadata with the verdict. Use this **before** asking other agents to consume an ``auth_profile`` after a meaningful gap, or whenever a downstream tool reports a structured "auth expired" error.
+探测一个已保存的 ``AuthContext``（由 ``profile`` 选定），以确认其仍处于已认证状态，并将判定结果写入已保存上下文的元数据。在一段明显间隔后让其他 agent 消费某个 ``auth_profile`` 之前，或每当下游工具报告结构化的 "auth expired" 错误时，都应使用本工具。
 
-JWT bearer tokens are short-circuited locally via the ``exp`` claim before any network call (zero cost). For opaque tokens / cookie-based sessions a single GET probe is sent.
+JWT bearer 令牌会在任何网络调用之前，通过 ``exp`` 声明在本地短路判断（零开销）。对于不透明令牌 / 基于 cookie 的会话，则发送一次 GET 探测。
 
-## WHEN TO USE
+## 何时使用
 
-- After ``authenticate`` succeeds, to record a ``validation_url`` and lock in a "validated=true" verdict so other agents can opt into the profile.
-- After a long idle (> a few minutes), before a fresh wave of authenticated requests.
-- When a downstream tool returns ``{"expired": true, "expired_reason": "..."}``.
+- 在 ``authenticate`` 成功之后，记录一个 ``validation_url`` 并锁定 "validated=true" 的判定，以便其他 agent 选择加入该 profile。
+- 在一段较长的空闲（> 几分钟）之后，发起新一轮已认证请求之前。
+- 当下游工具返回 ``{"expired": true, "expired_reason": "..."}`` 时。
 
-## WHEN NOT TO USE
+## 何时不使用
 
-- Right after ``authenticate`` already returned success_matched evidence \u2014 the saved context is already validated.
-- For every single request: ``pw_send_payload`` and ``browser_run_steps`` already auto-validate on a short TTL cache.
+- 在 ``authenticate`` 已经返回 success_matched 证据之后 —— 已保存的上下文已经过验证。
+- 对每个请求：``pw_send_payload`` 与 ``browser_run_steps`` 已经基于一个短时 TTL 缓存自动验证。
 
-## INPUT CONTRACT
+## 输入约定
 
 | Argument | Type | Meaning |
 |---|---|---|
-| ``profile`` | string | Profile to validate, default ``"default"``. |
-| ``validation_url`` | string \| null | Authenticated endpoint to probe (e.g. ``/api/me``, ``/profile``). **Pass an explicit URL discovered from context.** Falls back to ``metadata['validation_url']`` then ``metadata['final_url']`` if omitted. |
-| ``expected_status`` | array \| null | HTTP statuses that count as authenticated (default ``[200..207]``). |
-| ``failure_status`` | array \| null | HTTP statuses that definitely mean expired (default ``[401, 403]``). |
-| ``success_substring`` | string \| null | Optional response-body marker that must be present (e.g. ``"logout"``, ``"profile"``). Useful when the app returns 200 + a login page on expiry. |
-| ``success_jsonpath`` | string \| null | Optional dot-path into a JSON response that must resolve (e.g. ``user.id``). |
-| ``skip_jwt_exp_shortcut`` | bool | Force the network probe even if the JWT looks expired locally. Default ``false``. |
-| ``jwt_exp_leeway_s`` | int | Seconds of clock-skew tolerance for the JWT exp check. Default ``0``. |
-| ``verify_ssl`` | bool | TLS verification. Default ``false``. |
-| ``timeout_ms`` | number \| null | Probe timeout in ms. Default 15000. |
+| ``profile`` | string | 要验证的 profile，默认 ``"default"``。 |
+| ``validation_url`` | string \| null | 要探测的已认证端点（如 ``/api/me``、``/profile``）。**传入从上下文中发现的显式 URL。** 若省略，回退到 ``metadata['validation_url']``，再回退到 ``metadata['final_url']``。 |
+| ``expected_status`` | array \| null | 视为已认证的状态码（默认 ``[200..207]``）。 |
+| ``failure_status`` | array \| null | 明确意味着已过期的状态码（默认 ``[401, 403]``）。 |
+| ``success_substring`` | string \| null | 响应体中必须出现的标记（如 ``"logout"``、``"profile"``）。当应用到期时返回 200 + 登录页时很有用。 |
+| ``success_jsonpath`` | string \| null | 必须能解析的 JSON 响应中的点路径（如 ``user.id``）。 |
+| ``skip_jwt_exp_shortcut`` | bool | 即便 JWT 在本地看起来已过期也强制发起网络探测。默认 ``false``。 |
+| ``jwt_exp_leeway_s`` | int | JWT exp 检查的时钟偏移容忍秒数。默认 ``0``。 |
+| ``verify_ssl`` | bool | TLS 验证。默认 ``false``。 |
+| ``timeout_ms`` | number \| null | 探测超时（毫秒）。默认 15000。 |
 
-## OUTPUT (SAFE METADATA ONLY)
+## 输出（仅安全元数据）
 
 ```json
 {
   "success": true,                    // == validated
   "validated": true,
   "expired": false,
-  "expired_reason": null,             // or "jwt_exp" | "http_401" | "missing_substring" | ...
+  "expired_reason": null,             // 或 "jwt_exp" | "http_401" | "missing_substring" | ...
   "validation_url": "http://target.local/api/me",
   "last_validation_status": 200,
   "last_validated_at": "2026-05-10T...",
@@ -43,15 +43,15 @@ JWT bearer tokens are short-circuited locally via the ``exp`` claim before any n
   "headers_available": ["Authorization"],
   "cookie_names": ["sessionid"],
   "storage_keys": ["access_token"],
-  "jwt_exp": 1736000000               // only when we can read the JWT exp claim
+  "jwt_exp": 1736000000               // 仅当我们能读取 JWT exp 声明时
 }
 ```
 
-Cookie values, token values and passwords are **never** returned.
+cookie 值、令牌值与密码**绝不**返回。
 
-## EXAMPLES
+## 示例
 
-### Validate a JWT-bearer session
+### 验证 JWT bearer 会话
 
 ```json
 {
@@ -61,7 +61,7 @@ Cookie values, token values and passwords are **never** returned.
 }
 ```
 
-### Validate a cookie session against a page that returns the login form on expiry
+### 针对到期返回登录表单的页面验证 cookie 会话
 
 ```json
 {
@@ -71,8 +71,8 @@ Cookie values, token values and passwords are **never** returned.
 }
 ```
 
-## RULES
+## 规则
 
-- Always pass a real ``validation_url`` discovered in context. Do not guess endpoints.
-- Configure at least one strong signal: explicit status, ``success_substring`` or ``success_jsonpath``. The default 200-OK rule is fooled by apps that serve the login page with 200.
-- If this tool reports ``expired=true``: call ``refresh_auth_context`` next (if a ``refresh_url`` is known), otherwise re-run ``authenticate``.
+- 始终传入在上下文中发现的真实 ``validation_url``。不要猜测端点。
+- 至少配置一个强信号：显式状态码、``success_substring`` 或 ``success_jsonpath``。默认 200-OK 规则会被那些以 200 返回登录页的应用欺骗。
+- 若本工具报告 ``expired=true``：接下来调用 ``refresh_auth_context``（若已知 ``refresh_url``），否则重新运行 ``authenticate``。

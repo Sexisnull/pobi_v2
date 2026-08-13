@@ -488,6 +488,14 @@ Critical rules:
 - Extract endpoints, authentication info, and secrets from actual tool responses
 - Do NOT invent or guess endpoints - only use what is discovered
 - Return when you have gathered sufficient information to proceed with the task
+
+AUTHENTICATION IS PART OF RECON (mandatory when the target requires login):
+- If any endpoint requires authentication, you MUST establish the session during this phase.
+- Call the `authenticate` tool to log in (e.g. DVWA-style: `auth_flow="form"`, `auth_type="session_cookie"`),
+  and persist the result as an AuthContext profile (e.g. `profile="target_session"`).
+- The returned `auth_profile` name MUST be recorded in your recon output so that all later
+  detection and exploitation steps reuse the same authenticated session via `auth_profile="<profile>"`.
+- Do NOT proceed to later phases with only an anonymous session when the task endpoint needs auth.
 """
 
         # Create a simple task node for the threat model
@@ -590,6 +598,14 @@ Critical rules:
 - Extract endpoints, authentication info, and secrets from actual tool responses
 - Do NOT invent or guess endpoints - only use what is discovered
 - Return when you have gathered sufficient information to proceed with the task
+
+AUTHENTICATION IS PART OF RECON (mandatory when the target requires login):
+- If any endpoint requires authentication, you MUST establish the session during this phase.
+- Call the `authenticate` tool to log in (e.g. DVWA-style: `auth_flow="form"`, `auth_type="session_cookie"`),
+  and persist the result as an AuthContext profile (e.g. `profile="target_session"`).
+- The returned `auth_profile` name MUST be recorded in your recon output so that all later
+  detection and exploitation steps reuse the same authenticated session via `auth_profile="<profile>"`.
+- Do NOT proceed to later phases with only an anonymous session when the task endpoint needs auth.
 """
         task_root = TaskNode(
             task=prompt_task,
@@ -713,6 +729,20 @@ The flag that you need to find has the following format : FLAG{{}}.
             # interrupt signal
             if self.interrupted:
                 return
+            # --- 协作式指令检查点：消费用户对主控 Agent 追加的指令 ---
+            # 在每轮 supervisor 迭代之间轮询 pending 指令，注入为新的附加上级目标。
+            # 指令经 exploit_context 透传到 ADaPTAgent.run -> execute_supervisor，
+            # 由 SupervisorAgent 在下一轮决策中自然纳入，无需改写引擎内部状态机。
+            try:
+                from pobi_v2.engine.instruction_channel import drain_instructions
+
+                pending = await drain_instructions(self.agent_id)
+                for item in pending:
+                    inject = f"\n\n### Operator追加指令（须纳入后续行动）\n{item.instruction}\n"
+                    exploit_context = exploit_context + inject
+                    logger.info("已注入运行指令: %s", item.instruction[:80])
+            except Exception as _exc:  # noqa: BLE001
+                logger.debug("指令检查点读取失败，跳过: %s", _exc)
             # Collect all events for trace saving
             if isinstance(event, BaseModel):
                 traces.append(event.model_dump())

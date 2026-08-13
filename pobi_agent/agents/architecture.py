@@ -112,6 +112,35 @@ class ADaPTAgent:
                 for subtask in subtasks
             ],
         )
+        # 同步发出结构化执行计划步骤：控制台左栏「执行计划」据此渲染并高亮。
+        # 父节点作为第 0 步，子任务按 depth+顺序排序。
+        ordered = [parent] + list(subtasks)
+        seq = 0
+        for node in ordered:
+            get_event_hooks().emit_plan_step(
+                session_id=self._session_id(),
+                step_id=node.task_id,
+                seq=seq,
+                title=node.task,
+                status=self._to_plan_status(node.status),
+            )
+            seq += 1
+
+    @staticmethod
+    def _to_plan_status(node_status: str | None) -> str:
+        """把引擎内部 node.status 映射为控制台 plan_step 状态。"""
+        mapping = {
+            "pending": "pending",
+            "in_progress": "running",
+            "running": "running",
+            "done": "completed",
+            "completed": "completed",
+            "validated": "completed",
+            "failed": "failed",
+            "refine": "running",
+            "expand": "running",
+        }
+        return mapping.get((node_status or "pending").lower(), "pending")
 
     def _set_task_status(
         self,
@@ -133,6 +162,14 @@ class ADaPTAgent:
             old_status=old_status,
             new_status=new_status,
             confidence_score=node.confidence_score,
+        )
+        # 实时刷新执行计划步骤状态
+        get_event_hooks().emit_plan_step(
+            session_id=self._session_id(),
+            step_id=node.task_id,
+            seq=-1,  # 状态回填：后端按 step_id 幂等更新，不依赖序号
+            title=node.task,
+            status=self._to_plan_status(new_status),
         )
 
     async def _solve(

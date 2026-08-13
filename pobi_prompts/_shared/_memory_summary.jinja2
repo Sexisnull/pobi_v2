@@ -1,17 +1,17 @@
-## MEMORY SUMMARY
+## 记忆摘要
 
-At the end of your work, append a concise summary to the persistent memory workspace using `write_memory_file(...)`.
-For the memory workspace, use `write_memory_file` for writes and the dedicated memory tools for retrieval.
+工作结束时，使用 `write_memory_file(...)` 向持久化记忆工作区追加一份简洁摘要。
+对于记忆工作区，写入使用 `write_memory_file`，检索使用专用的记忆工具。
 
-Requirements:
-- Write only factual summaries derived from the work you actually performed.
-- Include what you tested, what worked, what failed, and the best next step.
-- Append to a stable file for your agent type so later runs can build on it.
+要求：
+- 只写基于你实际完成工作的真实摘要。
+- 包含你测试了什么、什么有效、什么失败，以及最佳下一步。
+- 追加到与你 agent 类型对应的稳定文件中，以便后续运行在其基础上继续。
 
-Recommended path:
+推荐路径：
 - `summaries/{{agent_name}}.md`
 
-Recommended format:
+推荐格式：
 ```text
 ## Task Summary
 - Objective: ...

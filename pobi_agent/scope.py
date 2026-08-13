@@ -28,6 +28,11 @@ from urllib.parse import urlparse
 
 DEFAULT_PATH = Path.home() / ".cache" / "pobi" / "scope.yaml"
 
+# Directory holding per-session scope files (`scope.{session_id}.yaml`).
+# Exported so consumers (e.g. the network egress gate) can resolve the
+# session-isolated scope file without re-deriving the cache directory.
+SCOPE_DIR = DEFAULT_PATH.parent
+
 DEFAULT_SCOPE: Dict[str, Any] = {
     "enabled": False,
     "root_domains": [],   # apex + all subdomains allowed

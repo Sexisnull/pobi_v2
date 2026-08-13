@@ -1,83 +1,83 @@
-## TASK DECOMPOSITION STRATEGY
+## 任务拆解策略
 
-Decompose the goal into exactly 4-5 strategic tasks. Quality over quantity.
+将目标拆解为恰好 4-5 个战略性任务。重质不重量。
 
-### Goal-First Planning
+### 目标优先的规划
 
-**Before creating tasks, answer:**
-1. What is the specific goal we're trying to achieve?
-2. What information/access is needed to achieve it?
-3. What's the most direct path to that goal?
-4. What could block us, and what are alternatives?
+**在创建任务前，先回答：**
+1. 我们要达成的确切目标是什么？
+2. 达成目标需要什么信息/权限？
+3. 通往该目标最直接的路径是什么？
+4. 什么可能阻碍我们，有哪些替代方案？
 
-### Task Selection Principles
+### 任务选取原则
 
-**Each task must be:**
-- **Goal-connected**: Explicitly advances toward the goal (state how)
-- **Evidence-based**: Grounded in discovered information (not speculation)
-- **Distinct**: Non-overlapping with other tasks
-- **Atomic**: Completable in single agent run
-- **Sequenced**: Logically ordered (each informs the next)
+**每个任务必须满足：**
+- **关联目标**：明确推进目标（说明如何推进）
+- **基于证据**：扎根于已发现的信息（而非猜测）
+- **相互独立**：与其他任务不重叠
+- **原子化**：可在单次 agent 运行中完成
+- **有序**：逻辑上有序（每个任务为下一个提供信息）
 
-### Decomposition Guidelines
+### 拆解准则
 
-**When to decompose:**
-✅ Goal requires multiple distinct phases (discover → validate → exploit)
-✅ Each subtask benefits from different tools/approaches
-✅ Tasks can be sequenced (one provides input for next)
+**何时拆解：**
+✅ 目标需要多个不同阶段（发现 → 验证 → 利用）
+✅ 每个子任务适合用不同工具/方法
+✅ 任务间可排序（一个为下一个提供输入）
 
-**When NOT to decompose:**
-❌ Simple, atomic actions (execution details, not strategic tasks)
-❌ Micro-tasks that are implementation steps
-❌ More than 5 tasks needed (consolidate or prioritize)
-❌ Parallel tasks doing same thing (choose best approach)
+**何时不拆解：**
+❌ 简单、原子化的动作（执行细节，不是战略任务）
+❌ 属于实现步骤的微小任务
+❌ 需要超过 5 个任务（合并或排优先级）
+❌ 做同一件事的并行任务（选最佳方法）
 
-### Goal-Oriented Task Sequence
+### 面向目标的任务序列
 
-**For exploitation goals:**
-1. **Discover attack surface** relevant to goal
-2. **Identify requirements** (auth, parameters, context)
-3. **Test most promising path** toward goal
-4. **Validate/exploit** the vulnerability
-5. **Confirm goal achievement** with evidence
+**针对利用类目标：**
+1. **发现攻击面**（与目标相关）
+2. **明确需求**（认证、参数、上下文）
+3. **测试最有希望的路径**（朝向目标）
+4. **验证/利用**该漏洞
+5. **用证据确认目标达成**
 
-**For reconnaissance goals:**
-1. **Map relevant surface** (goal-related endpoints/inputs)
-2. **Enumerate details** (parameters, auth, formats)
-3. **Analyze for weaknesses** (evidence-based)
-4. **Prioritize attack paths** (by goal-relevance)
-5. **Compile exploitation brief** (structured for next phase)
+**针对侦察类目标：**
+1. **绘制相关攻击面**（与目标相关的端点/输入）
+2. **枚举细节**（参数、认证、格式）
+3. **分析弱点**（基于证据）
+4. **排定攻击路径优先级**（按目标相关度）
+5. **编写利用简报**（为下一阶段结构化）
 
-### Task Structure
+### 任务结构
 
-Each task must include:
-- `task`: What to accomplish (1 sentence, <20 words)
-- `description`: How to approach it (2-3 sentences)
-- `goal_connection`: How this advances toward the goal (1 sentence)
-- `status`: Always "pending"
-- `confidence_score`: Always 0.0 when creating tasks
+每个任务必须包含：
+- `task`：要完成什么（1 句话，<20 词）
+- `description`：如何推进（2-3 句话）
+- `goal_connection`：如何推进目标（1 句话）
+- `status`：始终为 "pending"
+- `confidence_score`：创建任务时始终为 0.0
 
-**Important**: When creating tasks, always set `confidence_score` to 0.0. This does NOT mean the task failed—it simply indicates the task hasn't been treated/executed yet. Confidence scores are assigned later during task execution, not during task creation.
+**重要**：创建任务时始终将 `confidence_score` 设为 0.0。这**不**表示任务失败——它仅表示该任务尚未被处理/执行。置信度评分在任务执行阶段才赋值，而非创建阶段。
 
-### Example: Goal "Find XSS injection in the web page"
+### 示例：目标"在网页中发现 XSS 注入"
 
-**Good decomposition** (goal-connected):
+**好的拆解**（关联目标）：
 1. "Find and extract the inputs and different sources where a XSS could be injected" (confidence_score: 0.0)
-   - Goal connection: Understanding where we can send or alter the data to inject.
+   - 目标关联：弄清楚我们可以在何处发送或改动数据以注入。
 2. "Testing XSS payloads to understand how the web application behaves" (confidence_score: 0.0)
-   - Goal connection: Directly testing XSS payloads to understand the behavior or the web app
+   - 目标关联：直接测试 XSS payload，了解应用的响应行为
 3. "Test complex XSS payloads, look for hints and changes in the web app." (confidence_score: 0.0)
-   - Goal connection: Trying harder to trigger an XSS vulnerability
+   - 目标关联：更努力地尝试触发 XSS 漏洞
 4. "Validation the XSS injection found or extensive search" (confidence_score: 0.0)
-   - Goal connection: Validate the vulnerability
+   - 目标关联：验证该漏洞
 
-**Bad decomposition** (no goal connection):
-1. ❌ "Enumerate all endpoints" (generic, not goal-focused)
-2. ❌ "Test for SQL injection" (why? how does this help the goal?)
-3. ❌ "Check security headers" (defensive assessment, not exploitation)
-4. ❌ "Review OWASP Top 10 categories" (framework exercise, not goal path)
+**坏的拆解**（无目标关联）：
+1. ❌ "Enumerate all endpoints"（泛泛而谈，不聚焦目标）
+2. ❌ "Test for SQL injection"（为什么？这对目标有何帮助？）
+3. ❌ "Check security headers"（防御性评估，非利用）
+4. ❌ "Review OWASP Top 10 categories"（框架练习，非目标路径）
 
-### Output Format
+### 输出格式
 
-Return tasks as structured list. Keep descriptions concise (2-3 sentences max).
-Every task must have explicit `goal_connection` field.
+以结构化列表返回任务。描述保持简洁（最多 2-3 句）。
+每个任务都必须有明确的 `goal_connection` 字段。

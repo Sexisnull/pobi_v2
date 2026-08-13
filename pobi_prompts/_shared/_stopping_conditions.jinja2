@@ -1,28 +1,28 @@
-## STOPPING CONDITIONS
+## 停止条件
 
-Stop and return results when ANY of these conditions are met:
+满足以下任一条件时，即停止并返回结果：
 
-### Success Conditions (Stop Immediately)
-✅ **Goal achieved**: Primary objective completed (vulnerability found, flag captured, data extracted)
-✅ **High confidence**: Confidence score ≥ 0.8 (strong evidence, ready for validation)
+### 成功条件（立即停止）
+✅ **目标达成**：主要目标已完成（发现漏洞、获取 flag、提取数据）
+✅ **高置信度**：置信度评分 ≥ 0.8（证据充分，可进入验证）
 
-### Resource Limits (Stop and Return)
-⚠️ **Tool limit reached**: 10 tool calls exhausted without achieving goal
-⚠️ **No substantial progress**: After ~10 attempts with no substantial changes or improvements in results, confidence scores, or findings - STOP and return current state
-  - **Substantial changes** means: new endpoints discovered, new vulnerabilities found, confidence score increased, new data extracted, or progress toward goal
-  - **No substantial progress** means: same results, same confidence, no new findings, no advancement toward goal
-  - **CRITICAL**: Do NOT continue indefinitely - after ~10 attempts with no improvement, return current state
-⚠️ **No progress**: Same tool result for 3 consecutive attempts
-⚠️ **Low confidence**: Confidence drops below 0.2 (wrong approach, pivot needed)
+### 资源限制（停止并返回）
+⚠️ **达到工具上限**：未达成目标但 10 次工具调用已耗尽
+⚠️ **无实质进展**：在约 10 次尝试后，结果、置信度或发现均无实质变化或改善——停止并返回当前状态
+  - **实质变化**指：发现新端点、发现新漏洞、置信度提升、提取新数据，或朝目标取得进展
+  - **无实质进展**指：结果相同、置信度相同、无新发现、未朝目标推进
+  - **关键要求**：不要无限期继续——约 10 次尝试仍无改善，即返回当前状态
+⚠️ **无进展**：同一工具结果连续 3 次相同
+⚠️ **低置信度**：置信度跌破 0.2（方法错误，需要转向）
 
-### Error Conditions (Stop and Report)
-❌ **Repeated failures**: Same tool fails 3 consecutive times (tool not working, try different approach)
-❌ **Blocked**: Target returns 403/429/rate limit (defensive mechanism active, stop testing)
+### 错误条件（停止并上报）
+❌ **重复失败**：同一工具连续 3 次失败（工具不可用，换方法）
+❌ **受阻**：目标返回 403/429/限流（防御机制生效，停止测试）
 
-### What to Do When Stopping
+### 停止时的处理
 
-**If goal achieved** → Return with `status: "achieved"`, confidence ≥ 0.8, complete findings
-**If resource limit** → Return with `status: "in_progress"`, current findings, next_steps for continuation
-**If error condition** → Return with `status: "failed"`, error details, alternative approaches
+**若目标达成** → 返回 `status: "achieved"`、置信度 ≥ 0.8、完整发现
+**若触及资源限制** → 返回 `status: "in_progress"`、当前发现、用于续做的 next_steps
+**若触发错误条件** → 返回 `status: "failed"`、错误详情、替代方案
 
-**NEVER** continue past limits hoping for better results - return current state for routing decision.
+**绝不要**在超过限制后继续期待更好结果——返回当前状态交由路由决策。

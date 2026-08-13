@@ -1,101 +1,101 @@
 {% raw %}
-Authenticate against the current target through a real browser (Pydoll / Chrome DevTools Protocol) and **persist** the resulting cookies, browser storage and derived headers as a reusable ``AuthContext`` profile. After this tool succeeds, other tools (``browser_run_steps``, ``pw_send_payload``) can reuse the saved auth by passing ``auth_profile=<profile>``.
+通过真实浏览器（Pydoll / Chrome DevTools Protocol）对当前目标执行认证，并将得到的 cookie、浏览器存储和派生请求头**持久化**为一个可复用的 ``AuthContext`` profile。本工具成功之后，其他工具（``browser_run_steps``、``pw_send_payload``）可通过传入 ``auth_profile=<profile>`` 复用已保存的认证。
 
-## WHEN TO USE
+## 何时使用
 
-- The target requires authentication and a login URL / form has been **discovered** in context.
-- An OAuth / OIDC flow needs a real browser (redirects, callbacks, JS hydration).
-- A popup / new-window OAuth flow (``window.open(...)``) is required.
-- You need a persistent authenticated context shared across subagents and tools.
+- 目标需要认证，且上下文中已**发现**登录 URL / 表单。
+- OAuth / OIDC 流程需要真实浏览器（重定向、回调、JS 水合）。
+- 需要弹窗 / 新窗口式 OAuth 流程（``window.open(...)``）。
+- 需要在子 agent 与工具间共享一个持久的已认证上下文。
 
-## WHEN NOT TO USE
+## 何时不使用
 
-- The target has no login (read-only / public).
-- You only need a single raw HTTP request — use ``pw_send_payload``.
-- You haven't actually discovered a real login URL or selectors yet — discover first.
+- 目标没有登录（只读 / 公开）。
+- 你只需要单次原始 HTTP 请求 —— 用 ``pw_send_payload``。
+- 你尚未真正发现真实的登录 URL 或选择器 —— 先去发现。
 
-## FLOW DISPATCH
+## 流程分发
 
-The tool picks an implementation based on ``auth_flow``:
+工具根据 ``auth_flow`` 选择实现方式：
 
-* ``form`` / ``oauth`` / ``authorization_code`` / ``callback`` / *unset* →
-  real browser flow (Pydoll). Use ``steps``, ``popup_steps``, ``success_*``
-  and ``callback_*`` arguments.
-* ``json`` → API login over HTTP (no browser). Use ``request_method``,
-  ``request_headers``, ``request_body`` (with ``{{username}}`` /
-  ``{{password}}`` placeholders), ``token_path``, ``token_header_name``,
-  ``token_header_format``, ``capture_cookies``.
-* ``http`` → HTTP Basic auth. Just provide ``profile`` and optionally an
-  ``auth_url`` to probe (e.g. ``/admin``).
+* ``form`` / ``oauth`` / ``authorization_code`` / ``callback`` / *未设置* →
+  真实浏览器流程（Pydoll）。使用 ``steps``、``popup_steps``、``success_*``
+  与 ``callback_*`` 参数。
+* ``json`` → 通过 HTTP 的 API 登录（无浏览器）。使用 ``request_method``、
+  ``request_headers``、``request_body``（含 ``{{username}}`` /
+  ``{{password}}`` 占位符）、``token_path``、``token_header_name``、
+  ``token_header_format``、``capture_cookies``。
+* ``http`` → HTTP Basic 认证。只需提供 ``profile``，以及可选的
+  探测用 ``auth_url``（如 ``/admin``）。
 
-## INPUT CONTRACT (TOOL ARGUMENTS)
+## 输入约定（工具参数）
 
-### Common
+### 通用
 | Argument | Type | Meaning |
 |---|---|---|
-| ``auth_url`` | string \| null | Login URL. For ``form``/``oauth`` it's the page to open. For ``json`` it's the API endpoint. For ``http`` it's an optional probe URL. If omitted, the wallet ``login_url`` is used. |
-| ``profile`` | string | Credential profile to use (default ``"default"``). When the wallet has this profile, those creds are used; you can also invent a new profile name to save discovered/user-supplied credentials under. |
-| ``auth_flow`` | enum \| null | One of ``http``, ``form``, ``json``, ``oauth``, ``authorization_code``, ``callback``. |
-| ``auth_type`` | enum \| null | One of ``session_cookie``, ``bearer_token``, ``api_key``, ``oauth2``. |
-| ``username`` | string \| null | Explicit username override. Use ONLY for credentials discovered in context (e.g. default ``admin:admin``, leaked from source, README) or supplied directly by the user. Wins over the wallet for this call. |
-| ``password`` | string \| null | Explicit password override. Same rules as ``username``. |
+| ``auth_url`` | string \| null | 登录 URL。``form``/``oauth`` 下为要打开的页面；``json`` 下为 API 端点；``http`` 下为可选的探测 URL。若省略，则使用钱包中的 ``login_url``。 |
+| ``profile`` | string | 使用的凭据 profile（默认 ``"default"``）。当钱包中存在该 profile 时，使用其凭据；你也可以新起一个 profile 名，将发现/用户提供的凭据保存于此。 |
+| ``auth_flow`` | enum \| null | 取值之一：``http``、``form``、``json``、``oauth``、``authorization_code``、``callback``。 |
+| ``auth_type`` | enum \| null | 取值之一：``session_cookie``、``bearer_token``、``api_key``、``oauth2``。 |
+| ``username`` | string \| null | 显式的用户名覆盖。仅用于上下文中发现的凭据（如默认的 ``admin:admin``、源码泄露、README）或用户直接提供的凭据。本次调用优先于钱包。 |
+| ``password`` | string \| null | 显式的密码覆盖。规则同 ``username``。 |
 
-### Browser flow only
-| ``steps`` | array | ``BrowserStep`` list executed on the **main tab** (same shape as ``browser_run_steps``). |
-| ``context`` | object | Extra non-secret values the steps may reference by ``key``. ``username`` / ``password`` are injected automatically from the wallet — **never** put real credentials here. |
-| ``expects_popup`` | bool | ``true`` if clicking the auth button opens a popup / new window (e.g. Google/GitHub OAuth). |
-| ``popup_steps`` | array | ``BrowserStep`` list executed inside the popup tab once it appears. |
-| ``callback_url_contains`` | string \| null | Substring expected in the **main tab** URL after redirect-based auth (e.g. ``/oauth/callback``). |
-| ``popup_callback_url_contains`` | string \| null | Substring expected in the **popup** URL before it closes. |
-| ``wait_for_popup_close`` | bool | If ``true``, wait for the popup to close before snapshotting the main tab. |
-| ``success_url_contains`` | string \| null | Final URL substring that proves login worked (e.g. ``/dashboard``). |
-| ``success_selector`` | string \| null | CSS selector that should appear after login (e.g. ``a[href='/logout']``). |
-| ``success_cookie_names`` | array | Cookie names that should appear after login (e.g. ``["sessionid"]``). |
-| ``success_storage_keys`` | array | localStorage / sessionStorage keys that should appear (e.g. ``["access_token"]``). |
-| ``post_login_wait_ms`` | int | Extra wait after success conditions match, for SPA token hydration. Default 1500 ms. |
-| ``verify_ssl`` | bool | If ``false``, ignore TLS errors. |
-| ``headless`` | bool | Run browser headless (default ``true``). |
+### 仅浏览器流程
+| ``steps`` | array | 在**主标签页**执行的 ``BrowserStep`` 列表（与 ``browser_run_steps`` 同结构）。 |
+| ``context`` | object | 步骤可能通过 ``key`` 引用的额外非机密值。``username`` / ``password`` 由钱包自动注入 —— **绝不要**在此放入真实凭据。 |
+| ``expects_popup`` | bool | 若点击认证按钮会打开弹窗 / 新窗口（如 Google/GitHub OAuth），为 ``true``。 |
+| ``popup_steps`` | array | 弹窗标签页出现后，在其中执行的 ``BrowserStep`` 列表。 |
+| ``callback_url_contains`` | string \| null | 基于重定向的认证完成后，**主标签页** URL 中应包含的子串（如 ``/oauth/callback``）。 |
+| ``popup_callback_url_contains`` | string \| null | 弹窗关闭前其 URL 中应包含的子串。 |
+| ``wait_for_popup_close`` | bool | 若为 ``true``，在快照主标签页前先等待弹窗关闭。 |
+| ``success_url_contains`` | string \| null | 证明登录成功的最终 URL 子串（如 ``/dashboard``）。 |
+| ``success_selector`` | string \| null | 登录后应出现的 CSS 选择器（如 ``a[href='/logout']``）。 |
+| ``success_cookie_names`` | array | 登录后应出现的 cookie 名（如 ``["sessionid"]``）。 |
+| ``success_storage_keys`` | array | 应出现的 localStorage / sessionStorage 键（如 ``["access_token"]``）。 |
+| ``post_login_wait_ms`` | int | 成功条件匹配后的额外等待，供 SPA 令牌水合使用。默认 1500 ms。 |
+| ``verify_ssl`` | bool | 若为 ``false``，忽略 TLS 错误。 |
+| ``headless`` | bool | 无头运行浏览器（默认 ``true``）。 |
 
-Selectors must come from real HTML you have actually seen — never guess.
+选择器必须来自你真正见过的真实 HTML —— 绝不猜测。
 
-### JSON flow only
+### 仅 JSON 流程
 | Argument | Type | Meaning |
 |---|---|---|
-| ``request_method`` | string | HTTP method, default ``"POST"``. |
-| ``request_headers`` | object | Optional extra headers; ``Content-Type: application/json`` is added automatically when ``request_body`` is a JSON object. |
-| ``request_body`` | any | JSON-serialisable body. Strings inside it support ``{{username}}`` / ``{{password}}`` / ``{{login_url}}`` placeholders that the wallet fills in. |
-| ``token_path`` | string \| null | Dot-path into the response JSON to extract the token, e.g. ``access_token`` or ``data.tokens.0.value``. |
-| ``token_header_name`` | string | Header name for the saved token. Default ``"Authorization"``. |
-| ``token_header_format`` | string | Format string with ``{token}``. Default ``"Bearer {token}"``. |
-| ``capture_cookies`` | bool | Whether to also save ``Set-Cookie`` cookies. Default ``true``. |
+| ``request_method`` | string | HTTP 方法，默认 ``"POST"``。 |
+| ``request_headers`` | object | 可选的额外请求头；当 ``request_body`` 为 JSON 对象时会自动加上 ``Content-Type: application/json``。 |
+| ``request_body`` | any | 可 JSON 序列化的请求体。其中的字符串支持 ``{{username}}`` / ``{{password}}`` / ``{{login_url}}`` 占位符，由钱包填充。 |
+| ``token_path`` | string \| null | 从响应 JSON 中提取令牌的点路径，如 ``access_token`` 或 ``data.tokens.0.value``。 |
+| ``token_header_name`` | string | 保存令牌的请求头名。默认 ``"Authorization"``。 |
+| ``token_header_format`` | string | 含 ``{token}`` 的格式串。默认 ``"Bearer {token}"``。 |
+| ``capture_cookies`` | bool | 是否也保存 ``Set-Cookie`` cookie。默认 ``true``。 |
 
-### Basic flow only
-No extra arguments. Wallet ``username`` + ``password`` build ``Authorization: Basic <b64>``. Provide ``auth_url`` if you want the tool to probe it before saving.
+### 仅 Basic 流程
+无需额外参数。钱包的 ``username`` + ``password`` 会构建 ``Authorization: Basic <b64>``。若希望工具先探测再保存，可提供 ``auth_url``。
 
-## CREDENTIAL HANDLING
+## 凭据处理
 
-Credentials may come from one of two sources, in this precedence order:
+凭据可能来自以下两种来源之一，按此优先级顺序：
 
-1. **Explicit ``username`` / ``password`` tool arguments** — wins for this call. Use these when:
-   * The user typed credentials directly into the conversation.
-   * The agent discovered credentials in the target's context (e.g. default ``admin:admin`` in a comment, a leaked secret, source code, response body, README).
-2. **Wallet credentials** for the selected ``profile`` — used when the explicit args are not provided. Never visible to the model.
+1. **显式的 ``username`` / ``password`` 工具参数** —— 本次调用优先。在以下情况使用：
+   * 用户在对话中直接键入了凭据。
+   * agent 在目标上下文中发现了凭据（如注释中的默认 ``admin:admin``、泄露的密钥、源码、响应体、README）。
+2. **所选 ``profile`` 的钱包凭据** —— 未提供显式参数时使用。模型不可见。
 
-Reference rules inside the tool body:
+工具体内的引用规则：
 
-- For browser steps, reference them by ``key``: ``{"action":"fill","selector":"input[name=user]","key":"username"}``. The merged username/password are pre-populated under those keys.
-- For JSON bodies, use ``{{username}}`` / ``{{password}}`` placeholders. They resolve to the explicit args if set, otherwise to the wallet value.
-- For HTTP Basic, no placeholders needed: the tool builds ``Authorization: Basic <b64>`` from the effective username/password.
+- 在浏览器步骤中，通过 ``key`` 引用它们：``{"action":"fill","selector":"input[name=user]","key":"username"}``。合并后的用户名/密码已预填充到这些 key 下。
+- 在 JSON 请求体中，使用 ``{{username}}`` / ``{{password}}`` 占位符。若已设置显式参数则解析为显式值，否则解析为钱包值。
+- 在 HTTP Basic 中无需占位符：工具用生效的用户名/密码构建 ``Authorization: Basic <b64>``。
 
-### Security note
+### 安全说明
 
-- Anything passed via ``username`` / ``password`` IS visible in the agent's working context window. Wallet credentials are NOT. **Prefer the wallet whenever a profile exists for the target.**
-- Never invent credentials. Only supply values that were actually discovered in context or explicitly given by the user.
-- The saved AuthContext on disk may contain the resulting tokens/cookies; that is intentional. Tool *return values* never include cookie/token/password values.
+- 通过 ``username`` / ``password`` 传入的任何内容**都会**出现在 agent 的工作上下文窗口中。钱包凭据不会。**只要目标存在对应 profile，就优先使用钱包。**
+- 绝不要编造凭据。只提供在上下文中真正发现、或用户显式给出的凭据。
+- 磁盘上保存的 AuthContext 可能包含得到的令牌/cookie；这是有意为之。工具的*返回值*绝不**包含 cookie/令牌/密码值。
 
-## OUTPUT (SAFE METADATA ONLY)
+## 输出（仅安全元数据）
 
-A successful run returns JSON like:
+成功运行返回类似如下 JSON：
 
 ```json
 {
@@ -116,11 +116,11 @@ A successful run returns JSON like:
 }
 ```
 
-Cookie values, tokens and passwords are **never** returned. Other agents should use ``auth_profile="<profile>"`` on ``browser_run_steps`` / ``pw_send_payload`` to consume the saved auth.
+cookie 值、令牌与密码**绝不**返回。其他 agent 应在 ``browser_run_steps`` / ``pw_send_payload`` 上使用 ``auth_profile="<profile>"`` 来消费已保存的认证。
 
-## EXAMPLES
+## 示例
 
-### JSON / API login (returns JWT)
+### JSON / API 登录（返回 JWT）
 
 ```json
 {
@@ -141,7 +141,7 @@ Cookie values, tokens and passwords are **never** returned. Other agents should 
 }
 ```
 
-### HTTP Basic auth (no login form)
+### HTTP Basic 认证（无登录表单）
 
 ```json
 {
@@ -152,7 +152,7 @@ Cookie values, tokens and passwords are **never** returned. Other agents should 
 }
 ```
 
-### Form login with credentials supplied by the user
+### 用户提供凭据的表单登录
 
 ```json
 {
@@ -171,7 +171,7 @@ Cookie values, tokens and passwords are **never** returned. Other agents should 
 }
 ```
 
-### Default-credential test from a discovered admin endpoint
+### 从已发现的 admin 端点做默认凭据测试
 
 ```json
 {
@@ -184,7 +184,7 @@ Cookie values, tokens and passwords are **never** returned. Other agents should 
 }
 ```
 
-### Classic form login
+### 经典表单登录
 
 ```json
 {
@@ -202,7 +202,7 @@ Cookie values, tokens and passwords are **never** returned. Other agents should 
 }
 ```
 
-### SPA / JWT login
+### SPA / JWT 登录
 
 ```json
 {
@@ -220,7 +220,7 @@ Cookie values, tokens and passwords are **never** returned. Other agents should 
 }
 ```
 
-### Popup OAuth
+### 弹窗式 OAuth
 
 ```json
 {
@@ -244,10 +244,10 @@ Cookie values, tokens and passwords are **never** returned. Other agents should 
 }
 ```
 
-## RULES
+## 规则
 
-- Discover login URL and selectors **before** calling this tool. Do not invent endpoints.
-- Use ``profile`` to pick credentials. Never embed real secrets.
-- Configure at least one success signal (``success_url_contains``, ``success_selector``, ``success_cookie_names`` or ``success_storage_keys``); otherwise the tool only relies on “no exception raised”.
-- After a successful run, downstream tools should be invoked with ``auth_profile="<profile>"`` to test authenticated behaviour, and with ``auth_profile=null`` to compare against the unauthenticated baseline.
+- 调用本工具**之前**先发现登录 URL 与选择器。不要编造端点。
+- 用 ``profile`` 选择凭据。绝不内嵌真实机密。
+- 至少配置一个成功信号（``success_url_contains``、``success_selector``、``success_cookie_names`` 或 ``success_storage_keys``）；否则工具仅依赖“未抛出异常”。
+- 成功运行后，下游工具应以 ``auth_profile="<profile>"`` 调用，以测试已认证行为；以 ``auth_profile=null`` 调用则与未认证基线做对比。
 {% endraw %}

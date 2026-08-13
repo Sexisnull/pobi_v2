@@ -1,38 +1,38 @@
-Semantic search over indexed client-side code from target web application.
+对目标 Web 应用已索引的客户端代码进行语义搜索。
 
-## RETURNS
+## 返回内容
 
-- **Endpoints**: API URLs, routes, fetch/XHR/axios calls, form actions
-- **Architecture**: Page structure, routing logic, component organization
-- **Forms**: Input fields, parameter names, validation rules, types
+- **端点**：API URL、路由、fetch/XHR/axios 调用、表单 action
+- **架构**：页面结构、路由逻辑、组件组织
+- **表单**：输入字段、参数名、校验规则、类型
 
-## WHEN TO USE
+## 何时使用
 
-- Find API endpoints/routes in client-side code
-- Identify form inputs and parameter names
-- Understand client-side architecture and routing
-- Discover authentication/storage patterns (localStorage, cookies)
+- 在客户端代码中查找 API 端点/路由
+- 识别表单输入与参数名
+- 理解客户端架构与路由
+- 发现认证/存储模式（localStorage、cookie）
 
-## USAGE
+## 用法
 
-One simple query per call. Use keywords relevant to what you're searching for:
+每次调用一个简单查询。使用与你搜索目标相关的关键词：
 
-**Query Patterns**:
-- API/endpoints: `"API endpoints"`, `"fetch axios XMLHttpRequest"`
-- Forms: `"forms input fields"`, `"form validation"`
-- Auth: `"authentication"`, `"localStorage sessionStorage cookie"`
-- File uploads: `"file upload FileReader FormData"`
-- Events: `"event listeners onclick onsubmit"`
+**查询模式**：
+- API/端点：`"API endpoints"`、`"fetch axios XMLHttpRequest"`
+- 表单：`"forms input fields"`、`"form validation"`
+- 认证：`"authentication"`、`"localStorage sessionStorage cookie"`
+- 文件上传：`"file upload FileReader FormData"`
+- 事件：`"event listeners onclick onsubmit"`
 
-## LIMITATIONS
+## 局限
 
-- **Client-side only**: No server-side source code
-- **Pre-indexed**: Previously downloaded content only (not real-time)
-- **Discovery not exploitation**: Returns observed facts, not attack guidance
+- **仅客户端**：无服务端源码
+- **预索引**：仅此前下载的内容（非实时）
+- **只发现不利用**：返回观测到的事实，而非攻击指引
 
-## NOTES
+## 说明
 
-- Keep queries simple and focused (3-5 keywords)
-- Stop when you have needed information - don't over-query
-- If same results returned repeatedly, that's all available information
-- For real-time testing, use send_payload instead
+- 保持查询简单聚焦（3-5 个关键词）
+- 拿到所需信息即停 —— 不要过度查询
+- 若反复返回相同结果，那已是全部可用信息
+- 实时测试请改用 send_payload

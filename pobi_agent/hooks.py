@@ -25,6 +25,7 @@ class EventHooks(Protocol):
         task_id: Optional[str] = None,
         depth: int = 0,
         parent_task_id: Optional[str] = None,
+        role: Optional[str] = None,
     ) -> None:
         """Called when an agent starts executing."""
         ...
@@ -39,6 +40,7 @@ class EventHooks(Protocol):
         notes: Optional[str] = None,
         thought_summary: Optional[str] = None,
         attempts: Optional[list[dict[str, Any]]] = None,
+        role: Optional[str] = None,
     ) -> None:
         """Called when an agent finishes executing."""
         ...
@@ -172,6 +174,58 @@ class EventHooks(Protocol):
         """Called to emit a log message."""
         ...
 
+    def emit_plan_step(
+        self,
+        session_id: str,
+        step_id: str,
+        seq: int,
+        title: str,
+        status: str,
+        detail: Optional[str] = None,
+    ) -> None:
+        """Called when an execution plan step is created or updated."""
+        ...
+
+    def emit_phase_changed(
+        self,
+        session_id: str,
+        phase: str,
+        detail: Optional[str] = None,
+    ) -> None:
+        """Called when the task execution phase changes."""
+        ...
+
+    def emit_llm_iteration(
+        self,
+        session_id: str,
+        agent_name: str,
+        iteration: int,
+        message_count: int,
+    ) -> None:
+        """Called at the start of each LLM iteration (before calling the model)."""
+        ...
+
+    def emit_llm_input(
+        self,
+        session_id: str,
+        agent_name: str,
+        role: str,  # "user" | "tool"
+        content: str,
+        tool_name: Optional[str] = None,
+    ) -> None:
+        """Called with the last message content being sent to the LLM in this iteration."""
+        ...
+
+    def emit_llm_response(
+        self,
+        session_id: str,
+        agent_name: str,
+        response_text: str,
+        thinking_text: Optional[str] = None,
+    ) -> None:
+        """Called with the full LLM response text (and optional thinking/reasoning)."""
+        ...
+
     def is_interrupted(self, session_id: str) -> bool:
         """Check if the session has been interrupted."""
         ...
@@ -220,6 +274,21 @@ class NullEventHooks:
         pass
 
     def emit_log_message(self, *args, **kwargs) -> None:
+        pass
+
+    def emit_plan_step(self, *args, **kwargs) -> None:
+        pass
+
+    def emit_phase_changed(self, *args, **kwargs) -> None:
+        pass
+
+    def emit_llm_iteration(self, *args, **kwargs) -> None:
+        pass
+
+    def emit_llm_input(self, *args, **kwargs) -> None:
+        pass
+
+    def emit_llm_response(self, *args, **kwargs) -> None:
         pass
 
     def is_interrupted(self, session_id: str) -> bool:

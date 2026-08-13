@@ -3,14 +3,15 @@ import json
 import re
 import time
 from email.utils import parsedate_to_datetime
-from typing import AsyncGenerator, Dict, Union, Any, List
+from typing import AsyncGenerator, Dict, Union, Any, List, Optional
 from urllib.parse import urlparse, parse_qs
 from anyio import Path
+from pathlib import Path as StdPath
 from playwright.async_api import APIRequestContext, Browser, BrowserContext, async_playwright, Playwright, Page
 from playwright._impl._api_structures import OriginState, SetCookieParam
 from .http_parser import analyze_http_request_text
 from pobi_agent.logging import logger
-from pobi_agent.scope import check_scope, ScopeViolation
+from pobi_agent.scope import check_scope, ScopeViolation, SCOPE_DIR
 
 
 class HTTPRequestParseError(Exception):
@@ -75,6 +76,18 @@ class PlaywrightRequester:
         self.session_id = session_id
         self.auth_storage_state_path = auth_storage_state_path
         self.auth_profile = auth_profile
+
+    def _scope_path(self) -> Optional[StdPath]:
+        """Resolve the per-session scope file path.
+
+        Each task runs under its own session (= task_id). The platform writes
+        an isolated ``scope.{session_id}.yaml`` so concurrent tasks never read
+        each other's authorization scope. Returns ``None`` for legacy/session-less
+        callers so ``check_scope`` falls back to the global disabled policy.
+        """
+        if not self.session_id:
+            return None
+        return SCOPE_DIR / f"scope.{self.session_id}.yaml"
         # Fix: Add persistent page for localStorage operations
         self._persistent_page: Page | None = None
 
@@ -580,8 +593,11 @@ class PlaywrightRequester:
         """
         # Authorization scope gate: hard-abort out-of-scope egress. No-op when
         # the policy is disabled (the default) so existing flows are unaffected.
+        # Scope file is isolated per session (= task_id) so concurrent tasks
+        # never read each other's authorization scope. When the per-session
+        # file is absent, check_scope falls back to a disabled policy (safe no-op).
         try:
-            check_scope(url)
+            check_scope(url, path=self._scope_path())
         except ScopeViolation as e:
             logger.warning("Scope gate blocked request to %s", url)
             raise

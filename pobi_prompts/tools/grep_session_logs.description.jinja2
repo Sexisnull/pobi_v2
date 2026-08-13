@@ -1,45 +1,45 @@
-Search for regex patterns in session log files (requester.jsonl and python_interpreter.jsonl).
+在会话日志文件中按正则表达式搜索模式（requester.jsonl 与 python_interpreter.jsonl）。
 
-## USAGE
+## 用法
 
-Search for patterns in current session's logs to find previous requests, responses, tokens, errors, or data from prior tool executions.
+在当前会话日志中搜索模式，以查找此前工具执行产生的历史请求、响应、令牌、错误或数据。
 
-**Parameters**:
-- `pattern`: Python regex pattern (e.g., `"token.*[A-Za-z0-9]+"`, `"status.*200"`, `"error|Error"`)
+**参数**：
+- `pattern`：Python 正则表达式（如 `"token.*[A-Za-z0-9]+"`、`"status.*200"`、`"error|Error"`）
 
-**Search Locations**:
-- `requester.jsonl`: HTTP request/response data
-- `python_interpreter.jsonl`: Python script execution results
+**搜索位置**：
+- `requester.jsonl`：HTTP 请求/响应数据
+- `python_interpreter.jsonl`：Python 脚本执行结果
 
-## WHEN TO USE
+## 何时使用
 
-- Find authentication tokens, cookies, session IDs from previous requests
-- Search for specific endpoints, URLs, or request patterns
-- Extract status codes, error messages, or response patterns
-- Retrieve Python script output or errors
-- Identify recurring patterns or anomalies across session history
+- 从之前的请求中查找认证令牌、cookie、会话 ID
+- 搜索特定端点、URL 或请求模式
+- 提取状态码、错误消息或响应模式
+- 获取 Python 脚本输出或错误
+- 识别会话历史中反复出现的模式或异常
 
-## OUTPUT
+## 输出
 
-Returns formatted string with:
-- Total matches found
-- For each match: file name, line number, matched text, position, context (first 200 chars)
+返回格式化字符串，包含：
+- 找到的匹配总数
+- 每条匹配：文件名、行号、匹配文本、位置、上下文（前 200 字符）
 
-## EXAMPLE PATTERNS
+## 示例模式
 
 ```
-"token.*[A-Za-z0-9]{20,}"           # Find auth tokens
-"/api/.*"                            # Search for API endpoints
-"status.*code.*[0-9]{3}"            # Extract status codes
-"error|Error|ERROR|exception"       # Find error messages
-"password|secret|api_key"           # Find sensitive data
-"(?i)content-type.*application/json" # Case-insensitive header search
+"token.*[A-Za-z0-9]{20,}"           # 查找认证令牌
+"/api/.*"                            # 搜索 API 端点
+"status.*code.*[0-9]{3}"            # 提取状态码
+"error|Error|ERROR|exception"       # 查找错误消息
+"password|secret|api_key"           # 查找敏感数据
+"(?i)content-type.*application/json" # 大小写不敏感的请求头搜索
 ```
 
-## NOTES
+## 说明
 
-- Case-sensitive by default (use `(?i)` for case-insensitive)
-- Session-scoped (only searches current session logs)
-- Gracefully handles missing files
-- Read-only (doesn't modify logs)
-- Use valid Python regex syntax
+- 默认区分大小写（用 `(?i)` 做大小写不敏感搜索）
+- 作用域为会话级（只搜索当前会话日志）
+- 对缺失文件做优雅处理
+- 只读（不修改日志）
+- 使用合法的 Python 正则语法

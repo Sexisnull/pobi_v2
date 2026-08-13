@@ -1,33 +1,33 @@
-## CRITICAL: NEVER FABRICATE RESULTS
+## 关键要求：绝不可编造结果
 
-You must NEVER generate, guess, or construct validation tokens, flags, or proofs.
-- ONLY report findings that appear LITERALLY in tool output or agent results
-- You must be able to QUOTE the exact line containing any claimed evidence
-- If evidence is not LITERALLY in the output, it does not exist
+你绝不能生成、猜测或构造验证令牌、flag 或证明。
+- 只报告在工具输出或 agent 结果中**逐字出现**的发现
+- 你必须能**引用**包含所声称证据的确切行
+- 如果证据没有**逐字**出现在输出中，它就不存在
 
 {% if validation_format %}
-### Validation Token Rules
-The expected validation format is: `{{validation_format}}`
+### 验证令牌规则
+预期的验证格式为：`{{validation_format}}`
 
-- ONLY report tokens matching this format if they appear VERBATIM in tool output
-- NEVER construct or guess what the token might be
-- If no token matching `{{validation_format}}` appears in output, report that none was found
+- 只有当令牌**逐字**出现在工具输出中时，才报告符合该格式的令牌
+- 绝不能编造或猜测令牌可能是什么
+- 如果输出中没有出现符合 `{{validation_format}}` 的令牌，报告未发现任何令牌
 
-**What FABRICATED tokens look like (NEVER report these):**
-- Tokens containing readable words describing the vulnerability or outcome
-- Tokens you "think" should exist based on your analysis
-- Tokens constructed from partial information
+**编造的令牌长这样（绝不可报告这些）：**
+- 包含描述漏洞或结果的可读单词的令牌
+- 你基于分析"认为"应该存在的令牌
+- 由零散信息拼凑出来的令牌
 
-**To report a token, you MUST provide:**
-- The exact token value as it appears in output
-- The verbatim line from tool output containing it
-- Which tool/command produced the output
+**要报告一个令牌，你必须提供：**
+- 输出中出现的确切令牌值
+- 包含它的工具输出原样行
+- 产生该输出的工具/命令
 
-**If no token is found, this is a valid outcome.** A confirmed vulnerability does not mean a token exists.
+**如果没有找到令牌，这也是一种有效结果。** 确认存在漏洞并不意味着令牌一定存在。
 {% else %}
-### Evidence Rules
-- Document findings based on concrete tool output evidence
-- Compare baseline vs. exploit behavior for injection/bypass vulnerabilities
-- A confirmed vulnerability requires demonstrable proof (response diffs, error messages, extracted data)
-- Do NOT assume success without explicit evidence in tool output
+### 证据规则
+- 基于具体的工具输出证据记录发现
+- 对于注入/绕过类漏洞，对比基线行为与利用行为
+- 已确认的漏洞需要可证明的证据（响应差异、错误消息、提取的数据）
+- 没有工具输出中的明确证据，不要假设成功
 {% endif %}

@@ -1,46 +1,44 @@
 {% raw %}
-Renew a saved ``AuthContext`` profile using a refresh endpoint, without re-running the browser flow. The existing context is updated **in place**: same profile, same disk path, same cookies (merged with any new ones from the response). Only the bearer header and selected metadata fields change.
+不重新运行浏览器流程，而用刷新端点续期一个已保存的 ``AuthContext`` profile。现有上下文**原地**更新：同一 profile、同一磁盘路径、同一 cookie（与响应中的新 cookie 合并）。仅重写 bearer 请求头与选定的元数据字段。
 
-## WHEN TO USE
+## 何时使用
 
-- After ``validate_auth_context`` reports ``expired=true`` or after a downstream tool reports a structured "auth expired" error.
-- When the wallet (or saved metadata) declares a ``refresh_url`` for the profile and the token issuer supports refresh.
+- 在 ``validate_auth_context`` 报告 ``expired=true`` 之后，或在下游工具报告结构化的 "auth expired" 错误之后。
+- 当钱包（或已保存的元数据）为该 profile 声明了 ``refresh_url``，且令牌签发方支持刷新时。
 
-## WHEN NOT TO USE
+## 何时不使用
 
-- When no refresh endpoint exists \u2014 run ``authenticate`` again instead.
-- When the underlying credentials themselves have changed (e.g. password rotation) \u2014 run ``authenticate`` again.
+- 不存在刷新端点时 —— 改为重新运行 ``authenticate``。
+- 底层凭据本身已变更（如密码轮换）时 —— 重新运行 ``authenticate``。
 
-## INPUT CONTRACT
+## 输入约定
 
 | Argument | Type | Meaning |
 |---|---|---|
-| ``profile`` | string | Profile to refresh, default ``"default"``. |
-| ``refresh_url`` | string \| null | Explicit refresh endpoint. Falls back to ``metadata['refresh_url']`` then the wallet ``refresh_url``. |
-| ``refresh_method`` | string | HTTP method, default ``"POST"``. |
-| ``refresh_headers`` | object \| null | Extra headers to send with the refresh request. Supports ``{{...}}`` templates. |
-| ``refresh_body`` | any | JSON-serialisable body. Strings inside it support ``{{username}}`` / ``{{password}}`` / ``{{access_token}}`` / ``{{refresh_token}}`` placeholders. |
-| ``new_token_path`` | string | Dot-path into the response JSON to extract the new token. Default ``"access_token"``. |
-| ``new_token_header_name`` | string | Header name to rewrite. Default ``"Authorization"``. |
-| ``new_token_header_format`` | string | Format string with ``{token}``. Default ``"Bearer {token}"``. |
-| ``capture_cookies`` | bool | Merge ``Set-Cookie`` cookies from the response. Default ``true``. |
-| ``verify_ssl`` | bool | TLS verification. Default ``false``. |
-| ``timeout_ms`` | number \| null | Request timeout in ms. Default 15000. |
+| ``profile`` | string | 要刷新的 profile，默认 ``"default"``。 |
+| ``refresh_url`` | string \| null | 显式的刷新端点。回退顺序为 ``metadata['refresh_url']``，然后是钱包的 ``refresh_url``。 |
+| ``refresh_method`` | string | HTTP 方法，默认 ``"POST"``。 |
+| ``refresh_headers`` | object \| null | 随刷新请求发送的额外请求头。支持 ``{{...}}`` 模板。 |
+| ``refresh_body`` | any | 可 JSON 序列化的请求体。其中的字符串支持 ``{{username}}`` / ``{{password}}`` / ``{{access_token}}`` / ``{{refresh_token}}`` 占位符。 |
+| ``new_token_path`` | string | 从响应 JSON 中提取新令牌的点路径。默认 ``"access_token"``。 |
+| ``new_token_header_name`` | string | 要重写的请求头名。默认 ``"Authorization"``。 |
+| ``new_token_header_format`` | string | 含 ``{token}`` 的格式串。默认 ``"Bearer {token}"``。 |
+| ``capture_cookies`` | bool | 合并响应中的 ``Set-Cookie`` cookie。默认 ``true``。 |
+| ``verify_ssl`` | bool | TLS 验证。默认 ``false``。 |
+| ``timeout_ms`` | number \| null | 请求超时（毫秒）。默认 15000。 |
 
-## CREDENTIAL HANDLING
+## 凭据处理
 
-Precedence for ``{{username}}`` / ``{{password}}`` placeholders inside
-``refresh_body`` / ``refresh_headers``:
+``refresh_body`` / ``refresh_headers`` 内 ``{{username}}`` / ``{{password}}`` 占位符的优先级：
 
-1. Explicit ``username`` / ``password`` tool arguments (use when the user
-   supplied them, or when discovered in context).
-2. Wallet credentials for the selected ``profile``.
+1. 显式的 ``username`` / ``password`` 工具参数（用户显式提供，或在上下文中发现时使用）。
+2. 所选 ``profile`` 的钱包凭据。
 
-- The existing access token and refresh token (when present in storage / cookies) are auto-injected into the template context, so ``{{access_token}}`` / ``{{refresh_token}}`` work without any explicit override.
-- Never put real secrets directly inside ``refresh_body`` strings \u2014 use the placeholders.
-- Anything passed via the ``username`` / ``password`` tool args IS visible in the agent's context window. Wallet credentials are NOT. Prefer the wallet when a profile exists.
+- 已有的 access token 与 refresh token（当存在于存储 / cookie 中时）会自动注入模板上下文，因此 ``{{access_token}}`` / ``{{refresh_token}}`` 无需显式覆盖即可使用。
+- 绝不要将真实机密直接放入 ``refresh_body`` 字符串中 —— 使用占位符。
+- 通过 ``username`` / ``password`` 工具参数传入的任何内容**都会**出现在 agent 的上下文窗口中。钱包凭据不会。只要 profile 存在，就优先使用钱包。
 
-## OUTPUT (SAFE METADATA ONLY)
+## 输出（仅安全元数据）
 
 ```json
 {
@@ -59,11 +57,11 @@ Precedence for ``{{username}}`` / ``{{password}}`` placeholders inside
 }
 ```
 
-Cookie values, token values and passwords are **never** returned.
+cookie 值、令牌值与密码**绝不**返回。
 
-## EXAMPLES
+## 示例
 
-### Standard OAuth-style refresh
+### 标准 OAuth 风格刷新
 
 ```json
 {
@@ -74,7 +72,7 @@ Cookie values, token values and passwords are **never** returned.
 }
 ```
 
-### Refresh with a custom token header
+### 用自定义令牌请求头刷新
 
 ```json
 {
@@ -86,9 +84,9 @@ Cookie values, token values and passwords are **never** returned.
 }
 ```
 
-## RULES
+## 规则
 
-- Only call this when ``validate_auth_context`` reported ``expired=true`` or when the wallet declared a ``refresh_url`` that you intend to exercise on a schedule.
-- If refresh fails (HTTP \u2265 400, no token, no cookies), fall back to a full ``authenticate`` call.
-- Never invent ``refresh_url`` values \u2014 they must come from context, wallet, or saved metadata.
+- 仅在 ``validate_auth_context`` 报告 ``expired=true``，或钱包声明了你打算按计划执行的 ``refresh_url`` 时才调用本工具。
+- 若刷新失败（HTTP ≥ 400、无令牌、无 cookie），回退到完整的 ``authenticate`` 调用。
+- 绝不编造 ``refresh_url`` 取值 —— 它们必须来自上下文、钱包或已保存的元数据。
 {% endraw %}

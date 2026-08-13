@@ -1,38 +1,38 @@
-Headless Chrome UI automation (Pydoll / CDP). Use for HTML forms and pages where raw HTTP is not enough.
+无头 Chrome UI 自动化（Pydoll / CDP）。用于需要真实 DOM、JavaScript，或页面内嵌 CSRF 令牌的 HTML 表单与页面。
 
-## WHEN TO USE
+## 何时使用
 
-- Login or forms that need the real DOM, JavaScript, or CSRF tokens embedded in the page
-- Multi-step UI (fill → click next → fill) in one tool call
-- When you already know **accurate CSS selectors** from HTML you have seen
+- 需要真实 DOM、JavaScript，或页面内嵌 CSRF 令牌的登录或表单
+- 在一次工具调用内完成多步 UI 操作（填写 → 点击下一步 → 填写）
+- 你已从所见 HTML 中掌握**准确的 CSS 选择器**
 
-## WHEN NOT TO USE
+## 何时不使用
 
-- Simple API-style requests → prefer ``pw_send_payload``
-- You do not have real selectors from a response → discover HTML first, then call this
+- 简单的 API 风格请求 → 优先用 ``pw_send_payload``
+- 没有来自响应的真实选择器 → 先发现 HTML，再调用本工具
 
-## INPUT CONTRACT
+## 输入约定
 
-1. **page_url** — full URL to open first.
-2. **context** — flat JSON object: every value you need to type or branch on (strings, bools, numbers). Keys are referenced by steps.
-3. **steps** — ordered JSON array. Each item has **action** (discriminator):
+1. **page_url** —— 首先打开的完整 URL。
+2. **context** —— 扁平的 JSON 对象：你需要输入或做分支判断的每个值（字符串、布尔值、数字）。步骤通过 key 引用这些值。
+3. **steps** —— 有序的 JSON 数组。每个元素带 **action**（判别字段）：
 
-| action | Required fields | Meaning |
+| action | 必填字段 | 含义 |
 |--------|-----------------|--------|
-| fill | selector, key | Type ``str(context[key])`` into the field |
-| select | selector, key | Choose ``<select>`` option; optional ``select_by``: value (default), label, index |
-| check | selector, key | Checkbox from truthy/falsey ``context[key]`` |
-| click | selector | Click element (submit, link, …) |
-| press | selector | Optional ``key_name`` (default ``Enter``) after focus |
+| fill | selector, key | 将 ``str(context[key])`` 输入到该字段 |
+| select | selector, key | 选择 ``<select>`` 选项；可选 ``select_by``：value（默认）、label、index |
+| check | selector, key | 根据真值/假值 ``context[key]`` 勾选复选框 |
+| click | selector | 点击元素（提交、链接等） |
+| press | selector | 聚焦后可选 ``key_name``（默认 ``Enter``） |
 
-Selectors must come from actual page markup (id, name, data-*, stable classes)—never guess paths.
+选择器必须来自页面的真实标记（id、name、data-*、稳定 class）——绝不猜测路径。
 
-## OUTPUT
+## 输出
 
-Returns JSON: ``success``, ``error`` (if any), ``final_url``, ``page_title``, ``steps_run``.
+返回 JSON：``success``、``error``（若有）、``final_url``、``page_title``、``steps_run``。
 
-## RULES
+## 规则
 
-- Keep steps minimal; one failed selector stops the run
-- Prefer ``click`` on an explicit submit button over ``press`` when possible
-- Respect scope and authorization the same as HTTP testing
+- 保持步骤精简；一个选择器失败会中断整个流程
+- 尽可能优先用 ``click`` 点击显式提交按钮，而非 ``press``
+- 与 HTTP 测试一样遵守范围与授权

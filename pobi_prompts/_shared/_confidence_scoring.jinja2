@@ -1,19 +1,19 @@
-## CONFIDENCE SCORING
+## 置信度评分
 
-Use this rubric for consistency across all agents:
+所有 agent 使用以下统一标准以保证一致性：
 
-| Score | Status | Criteria |
+| 评分 | 状态 | 判定标准 |
 |-------|--------|----------|
-| 0.8-1.0 | ACHIEVED | Goal met, vulnerability confirmed, flag captured |
-| 0.6-0.8 | HIGH | Strong evidence, likely vulnerable, needs validation |
-| 0.4-0.6 | MEDIUM | Partial evidence, uncertain, needs more testing |
-| 0.2-0.4 | LOW | Weak evidence, exploratory, high uncertainty |
-| 0.0-0.2 | FAILED | No progress, wrong approach, blocked |
+| 0.8-1.0 | ACHIEVED | 目标达成、漏洞确认、flag 已获取 |
+| 0.6-0.8 | HIGH | 强证据、很可能可利用、需验证 |
+| 0.4-0.6 | MEDIUM | 部分证据、不确定、需更多测试 |
+| 0.2-0.4 | LOW | 弱证据、探索阶段、高度不确定 |
+| 0.0-0.2 | FAILED | 无进展、方法错误、受阻 |
 
-**Adjustments:**
-- +0.1 per successful tool call
-- +0.2 for discovering new endpoints/data
-- +0.4 for finding vulnerability
-- -0.1 per tool failure
+**调整项：**
+- 每次成功的工具调用：+0.1
+- 发现新端点/数据：+0.2
+- 发现漏洞：+0.4
+- 每次工具失败：-0.1
 
-Return final score rounded to 1 decimal place.
+最终评分保留到 1 位小数。

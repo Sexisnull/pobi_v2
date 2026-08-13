@@ -1,73 +1,73 @@
-## ERROR RECOVERY
+## 错误恢复
 
-When a tool call fails, apply the appropriate recovery pattern based on error type.
+当工具调用失败时，根据错误类型套用相应的恢复模式。
 
-### HTTP Status Code Recovery
+### HTTP 状态码恢复
 
-**400 Bad Request**:
-- Issue: Malformed request syntax
-- Recovery: Validate HTTP format, check headers, verify Content-Type matches body
-- Max retries: 2 (if still fails, payload likely invalid)
+**400 Bad Request**：
+- 问题：请求语法畸形
+- 恢复：校验 HTTP 格式、检查请求头、确认 Content-Type 与请求体匹配
+- 最多重试：2 次（若仍失败，说明 payload 很可能无效）
 
-**403 Forbidden**:
-- Issue: Endpoint exists but access denied
-- Recovery: Check authentication (use `read_auth_storage`), try different credentials, test auth bypass
-- If still 403: Note as protected endpoint, try alternative approach
+**403 Forbidden**：
+- 问题：端点存在但拒绝访问
+- 恢复：检查认证（使用 `read_auth_storage`）、尝试不同凭据、测试鉴权绕过
+- 若仍为 403：标记为受保护端点，改用其他途径
 
-**404 Not Found**:
-- Issue: Endpoint doesn't exist
-- Recovery: Do NOT retry same endpoint - it doesn't exist
-- Action: Mark as non-existent, try related endpoints (e.g., /api/users → /api/user)
+**404 Not Found**：
+- 问题：端点不存在
+- 恢复：不要重复请求同一端点——它不存在
+- 动作：标记为不存在，尝试相关端点（如 /api/users → /api/user）
 
-**429 Rate Limited**:
-- Issue: Too many requests, rate limiting active
-- Recovery: Stop immediately, wait 60s, reduce request rate
-- If persistent: Note as rate-limited, stop testing this endpoint
+**429 Rate Limited**：
+- 问题：请求过多，触发限流
+- 恢复：立即停止，等待 60 秒，降低请求频率
+- 若持续：标记为已限流，停止测试该端点
 
-**500 Server Error**:
-- Issue: Server-side error (possible vulnerability indicator)
-- Recovery: Retry once (may be transient), analyze error message for info disclosure
-- If persistent: Possible injection point - investigate further
+**500 Server Error**：
+- 问题：服务端错误（可能是漏洞迹象）
+- 恢复：重试一次（可能是瞬时问题），分析错误消息是否有信息泄露
+- 若持续：可能是注入点——进一步排查
 
-**Timeout**:
-- Issue: Request took too long (possible DoS vector or slow endpoint)
-- Recovery: Increase timeout, reduce payload size, try simpler payload
-- Max retries: 2 (if still times out, mark as timeout-prone)
+**Timeout**：
+- 问题：请求耗时过长（可能是 DoS 向量或缓慢端点）
+- 恢复：增大超时、缩小 payload、尝试更简单的 payload
+- 最多重试：2 次（若仍超时，标记为易超时）
 
-### Tool Execution Errors
+### 工具执行错误
 
-**Import Error** (Python):
-- Issue: Missing package in `packages` parameter
-- Recovery: Add missing package to packages list, retry
-- Example: `ImportError: No module named 'requests'` → Add `"requests"` to packages
+**Import Error**（Python）：
+- 问题：`packages` 参数中缺少包
+- 恢复：将缺失的包加入 packages 列表后重试
+- 示例：`ImportError: No module named 'requests'` → 将 `"requests"` 加入 packages
 
-**Syntax Error** (Code):
-- Issue: Invalid code syntax
-- Recovery: Fix syntax error, retry
-- Max retries: 2 (if still fails, rethink approach)
+**Syntax Error**（代码）：
+- 问题：代码语法无效
+- 恢复：修复语法错误后重试
+- 最多重试：2 次（若仍失败，重新思考方法）
 
-**Connection Error** (Network):
-- Issue: Cannot reach target
-- Recovery: Verify target URL, check network connectivity, retry once
-- If persistent: Report as unreachable, stop testing
+**Connection Error**（网络）：
+- 问题：无法连接到目标
+- 恢复：核对目标 URL、检查网络连通性、重试一次
+- 若持续：标记为不可达，停止测试
 
-**Permission Error** (File/System):
-- Issue: Insufficient permissions
-- Recovery: Use alternative approach (e.g., read via tool instead of direct access)
-- Do NOT retry same operation
+**Permission Error**（文件/系统）：
+- 问题：权限不足
+- 恢复：改用其他途径（如通过工具读取而非直接访问）
+- 不要重复同一操作
 
-### Recovery Strategy
+### 恢复策略
 
-1. **Identify error type** (status code, exception, message)
-2. **Apply recovery pattern** (from above)
-3. **Track retry count** (max 3 retries per tool/endpoint)
-4. **Stop if unrecoverable** (after max retries, report and move on)
+1. **识别错误类型**（状态码、异常、消息）
+2. **套用恢复模式**（见上文）
+3. **跟踪重试次数**（每个工具/端点最多 3 次）
+4. **无法恢复则停止**（达到最大重试次数后上报并继续）
 
-### When to Stop Trying
+### 何时停止尝试
 
-- Same error 3 consecutive times → Stop, try different tool/approach
-- 404 errors → Stop immediately (endpoint doesn't exist)
-- 403 + valid auth → Stop (endpoint properly protected)
-- Persistent 429 → Stop (rate limited, wait or abort)
+- 同一错误连续 3 次 → 停止，换用其他工具/方法
+- 404 错误 → 立即停止（端点不存在）
+- 403 + 有效认证 → 停止（端点已被妥善保护）
+- 持续 429 → 停止（已限流，等待或中止）
 
-**Rule**: Recover smartly, but know when to pivot. Don't waste tool calls on unrecoverable errors.
+**规则**：聪明地恢复，但也要知道何时转向。不要在无法恢复的错误上浪费工具调用。

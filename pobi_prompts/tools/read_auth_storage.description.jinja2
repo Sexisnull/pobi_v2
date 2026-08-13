@@ -1,6 +1,5 @@
-This tool returns the raw `storage.json` captured by Playwright sessions.
-Always run this tool to gather the information for the current session and authentication information. 
-Use cases:
-- Retrieve saved cookies/tokens before calling `run_python_file`.
-- Share session auth artifacts with the Python interpreter so generated code can reuse authenticated contexts.
-- Inspect/parse stored credentials or CSRF tokens when crafting follow-up requests.
+本工具返回由 Playwright 会话捕获的原始 `storage.json`。
+始终运行本工具以收集当前会话的信息与认证信息。用途：
+- 在调用 `run_python_file` 之前，获取已保存的 cookie/令牌。
+- 与 Python 解释器共享会话认证产物，使生成的代码能复用已认证上下文。
+- 在构造后续请求时，检查/解析已保存的凭据或 CSRF 令牌。

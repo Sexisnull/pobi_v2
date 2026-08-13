@@ -1,47 +1,47 @@
-Write Python code to file and execute in sandboxed WebAssembly environment. Combines file writing and execution in single operation.
+将 Python 代码写入文件并在隔离的 WebAssembly 环境中执行。将文件写入与执行合并为单次操作。
 
-## USAGE
+## 用法
 
-Execute Python scripts for security testing in isolated environment with automatic package management.
+在带有自动包管理的隔离环境中执行 Python 脚本以进行安全测试。
 
-**Parameters** (all required):
-- `code`: Python source code to execute
-- `filename`: Name for the file (e.g., "exploit.py", "fuzzer.py")
-- `packages`: List of required packages (e.g., `["requests", "beautifulsoup4"]`)
+**参数**（全部必填）：
+- `code`：要执行的 Python 源码
+- `filename`：文件名（如 "exploit.py"、"fuzzer.py"）
+- `packages`：所需包列表（如 `["requests", "beautifulsoup4"]`）
 
-## WHEN TO USE
+## 何时使用
 
-- Execute Python exploits, payloads, or analysis scripts
-- Batch HTTP request testing (10-1000+ requests)
-- Complex security testing requiring Python logic
-- Custom fuzzing, data processing, or analysis scripts
+- 执行 Python 利用脚本、payload 或分析脚本
+- 批量 HTTP 请求测试（10-1000+ 个请求）
+- 需要 Python 逻辑的复杂安全测试
+- 自定义模糊测试、数据处理或分析脚本
 
-## PACKAGE REQUIREMENTS
+## 包要求
 
-**MANDATORY**: Extract ALL external packages from your code before calling tool.
+**强制**：调用工具前，从你的代码中提取所有外部包。
 
-- **Standard library** (os, sys, json, re, urllib, itertools) → Do NOT include
-- **Third-party** (requests, numpy, beautifulsoup4) → MUST include
-- If no external packages needed → use empty list `[]`
+- **标准库**（os、sys、json、re、urllib、itertools）→ 不要包含
+- **第三方**（requests、numpy、beautifulsoup4）→ 必须包含
+- 若无需外部包 → 使用空列表 `[]`
 
-**Example**:
+**示例**：
 ```python
-import requests       # Third-party → include
-import json          # Standard library → skip
-from bs4 import BeautifulSoup  # Third-party → include as "beautifulsoup4"
+import requests       # 第三方 → 包含
+import json          # 标准库 → 跳过
+from bs4 import BeautifulSoup  # 第三方 → 以 "beautifulsoup4" 包含
 
 # packages = ["requests", "beautifulsoup4"]
 ```
 
-## FEATURES
+## 特性
 
-- Automatic file management (saves to `~/.cache/pobi/python/`)
-- Sandboxed execution (isolated WebAssembly environment)
-- Package installation (auto-installs before execution)
-- JSON results (structured output with stdout, stderr, return values)
-- Session support (maintains state across runs with `_session_id`)
+- 自动文件管理（保存到 `~/.cache/pobi/python/`）
+- 沙箱执行（隔离的 WebAssembly 环境）
+- 包安装（执行前自动安装）
+- JSON 结果（含 stdout、stderr、返回值的结构化输出）
+- 会话支持（通过 `_session_id` 跨运行保持状态）
 
-## EXAMPLE
+## 示例
 
 ```python
 run_python_file(
@@ -51,10 +51,10 @@ run_python_file(
 )
 ```
 
-## NOTES
+## 说明
 
-- All three parameters required in single call
-- Missing packages cause ImportError
-- Complete isolation from host system
-- Files saved to `~/.cache/pobi/python/<filename>`
-- Session ID optional (auto-generated if not provided)
+- 单次调用中三个参数 모두必填
+- 缺失包会导致 ImportError
+- 与宿主系统完全隔离
+- 文件保存到 `~/.cache/pobi/python/<filename>`
+- 会话 ID 可选（未提供时自动生成）

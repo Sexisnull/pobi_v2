@@ -1,59 +1,59 @@
-## TOOL SELECTION PRIORITY
+## 工具选择优先级
 
-Choose the most efficient tool for each task type. Prefer specialized tools over generic ones.
+为每类任务选择最高效的工具。优先用专用工具，而非通用工具。
 
-### HTTP Request Testing
+### HTTP 请求测试
 
-**Single payload test** (1-5 requests):
-1. `send_payload` - Specialized for request testing and raw HTTP request (priority 1)
-2. `sandboxed_shell_tool` - Using curl (priority 2)
+**单次 payload 测试**（1-5 个请求）：
+1. `send_payload` - 专门用于请求测试与原始 HTTP 请求（优先级 1）
+2. `sandboxed_shell_tool` - 使用 curl（优先级 2）
 
-**Batch testing** (10-1000 requests):
-1. `run_python_file` - Write Python script for deterministic fuzzing (priority 1)
-2. `send_payload` - Only if batch tool unavailable or a fuzzing tool (priority 2)
+**批量测试**（10-1000 个请求）：
+1. `run_python_file` - 编写 Python 脚本进行确定性模糊测试（优先级 1）
+2. `send_payload` - 仅当批量工具不可用或作为模糊测试工具时（优先级 2）
 
-**High-volume fuzzing** (>1000 requests):
-1. `sandboxed_shell_tool` + specialized fuzzing tools (ffuf, gobuster) (priority 1)
-2. `run_python_file` - For custom fuzzing logic (priority 2)
+**高并发模糊测试**（>1000 个请求）：
+1. `sandboxed_shell_tool` + 专用模糊测试工具（ffuf、gobuster）（优先级 1）
+2. `run_python_file` - 用于自定义模糊测试逻辑（优先级 2）
 
-### Code Analysis
+### 代码分析
 
-**Semantic search** (finding patterns, endpoints):
-1. `webapp_code_rag` - Semantic search over indexed code (priority 1)
+**语义搜索**（查找模式、端点）：
+1. `webapp_code_rag` - 对索引代码进行语义搜索（优先级 1）
 
-**Pattern matching** (regex, specific strings):
-1. `webapp_code_rag` - If pattern is in indexed code (priority 1)
+**模式匹配**（正则、特定字符串）：
+1. `webapp_code_rag` - 若模式在索引代码中（优先级 1）
 
-**File reading** (specific files):
-1. `source_code_browser` - Direct file access (priority 1)
-2. `webapp_code_rag` - If file is indexed (priority 2)
+**文件读取**（特定文件）：
+1. `source_code_browser` - 直接文件访问（优先级 1）
+2. `webapp_code_rag` - 若文件已被索引（优先级 2）
 
-### Reconnaissance
+### 侦察
 
-**Web reconnaissance** (forms, endpoints, architecture):
-1. `webapp_code_rag` - Fast, no HTTP requests, pre-indexed (priority 1)
-2. `send_payload` - For real-time verification (priority 2)
-3. `run_python_file` - For complex analysis
+**Web 侦察**（表单、端点、架构）：
+1. `webapp_code_rag` - 快速、无需 HTTP 请求、已预索引（优先级 1）
+2. `send_payload` - 用于实时验证（优先级 2）
+3. `run_python_file` - 用于复杂分析
 
-**System reconnaissance** (ports, services, infrastructure):
-1. `sandboxed_shell_tool` - Use nmap, sqlmap, specialized tools, curl (priority 1)
-2. `run_python_file` - Only if shell tools insufficient (priority 2)
+**系统侦察**（端口、服务、基础设施）：
+1. `sandboxed_shell_tool` - 使用 nmap、sqlmap、专用工具、curl（优先级 1）
+2. `run_python_file` - 仅当 shell 工具不足时（优先级 2）
 
-### Exploitation
+### 利用
 
-**Simple exploits** (single payload):
-1. `send_payload` - Raw HTTP requests (priority 1)
-2. `sandboxed_shell_tool` - can send requests with curl (priority 2)
+**简单利用**（单个 payload）：
+1. `send_payload` - 原始 HTTP 请求（优先级 1）
+2. `sandboxed_shell_tool` - 可用 curl 发送请求（优先级 2）
 
-**Complex exploits** (multi-stage, timing, logic):
-1. `run_python_file` - Full control, complex logic (priority 1)
-2. `send_payload` - For individual stages (priority 2)
+**复杂利用**（多阶段、时序、逻辑）：
+1. `run_python_file` - 完全控制、复杂逻辑（优先级 1）
+2. `send_payload` - 用于单个阶段（优先级 2）
 
-**System exploits** (command execution, file operations):
-1. `sandboxed_shell_tool` - Use appropriate security tools (priority 1)
-2. `run_python_file` - If shell tools insufficient (priority 2)
+**系统级利用**（命令执行、文件操作）：
+1. `sandboxed_shell_tool` - 使用相应安全工具（优先级 1）
+2. `run_python_file` - 若 shell 工具不足（优先级 2）
 
-### Decision Tree
+### 决策树
 
 ```
 Need to make HTTP request?
@@ -71,4 +71,4 @@ Need to exploit?
 └─ System-level → sandboxed_shell_tool
 ```
 
-**Rule**: Start with specialized tool, escalate to generic only if specialized fails. Priorities are specified with (priority N)
+**规则**：从专用工具入手，仅在专用工具失效时升级到通用工具。优先级以 (priority N) 标注。

@@ -1,23 +1,23 @@
-Send raw HTTP requests for security testing. Low-level HTTP interface - behaves like programmable proxy/Burp Suite requester.
+发送原始 HTTP 请求以进行安全测试。底层 HTTP 接口 —— 行为类似可编程代理 / Burp Suite 请求器。
 
-## USAGE
+## 用法
 
-Send exact HTTP bytes to target, receive raw bytes back. No modification except credential replacement.
+向目标发送精确的 HTTP 字节，并接收原始字节返回。除凭据替换外不做任何修改。
 
-Supports:
-- All HTTP methods (GET, POST, PUT, DELETE, etc.)
-- Binary bodies, chunked transfer, arbitrary headers
-- HTTP and HTTPS connections
-- Session-level proxy routing when the CLI is started with `--proxy`
-- Credential placeholder auto-replacement
+支持：
+- 所有 HTTP 方法（GET、POST、PUT、DELETE 等）
+- 二进制请求体、分块传输、任意请求头
+- HTTP 与 HTTPS 连接
+- CLI 以 `--proxy` 启动时提供会话级代理路由
+- 凭据占位符自动替换
 
-## WHEN TO USE
+## 何时使用
 
-- Test target with single HTTP request
-- Test injection payloads for vulnerabilities
-- Validate security controls with specific requests
+- 用单次 HTTP 请求测试目标
+- 测试漏洞的注入 payload
+- 用特定请求验证安全控制
 
-## REQUEST FORMAT
+## 请求格式
 
 ```
 METHOD /path?query=value HTTP/1.1\r\n
@@ -29,18 +29,18 @@ User-Agent: Mozilla/5.0 ...\r\n
 \r\n
 ```
 
-## CREDENTIAL HANDLING
+## 凭据处理
 
-Use credential placeholders that auto-replace during execution:
-- Email: `<dummy_email>`
-- Username: `<dummy_username>`
-- Password: `<dummy_password>`
+使用在执行时自动替换的凭据占位符：
+- 邮箱：`<dummy_email>`
+- 用户名：`<dummy_username>`
+- 密码：`<dummy_password>`
 
-Example: `username=<dummy_username>&password=<dummy_password>`
+示例：`username=<dummy_username>&password=<dummy_password>`
 
-No manual credential management needed - replacement happens automatically.
+无需手动管理凭据 —— 替换自动完成。
 
-## EXAMPLE
+## 示例
 
 ```
 POST /api/login HTTP/1.1\r\n
@@ -51,15 +51,15 @@ Content-Type: application/json\r\n
 \r\n
 ```
 
-## RULES
+## 规则
 
-- Normalize method to UPPERCASE
-- Always include `Host` and `User-Agent` headers
-- If `body_encoding` omitted and body has non-UTF-8 bytes, treat as base64
-- Extract ONLY ONE request most likely to work
-- Return ONLY formatted request, nothing more
-- Find NEW payloads different from previous attempts
-- Start with small payloads, validate, then escalate
-- ONLY use validated endpoints (from tools or context)
-- NEVER repeat request that returned error already in context
-- Test only unharmful and undetectable payloads
+- 将方法规范为大写
+- 始终包含 `Host` 与 `User-Agent` 请求头
+- 若省略 `body_encoding` 且请求体含非 UTF-8 字节，则按 base64 处理
+- 只提取最有可能奏效的**一个**请求
+- 只返回格式化请求，除此之外什么都不返回
+- 寻找与之前尝试**不同**的新 payload
+- 由小 payload 起步，验证后再升级
+- 只使用已验证的端点（来自工具或上下文）
+- 绝不重复上下文中已返回错误的请求
+- 只测试无害且难以检测的 payload
