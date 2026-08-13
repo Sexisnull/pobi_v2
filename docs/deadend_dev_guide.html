@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deadend CLI · 二次开发上手指南</title>
+<style>
+  :root{
+    --bg:#f8fafc; --panel:#ffffff; --ink:#1e293b; --muted:#64748b; --line:#e2e8f0;
+    --blue:#185fa5; --blue-bg:#e6f1fb; --green:#3b6d11; --green-bg:#eaf3de;
+    --amber:#854f0b; --amber-bg:#faefda; --red:#a32d2d; --red-bg:#fcebeb;
+    --purple:#534ab7; --purple-bg:#eeedfe;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+    background:var(--bg);color:var(--ink);line-height:1.65;font-size:15px;}
+  header{background:linear-gradient(135deg,#0c447c,#185fa5);color:#fff;padding:32px 40px;}
+  header h1{margin:0 0 6px;font-size:26px;font-weight:600;}
+  header p{margin:0;opacity:.9;font-size:14px;}
+  .wrap{display:flex;max-width:1200px;margin:0 auto;padding:0 20px;}
+  nav{width:230px;flex:0 0 230px;padding:24px 0;position:sticky;top:0;align-self:flex-start;height:100vh;overflow:auto;}
+  nav a{display:block;padding:8px 14px;color:var(--muted);text-decoration:none;border-radius:8px;font-size:14px;}
+  nav a:hover{background:var(--panel);color:var(--blue);}
+  main{flex:1;padding:24px 0 60px;min-width:0;}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px 28px;margin-bottom:22px;}
+  section h2{margin:0 0 14px;font-size:20px;border-left:4px solid var(--blue);padding-left:12px;}
+  section h3{font-size:16px;margin:20px 0 8px;color:var(--blue);}
+  code{background:#f1f5f9;padding:2px 6px;border-radius:5px;font-size:13px;font-family:"SFMono-Regular",Consolas,monospace;color:#0c447c;}
+  .path{background:#f1f5f9;padding:2px 6px;border-radius:5px;font-family:monospace;font-size:12.5px;color:#a32d2d;word-break:break-all;}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px;}
+  th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top;}
+  th{background:#f1f5f9;font-weight:600;}
+  tr:nth-child(even) td{background:#fafcff;}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;}
+  .card{border:1px solid var(--line);border-radius:12px;padding:16px;background:#fff;}
+  .card .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;margin-bottom:8px;font-weight:600;}
+  .card h4{margin:0 0 6px;font-size:15px;}
+  .card p{margin:0;font-size:13px;color:var(--muted);}
+  .t-blue{background:var(--blue-bg);color:var(--blue);}
+  .t-green{background:var(--green-bg);color:var(--green);}
+  .t-amber{background:var(--amber-bg);color:var(--amber);}
+  .t-red{background:var(--red-bg);color:var(--red);}
+  .t-purple{background:var(--purple-bg);color:var(--purple);}
+  ol.steps{counter-reset:s;list-style:none;padding:0;margin:0;}
+  ol.steps li{position:relative;padding:10px 10px 10px 46px;margin-bottom:8px;border-left:2px solid var(--line);}
+  ol.steps li:before{counter-increment:s;content:counter(s);position:absolute;left:10px;top:10px;width:24px;height:24px;
+    background:var(--blue);color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;}
+  .note{border-left:4px solid var(--amber);background:var(--amber-bg);padding:12px 16px;border-radius:8px;font-size:13.5px;margin:12px 0;}
+  .danger{border-left:4px solid var(--red);background:var(--red-bg);padding:12px 16px;border-radius:8px;font-size:13.5px;margin:12px 0;}
+  .pill{display:inline-block;background:#f1f5f9;border-radius:6px;padding:2px 8px;font-size:12px;color:var(--muted);margin:2px 4px 2px 0;}
+  footer{text-align:center;color:var(--muted);font-size:12.5px;padding:20px;}
+  @media(max-width:820px){nav{display:none;} .wrap{padding:0 12px;}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Deadend CLI · 二次开发上手指南</h1>
+  <p>基于源码结构 · 扩展点地图 · 逐文件阅读清单 · eval 验证流程 &nbsp;|&nbsp; 本地留存版</p>
+</header>
+
+<div class="wrap">
+  <nav>
+    <a href="#goal">① 目标定位</a>
+    <a href="#setup">② 环境搭建</a>
+    <a href="#seams">③ 扩展点地图</a>
+    <a href="#files">④ 逐文件阅读清单</a>
+    <a href="#eval">⑤ eval 验证流程</a>
+    <a href="#monorepo">⑥ monorepo 提醒</a>
+    <a href="#path">⑦ 学习即开发三步走</a>
+    <a href="#risk">⑧ 合规与风险</a>
+  </nav>
+
+  <main>
+    <section id="goal">
+      <h2>① 目标定位：你打开这份指南要做什么</h2>
+      <p>这份指南服务于一个目标——<strong>在 fork（二次开发）deadend-cli 的基础上做完善</strong>。它不要求你从 <code>main</code> 通读到最后一个文件，而是帮你先摸清<strong>在哪下刀</strong>。</p>
+      <p>Deadend CLI 是一个<strong>自主 Web 应用渗透测试 agent</strong>，核心特征是：</p>
+      <ul>
+        <li><strong>反馈驱动迭代（ADaPT）</strong>：标准工具失败时，自动生成自定义 Python payload、观察响应、再迭代，直到突破。</li>
+        <li><strong>信心驱动决策</strong>：每轮给任务打 0–1.0 信心分，据此 <code>fail(&lt;0.2) / expand(0.2–0.6) / refine(0.6–0.8) / validate(&gt;0.8)</code>。</li>
+        <li><strong>两阶段</strong>：先 <code>recon</code>（侦察+威胁建模+RAG 入库），后 <code>exploit</code>（吃上下文跑 ADaPT 循环）。</li>
+        <li><strong>完全本地 / 模型无关</strong>：LiteLLM 抽象多供应商，零云端依赖。</li>
+        <li><strong>成绩</strong>：XBOW 黑盒套件 78%（盲注 SQLi 从 0% 做到 33%）。</li>
+      </ul>
+      <div class="note">读源码前先能<strong>不依赖代码、用自己的话讲出上面五点</strong>。讲不通就先回看架构图（见 <code>deadend_cli_architecture.html</code>）。</div>
+    </section>
+
+    <section id="setup">
+      <h2>② 环境搭建（第 0 步：仓库还没 clone）</h2>
+      <p>当前工作目录里只有架构图，仓库源码未拉取。先把它拿下来并建立开发环境：</p>
+      <ol class="steps">
+        <li><strong>Clone</strong>：<code>git clone https://github.com/straylabs-ai/deadend-cli</code>（注意上游 org 实际为 <code>xoxruns</code>，以仓库页为准）。</li>
+        <li><strong>Python 环境</strong>：需 Python 3.11+ 与 <code>uv &gt;= 0.5.30</code>。在项目根执行 <code>uv sync</code> 安装 workspace 全部依赖。</li>
+        <li><strong>Playwright</strong>：<code>playwright install</code>（Requester 工具依赖浏览器自动化）。</li>
+        <li><strong>Docker</strong>：必须。Shell 工具在 Docker/Kali 沙箱里隔离执行。<code>deadend-cli init</code> 会拉起 pgvector 与 Docker 前置。</li>
+        <li><strong>配置模型</strong>：<code>~/.deadend/config.json</code 填 provider（OpenAI/Anthropic/Ollama…），经 LiteLLM 抽象，换模型只改这里。</li>
+        <li><strong>冒烟测试</strong>：跑通 <code>deadend-cli init</code>，再用 <code>deadend-cli eval-agent</code> 跑通 <strong>1 道题</strong>。能跑通 1 题 = 环境 OK。</li>
+      </ol>
+      <div class="danger">⚠️ 仅在<strong>你有权限的目标</strong>上测试（自有靶场 / 授权渗透 / CTF）。未授权扫描违法。仓库 DISCLAIMER 已明确此点。</div>
+    </section>
+
+    <section id="seams">
+      <h2>③ 扩展点地图（fork 后"在哪下刀"）</h2>
+      <p>架构刻意模块化，扩展缝很清晰。下列每一格 = 一个二次开发入口：</p>
+      <div class="grid">
+        <div class="card"><span class="tag t-blue">子智能体 / 工具</span>
+          <h4>加新角色或工具</h4>
+          <p>在 <span class="path">agents/factory.py</span> 注册，并加入 <span class="path">deadend_agent.py</span> 的 <code>available_agents</code> 字典。能力边界由 <span class="path">deadend_prompts/</span> 的 system prompt + 授权工具决定。</p></div>
+        <div class="card"><span class="tag t-green">验证策略</span>
+          <h4>加新停机条件</h4>
+          <p>扩展 <span class="path">config/validation.default.yaml</span> 的 <code>strategies</code>，并在 validation 系统实现对应 strategy 类（在 <code>flag</code>/<code>judge</code> 之外加你的，如"多证据投票 judge"）。</p></div>
+        <div class="card"><span class="tag t-purple">RPC / CLI</span>
+          <h4>加新命令</h4>
+          <p><span class="path">jsonrpc_server.py</span> 暴露新方法，前端 <span class="path">cli/deadend/src/</span> 调用。README roadmap 的 <strong>plan mode</strong> 正是 RPC+UI 扩展点。</p></div>
+        <div class="card"><span class="tag t-amber">模型层</span>
+          <h4>换 / 加供应商</h4>
+          <p>LiteLLM 已抽象，基本只改配置。想换本地 Llama/Qwen 也走这里——这是 roadmap "Open-Source Models" 目标。</p></div>
+        <div class="card"><span class="tag t-red">策略旋钮</span>
+          <h4>调"自主性"</h4>
+          <p><span class="path">core_agent/core_agent.py</span> 的信心带 <code>0.2/0.6/0.8</code> 与 TaskNode 递归深度，是皇冠上的旋钮——决定 agent 多激进。</p></div>
+        <div class="card"><span class="tag t-blue">工作流</span>
+          <h4>预设 / 回放</h4>
+          <p>README roadmap 的 <em>Preset configuration workflows</em>（API / web / auth bypass）与 <em>Workflow automation</em>（save/replay）明确标 "In Progress"，是现成缺口。</p></div>
+      </div>
+    </section>
+
+    <section id="files">
+      <h2>④ 逐文件阅读清单（每个阶段该抓什么）</h2>
+      <p>按"边界 → 大脑 → 手 → 记忆"的顺序读，别跳。</p>
+      <h3>Phase 1 · 边界与启动（先找主心骨）</h3>
+      <table>
+        <tr><th>阶段</th><th>文件</th><th>抓什么</th></tr>
+        <tr><td>前端桥</td><td><span class="path">cli/deadend/src/runtime/</span></td><td>Deno 如何 spawn Python 子进程、如何流式收事件（subscribe_events / get_agent_tasks）。</td></tr>
+        <tr><td>RPC 桥</td><td><span class="path">deadend_cli/src/deadend_cli/jsonrpc_server.py</span></td><td>JSON-RPC over stdio 的方法清单：<code>init_all</code> / <code>instantiate_agent</code> / <code>run_agent_recursive</code> / <code>subscribe_events</code> / <code>get_agent_tasks</code>。</td></tr>
+        <tr><td>组合根</td><td><span class="path">deadend_cli/src/deadend_cli/component_manager.py</span></td><td>如何把 model、subagents、tools、validation、RAG、沙箱拼起来——这是依赖注入入口。</td></tr>
+      </table>
+      <h3>Phase 2 · 大脑（ADaPT 循环，皇冠明珠）</h3>
+      <table>
+        <tr><th>文件</th><th>抓什么</th></tr>
+        <tr><td><span class="path">deadend_agent/src/deadend_agent/core_agent/core_agent.py</span></td><td><code>run()</code> 异步生成器、信心分→决策映射、<strong>TaskNode 递归展开</strong>、ValidationGate 集成、<code>max_depth</code>。全项目最该精读。</td></tr>
+        <tr><td><span class="path">deadend_agent/src/deadend_agent/deadend_agent.py</span></td><td>supervisor 角色、<code>available_agents</code> 字典、<code>threat_model_stream</code> / <code>start_testing_stream</code> / <code>start_supervisor</code>。</td></tr>
+      </table>
+      <h3>Phase 3 · 手（子智能体与工具，真正干活）</h3>
+      <table>
+        <tr><th>文件</th><th>抓什么</th></tr>
+        <tr><td><span class="path">deadend_agent/src/deadend_agent/agents/factory.py</span></td><td>角色注册表：requester / python_interpreter / shell / webapp_analyzer / authenticator / router / memory。</td></tr>
+        <tr><td><span class="path">deadend_agent/src/deadend_agent/agents/</span></td><td>各子智能体定义——看每个角色"被授权做什么、边界在哪"。</td></tr>
+        <tr><td><span class="path">deadend_agent/src/deadend_agent/tools/</span></td><td>Requester(Playwright HTTP)、Python(WASM/Pyodide 沙箱)、Shell(Docker 沙箱) 的<strong>真实执行</strong>——安全隔离落点。</td></tr>
+      </table>
+      <h3>Phase 4 · 记忆与刹车（context & validation）</h3>
+      <table>
+        <tr><th>文件</th><th>抓什么</th></tr>
+        <tr><td><span class="path">deadend_agent/src/deadend_agent/config/validation.default.yaml</span></td><td>停机条件：<code>flag</code> 正则 + <code>judge</code> LLM（judge 无新证据时自节流）。</td></tr>
+        <tr><td>pgvector 上下文库</td><td>recon 输出如何被 exploit 复用——"78% 成绩"的隐藏功臣。</td></tr>
+        <tr><td>Arize Phoenix 埋点</td><td><code>openinference-instrumentation</code>：用 Phoenix 看每次迭代的 span，定位"为什么没 expand / 为什么 validate 误判"。</td></tr>
+      </table>
+    </section>
+
+    <section id="eval">
+      <h2>⑤ eval 验证流程（改完怎么知道没改坏）</h2>
+      <p>这是二次开发最值钱的部分——评分体系已搭好，直接复用当回归测试：</p>
+      <ol class="steps">
+        <li><strong>deadend-eval + XBOW 套件</strong>：<code>deadend-cli eval-agent --provider &lt;p&gt; --model-name &lt;m&gt;</code> 跑 104 题黑盒套件。改一处 → 跑 eval → 看总分 / 盲注成功率变化。</li>
+        <li><strong>Arize Phoenix trace</strong>：开 Phoenix 看每次迭代 span，定位决策异常。</li>
+        <li><strong>单题 trace</strong>：挑一个 CTF 题，改前改后各跑一遍对比。</li>
+        <li><strong>改阈值验证</strong>：调 <code>0.2/0.6/0.8</code> 看行为变化——能预测并验证行为改变 = 真读懂。</li>
+      </ol>
+      <div class="note">基准参考（README）：XBOW 验证套件 78%（76/98），含盲注 SQLi 33%。强项 XSS 91% / 业务逻辑 86% / SQLi 83% / IDOR 80%。你的改动应以"不掉分、特定类目加分"为目标。</div>
+      <p><span class="pill">eval-agent</span><span class="pill">XBOW 104 题</span><span class="pill">Phoenix span</span><span class="pill">单题 diff</span><span class="pill">阈值实验</span></p>
+    </section>
+
+    <section id="monorepo">
+      <h2>⑥ monorepo 结构提醒</h2>
+      <p><span class="path">pyproject.toml</span> 里 <code>[tool.uv.workspace]</code> 的 members：</p>
+      <table>
+        <tr><th>成员包</th><th>职责</th></tr>
+        <tr><td><span class="path">deadend_agent</span></td><td>核心 agent 逻辑（ADaPT 循环、supervisor、子智能体、工具）。</td></tr>
+        <tr><td><span class="path">deadend_prompts</span></td><td>各角色 system prompt 模板（.jinja2）——改行为先来这。</td></tr>
+        <tr><td><span class="path">deadend_eval</span></td><td>评测 harness（XBOW 套件驱动）。</td></tr>
+        <tr><td><span class="path">simple-python-interpreter-sandbox</span></td><td>Python 沙箱客户端（WASM/Pyodide）。</td></tr>
+      </table>
+      <div class="note">加新能力时：要么在现有 package 内加模块，要么新开一个 workspace package 并在 <code>pyproject.toml</code> 的 <code>[tool.uv.workspace].members</code> 登记。先理解这层，后面加代码才不会放错地方。</div>
+    </section>
+
+    <section id="path">
+      <h2>⑦ 学习即开发：前两步（避开"没跑通就大改"）</h2>
+      <p>二次开发最危险的误区是<strong>还没在本地跑通就动手大改</strong>。你的第一个里程碑应是：<strong>"让它能在我机器上跑起来、并跑通 1 题 eval"</strong>——这本身就是一次有价值的二次开发。</p>
+      <ol class="steps">
+        <li><strong>环境就位</strong>：clone → <code>uv sync</code> → <code>playwright install</code> + Docker → <code>init</code> → 跑通 <code>eval-agent</code> 的 1 题。</li>
+        <li><strong>最小扩展动手</strong>：挑最窄的缝——给 validation 加一个自定义 strategy，或给 factory 加一个只读 <code>router</code> 子智能体。改 → 跑 eval → 看分数。</li>
+        <li><strong>啃 Roadmap 缺口</strong>：推荐先实现 <strong>plan mode</strong>（执行前预览策略）——最直观、最易验证、且 README 明说在做。</li>
+      </ol>
+    </section>
+
+    <section id="risk">
+      <h2>⑧ 合规与风险</h2>
+      <div class="danger">⚠️ <strong>仅用于授权安全测试</strong>。未授权测试违法，用户须自行确保合规与授权。仓库 DISCLAIMER 已明确。</div>
+      <p>二次开发时尤其注意：</p>
+      <ul>
+        <li>工具在 Docker/Kali 与 WASM 沙箱中隔离执行——<strong>不要为了"方便"关掉沙箱</strong>，那是安全设计的核心。</li>
+        <li>ValidationGate 的停机逻辑是"别越界"的保险——自定义 strategy 时别让它无限循环攻击。</li>
+        <li>"fully local / zero data exfiltration" 是设计承诺，二次开发应保持。</li>
+      </ul>
+    </section>
+
+    <footer>Deadend CLI 二次开发上手指南 · 本地留存版 · 配合 deadend_cli_architecture.html 与 deadend_web_showcase.html 使用</footer>
+  </main>
+</div>
+</body>
+</html>

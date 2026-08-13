@@ -1,12 +1,12 @@
 # Pobi v2
 
-前后端分离的 AI 渗透测试 Web 平台，重构自 `pobi`（deadend-cli 演进分支）。
+前后端分离的 AI 渗透测试 Web 平台，重构自 `pobi`。
 
 本目录是一个**独立项目**，通过 uv workspace 复用父仓库 `pobi/pobi_agent`
 （`CoreAgent` 决策内核、`DeadEndAgent` 编排、`EventHooks` 事件总线、
 工具链与置信度护栏），但拥有独立的前后端架构、独立依赖与独立运行方式。
 
-## 当前进度：里程碑 1–8（M8 已完全复刻原 AI 自主渗透系统，直接驱动原 DeadEndAgent）
+## 当前进度：里程碑 1–8（M8 已完全复刻原 AI 自主渗透系统，直接驱动原 DeadEndAgent）+ M8+ 演进（运行指令通道 / 系统状态对账 / 统一 LLM 抽象层预留）
 
 - FastAPI 应用骨架
 - SQLAlchemy 2.0 + Alembic（PostgreSQL）
@@ -65,6 +65,15 @@
 - 纯静态单页应用，由后端直接托管于 `/app`，无需 Node / 构建步骤。
 - 覆盖登录/注册、目标与任务 CRUD、SSE 实时事件流、审批决策、报告导出。
 
+### 里程碑 8 之后新增端点（M8+）
+
+- `POST /api/v1/tasks/{id}/instructions`：向运行中任务追加指令（`instruction`），由 Worker 协作式检查点消费并注入主控 Agent 上下文。
+- `GET  /api/v1/tasks/{id}/live`：任务实时态聚合（`TaskLiveState`）——当前阶段/智能体、执行计划 `PlanSummary`、待生效指令数、最近事件，供控制台中栏展示。
+- `GET  /api/v1/system/worker-status`：ARQ Worker 在线情况与队列积压（基于 `arq:queue:health-check` 键）。
+- `POST /api/v1/system/task-reconcile`：任务状态对账，收敛幽灵任务（取消标志 / 队列丢失 / 超时三类终止）。
+
+> 上述端点默认需 `Authorization: Bearer <JWT>`，并按租户隔离。
+
 > 实现说明（关联修复）：
 > - `/auth/register` 在开放注册模式下，若 `tenant_slug` 对应租户不存在则**自动创建租户**，使自助注册自洽。生产环境关闭开放注册（`POBI_V2_ALLOW_OPEN_REGISTRATION=false`）后，需先用 `POST /auth/tenants` 预建租户。
 > - `Target.in_scope` / `out_of_scope` 以 **JSONB** 列存储（列表原生读写），前端直接获得数组。
@@ -90,43 +99,52 @@ pobi_v2/
     ├── main.py              # FastAPI 入口（挂载 /static、/app、/web/*）
     ├── core/
     │   ├── config.py        # 配置（pydantic-settings）
-    │   └── exceptions.py    # 统一异常与 HTTP 映射
+    │   ├── exceptions.py    # 统一异常与 HTTP 映射
+    │   ├── security.py      # JWT + bcrypt
+    │   ├── deps.py          # get_current_user 鉴权依赖
+    │   └── seed.py          # 启动幂等 seed admin
     ├── db/
     │   ├── session.py       # engine / session / Base
     │   ├── models.py        # Tenant/User/Target/Task/ApprovalRequest/Finding/AuditEvent/TaskEvent/Artifact
     │   └── persistence.py   # 落库辅助（事件/发现/审计/产物）
     ├── schemas/
     │   ├── target.py
-    │   ├── task.py
+    │   ├── task.py          # 含 PlanStep / TaskLiveState / TaskInstructionIn
     │   ├── persistence.py   # 查询返回 Schema
     │   ├── auth.py          # 用户/租户/令牌 Schema
     │   └── approval.py      # 审批请求 Schema
-    ├── core/
-    │   ├── config.py
-    │   ├── exceptions.py
-    │   ├── security.py      # JWT + bcrypt
-    │   └── deps.py          # get_current_user 鉴权依赖
     ├── routers/
     │   ├── auth.py          # 注册/登录/me/租户
     │   ├── targets.py       # 租户隔离
-    │   ├── tasks.py         # 含 cancel，租户隔离
+    │   ├── tasks.py         # 含 cancel / live，租户隔离
+    │   ├── instruction.py   # 运行指令追加（M8+）
+    │   ├── system.py        # Worker 状态 + 任务对账（M8+）
     │   ├── stream.py        # SSE，租户隔离
     │   ├── persistence.py   # findings/events/artifacts/audit，租户隔离
     │   ├── approval.py      # M5 审批请求列表/决策
     │   └── report.py        # M5 报告导出
+    ├── llm/                 # 统一 LLM 抽象层（LiteLLM+Instructor），预留未接入消费方
+    │   ├── __init__.py
+    │   ├── client.py        # complete / complete_json / chat
+    │   ├── config.py        # 多供应商模型规格解析（本地优先）
+    │   └── types.py         # ModelSpec / LLMMessage / UsageRecord / LLMError
     └── engine/
-        ├── event_bus.py     # 事件总线（对接 pobi_agent EventHooks）
-        ├── agent_adapter.py # CoreAgent/PobiAgent 适配层（含审批回调挂载）
-        ├── guardrails.py    # 授权范围护栏（复用 scan_tools.build_scope_policy）
-        ├── scan_workflow.py # M7 扫描工作流（复刻 DeadEndAgent 三阶段）
-        ├── scan_tools.py    # M7 HTTP 侦察(httpx)+受限 shell（复用 ScopePolicy 闸门）
-        ├── executor.py      # 任务执行管线（驱动 scan_workflow / 落库/取消/续跑）
-        ├── queue.py         # ARQ 队列
-        ├── worker.py        # ARQ WorkerSettings
-        ├── cancel_state.py  # 取消标志存储（memory/redis）
-        ├── approval.py      # M5 审批引擎（判定/决策/回调）
-        └── report.py        # M5 结构化报告渲染
+        ├── event_bus.py           # 事件总线（对接 pobi_agent EventHooks）
+        ├── agent_adapter.py       # CoreAgent/PobiAgent 适配层（含审批回调挂载）
+        ├── guardrails.py          # 授权范围护栏（复用 scan_tools.build_scope_policy）
+        ├── scan_workflow.py       # M7 扫描工作流（复刻 DeadEndAgent 三阶段）
+        ├── scan_tools.py          # M7 HTTP 侦察(httpx)+受限 shell（复用 ScopePolicy 闸门）
+        ├── deadend_runner.py      # M8 完整引擎适配层（驱动原 DeadEndAgent）
+        ├── executor.py            # 任务执行管线（驱动 deadend_runner / 落库/取消/续跑）
+        ├── instruction_channel.py # 运行指令通道（与 cancel_state 同构，memory/redis）
+        ├── queue.py               # ARQ 队列
+        ├── worker.py             # ARQ WorkerSettings
+        ├── cancel_state.py       # 取消标志存储（memory/redis）
+        ├── approval.py           # M5 审批引擎（判定/决策/回调）
+        └── report.py             # M5 结构化报告渲染
 ```
+
+> **注**：`pobi_agent/`（内嵌 AI 引擎）位于**仓库根目录**，非 `pobi_v2/pobi_v2/` 子包；通过 uv workspace 复用。
 
 ## 快速开始
 
@@ -199,6 +217,7 @@ POBI_V2_DB_NAME=pobi_v2
 # ---- 安全 ----
 POBI_V2_JWT_SECRET=<32 字节以上随机串，务必替换 dev 默认值>
 POBI_V2_ALLOW_OPEN_REGISTRATION=false   # 生产关闭开放注册
+POBI_V2_CORS_ORIGINS=https://your-domain  # 生产收敛 CORS（dev �放行 *，禁止与 credentials 同用 *）
 
 # ---- LLM（透传给 pobi_agent.CoreAgent）----
 POBI_V2_MODEL=openai/gpt-4o
@@ -253,6 +272,18 @@ docker compose exec api alembic upgrade head
 形式向公众提供，须向用户提供对应**完整源代码**获取途径。建议在页面页脚提供仓库链接，
 或按 `NOTICE` 说明的途径提供源码归档。内嵌的 `pobi_agent/` 衍生自上游 pobi，其版权与
 许可证见 `pobi_agent/THIRD_PARTY_NOTICE.md`。
+
+### 8. 工程治理待办（架构评审 2026-08-13）
+
+详见 `docs/PROJECT_GOAL.md` § 2.4，要点：
+
+- **A1 分层倒置（P0）**：`pobi_agent/pobi_agent.py` 反向 `import pobi_v2.engine.instruction_channel`，构成内核→平台的抽象循环，须改为通过可注入协议（如 `InstructionSink`）解耦。
+- **A2 `python_scripts/` 失序（P1）**：堆积 20+ 个 DVWA 一次性测试脚本，应归档至 `scripts/dvwa/` 或删除。
+- **A3 `logs/` 入版本控制（P1）**：应加入 `.gitignore`。
+- **A4 `pobi_v2/llm/` 孤儿模块（P2）**：完整 LiteLLM 抽象层但无消费方，须接入或标注预留。
+- **A5 CORS 不安全（P2）**：`allow_origins=["*"]` + `allow_credentials=True` 被浏览器规范禁止，生产须收敛。
+- **A6 `main.py:web_app` 分支矛盾（P2）**：`if not index.exists(): return ... if index.exists() else ...` 自相矛盾，须修正。
+- **A7 `routers/system.py` 脆弱写法（P3）**：`len(active) if "active" in dir() else 0`，宜在 except 中初始化。
 
 ### 7. 发布流程（AGENTS.md 规范）
 

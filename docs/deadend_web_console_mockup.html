@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Deadend Web Console — 前端操作页面构想原型</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --panel:#ffffff; --panel-2:#fafbfc; --border:#e4e7ec;
+    --ink:#1f2430; --ink-2:#5b6472; --ink-3:#8b94a3;
+    --accent:#3b5bdb; --accent-soft:#e7ecfd; --accent-2:#0ca678;
+    --warn:#e8590c; --danger:#e03131; --danger-soft:#fdecec;
+    --band-fail:#e03131; --band-expand:#f08c00; --band-refine:#1971c2; --band-validate:#0ca678;
+    --shadow:0 1px 3px rgba(20,30,60,.08),0 6px 20px rgba(20,30,60,.06);
+    --radius:12px; --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    background:var(--bg); color:var(--ink); line-height:1.55; font-size:14px;
+  }
+  /* layout */
+  .app{display:grid; grid-template-columns:228px 1fr; min-height:100vh}
+  .sidebar{background:linear-gradient(180deg,#1f2430,#222a3d); color:#cfd6e4; padding:18px 14px; position:sticky; top:0; height:100vh; overflow:auto}
+  .brand{display:flex; align-items:center; gap:10px; margin-bottom:22px}
+  .brand .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#3b5bdb,#0ca678);display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;font-size:15px}
+  .brand b{color:#fff;font-size:15px;line-height:1.1}
+  .brand small{display:block;color:#8b94a3;font-size:11px;font-weight:400}
+  .nav{display:flex;flex-direction:column;gap:3px}
+  .nav button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:0;color:#cfd6e4;padding:9px 11px;border-radius:9px;cursor:pointer;font-size:13.5px}
+  .nav button .ic{width:18px;text-align:center;opacity:.85}
+  .nav button:hover{background:rgba(255,255,255,.06)}
+  .nav button.active{background:var(--accent);color:#fff;box-shadow:0 4px 12px rgba(59,91,219,.4)}
+  .nav .grp{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:#717b8e;margin:16px 0 6px 11px}
+  .sb-foot{position:absolute;bottom:14px;left:14px;right:14px;font-size:11px;color:#717b8e}
+  .sb-foot .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent-2);margin-right:6px;box-shadow:0 0 0 3px rgba(12,166,120,.18)}
+
+  .main{overflow:auto}
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:var(--panel);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:5}
+  .topbar h1{font-size:16px;margin:0}
+  .topbar .sub{font-size:12px;color:var(--ink-3)}
+  .topbar .who{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--ink-2)}
+  .avatar{width:28px;height:28px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700}
+
+  .view{padding:24px; max-width:1180px; margin:0 auto; display:none}
+  .view.active{display:block; animation:fade .25s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px 20px;margin-bottom:18px}
+  .card h3{margin:0 0 4px;font-size:14.5px}
+  .card .hint{color:var(--ink-3);font-size:12.5px;margin:0 0 14px}
+  .grid{display:grid;gap:18px}
+  .g2{grid-template-columns:1fr 1fr}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:980px){.g2,.g3,.g4{grid-template-columns:1fr}}
+
+  .stat{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow)}
+  .stat .k{font-size:12px;color:var(--ink-3)}
+  .stat .v{font-size:26px;font-weight:800;margin-top:4px}
+  .stat .v small{font-size:13px;font-weight:600;color:var(--ink-3)}
+
+  label{display:block;font-size:12.5px;font-weight:600;color:var(--ink-2);margin:14px 0 6px}
+  input,select,textarea{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:9px;font-size:13.5px;font-family:inherit;background:var(--panel-2);color:var(--ink)}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+  textarea{resize:vertical;min-height:74px;font-family:var(--mono);font-size:12.5px}
+  .row{display:flex;gap:12px}
+  .row>*{flex:1}
+  .muted{color:var(--ink-3);font-size:12px}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;background:var(--accent-soft);color:var(--accent)}
+  .pill.green{background:#e6f7f1;color:var(--accent-2)}
+  .pill.warn{background:#fdf0e6;color:var(--warn)}
+  .pill.red{background:var(--danger-soft);color:var(--danger)}
+
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:9px;border:1px solid var(--border);background:var(--panel);color:var(--ink);font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit}
+  .btn:hover{background:var(--panel-2)}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent);box-shadow:0 4px 12px rgba(59,91,219,.32)}
+  .btn.primary:hover{filter:brightness(1.05)}
+  .btn.danger{background:var(--danger);color:#fff;border-color:var(--danger)}
+  .btn.ghost{background:none}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btnrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+
+  /* wizard steps */
+  .steps{display:flex;gap:0;margin-bottom:18px}
+  .steps .st{flex:1;display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-right:0;background:var(--panel-2);font-size:12.5px;color:var(--ink-3)}
+  .steps .st:first-child{border-radius:9px 0 0 9px}
+  .steps .st:last-child{border-right:1px solid var(--border);border-radius:0 9px 9px 0}
+  .steps .st .n{width:22px;height:22px;border-radius:50%;background:#e3e7ef;color:var(--ink-2);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+  .steps .st.active{background:var(--accent-soft);color:var(--accent);font-weight:700;border-color:var(--accent)}
+  .steps .st.active .n{background:var(--accent);color:#fff}
+  .steps .st.done .n{background:var(--accent-2);color:#fff}
+
+  .consent{background:var(--danger-soft);border:1px solid #f5c2c2;border-radius:10px;padding:14px 16px;margin:6px 0 4px}
+  .consent b{color:var(--danger)}
+  .check{display:flex;gap:10px;align-items:flex-start;padding:10px 0;font-size:13px}
+  .check input{width:auto;margin-top:3px}
+
+  /* monitor */
+  .phasebar{display:flex;align-items:center;gap:0;margin-bottom:14px}
+  .phasebar .ph{flex:1;text-align:center;padding:12px;font-weight:700;font-size:13px;color:var(--ink-3);border:1px solid var(--border);background:var(--panel-2)}
+  .phasebar .ph:first-child{border-radius:9px 0 0 9px}
+  .phasebar .ph:last-child{border-radius:0 9px 9px 0;border-left:0}
+  .phasebar .ph.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .phasebar .ph.done{background:var(--accent-soft);color:var(--accent);border-color:var(--accent-soft)}
+
+  .conf{display:flex;align-items:center;gap:14px;margin:6px 0 14px}
+  .conf .bar{flex:1;height:14px;border-radius:999px;background:linear-gradient(90deg,var(--band-fail) 0%,var(--band-expand) 30%,var(--band-refine) 60%,var(--band-validate) 85%);position:relative}
+  .conf .bar .mark{position:absolute;top:-4px;width:4px;height:22px;background:#1f2430;border-radius:2px;transform:translateX(-2px);transition:left .3s}
+  .conf .val{font-weight:800;font-size:18px;min-width:46px;text-align:right}
+
+  .feed{background:#0f1320;color:#d6dcea;border-radius:10px;padding:14px;height:320px;overflow:auto;font-family:var(--mono);font-size:12px;line-height:1.7}
+  .feed .ln{white-space:pre-wrap}
+  .feed .t{color:#5b6b8c}
+  .feed .ag{color:#7fd1ff}
+  .feed .ok{color:#5fd6a0}
+  .feed .wn{color:#f5b86b}
+  .feed .er{color:#ff8585}
+
+  .tree{font-family:var(--mono);font-size:12.5px;line-height:1.9}
+  .tree .node{padding:3px 8px;border-radius:6px;display:inline-block}
+  .tree .n-root{background:var(--accent-soft);color:var(--accent)}
+  .tree .n-sup{background:#eef1f6;color:var(--ink-2)}
+  .tree .n-leaf{background:#eafaf3;color:var(--accent-2)}
+  .tree .indent{display:inline-block;width:22px}
+
+  .agentgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+  .agent{background:var(--panel-2);border:1px solid var(--border);border-radius:10px;padding:12px}
+  .agent .nm{font-weight:700;font-size:13px}
+  .agent .st{font-size:11px;margin-top:4px}
+  .agent .st.busy{color:var(--warn)}
+  .agent .st.idle{color:var(--ink-3)}
+  .agent .st.done{color:var(--accent-2)}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--border)}
+  th{font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3);background:var(--panel-2)}
+  tr:hover td{background:var(--panel-2)}
+
+  .map{font-size:12px;background:var(--panel-2);border:1px dashed var(--border);border-radius:9px;padding:10px 12px;margin-top:10px;color:var(--ink-2)}
+  .map code{background:#eef1f6;padding:1px 6px;border-radius:5px;font-family:var(--mono);color:var(--accent);font-size:11.5px}
+  .tag{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:5px;background:#eef1f6;color:var(--ink-2);margin-right:5px}
+
+  .note{background:#fff8e6;border:1px solid #f3e2b3;border-radius:9px;padding:12px 14px;font-size:12.5px;color:#7a5b00;margin-bottom:16px}
+  .note b{color:#8a4b00}
+  .footnote{color:var(--ink-3);font-size:11.5px;margin-top:8px}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--ink-2);margin-top:8px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .legend i{width:12px;height:12px;border-radius:3px;display:inline-block}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ===== Sidebar ===== -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">D</div>
+      <div><b>Deadend</b><small>Web Console · 原型</small></div>
+    </div>
+    <nav class="nav">
+      <button data-view="dashboard" class="active"><span class="ic">▦</span> 总览 Dashboard</button>
+      <button data-view="newscan"><span class="ic">＋</span> 新建评估</button>
+      <button data-view="monitor"><span class="ic">◉</span> 实时监控</button>
+      <button data-view="results"><span class="ic">✓</span> 结果报告</button>
+      <button data-view="settings"><span class="ic">⚙</span> 设置</button>
+      <div class="grp">二次开发</div>
+      <button data-view="backend"><span class="ic">⇄</span> 后端映射</button>
+    </nav>
+    <div class="sb-foot"><span class="dot"></span>Backend: connected · Docker OK</div>
+  </aside>
+
+  <!-- ===== Main ===== -->
+  <div class="main">
+    <div class="topbar">
+      <div>
+        <h1 id="viewTitle">总览 Dashboard</h1>
+        <div class="sub" id="viewSub">让不懂 CLI 的人也能安全使用 Deadend 自主渗透能力</div>
+      </div>
+      <div class="who"><span>operator@local</span><div class="avatar">OP</div></div>
+    </div>
+
+    <!-- ===== Dashboard ===== -->
+    <section class="view active" id="view-dashboard">
+      <div class="note"><b>设计原则：</b>本页是给"非 CLI 用户"的入口。第一屏不急着"开始扫描"，而是让使用者<strong>确认自己有权限、锁定范围、看到审计</strong>——护栏优先于便利。</div>
+      <div class="grid g4">
+        <div class="stat"><div class="k">后端状态</div><div class="v">在线<small> · Docker OK</small></div></div>
+        <div class="stat"><div class="k">进行中评估</div><div class="v">1<small> 个</small></div></div>
+        <div class="stat"><div class="k">已完成评估</div><div class="v">7<small> 个</small></div></div>
+        <div class="stat"><div class="k">累计发现漏洞</div><div class="v">23<small> 个</small></div></div>
+      </div>
+      <div class="grid g2">
+        <div class="card">
+          <h3>快速开始</h3>
+          <p class="hint">三步即可发起一次合规评估。所有操作都会进入审计日志。</p>
+          <div class="btnrow">
+            <button class="btn primary" data-go="newscan">＋ 新建评估</button>
+            <button class="btn" data-go="monitor">◉ 查看进行中</button>
+          </div>
+          <div class="map">对应后端：<code>init_all</code> → <code>instantiate_agent</code> → <code>embed_target</code> → <code>run_agent_recursive</code></div>
+        </div>
+        <div class="card">
+          <h3>进行中</h3>
+          <p class="hint">最近一次评估的实时概览。</p>
+          <div class="row" style="align-items:center">
+            <div style="flex:2"><b>https://juice-shop.example.com</b><br><span class="muted">recon → exploit · 已运行 4m12s</span></div>
+            <div style="flex:1;text-align:right"><span class="pill warn">运行中</span></div>
+          </div>
+          <div class="btnrow" style="margin-top:12px">
+            <button class="btn" data-go="monitor">打开监控</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>最近评估（审计视图）</h3>
+        <p class="hint">非 CLI 用户最需要"我做过什么、对谁做的、结果怎样"——这同时是合规证据。</p>
+        <table>
+          <thead><tr><th>时间</th><th>目标 (已脱敏)</th><th>阶段</th><th>发现</th><th>状态</th><th>授权单</th></tr></thead>
+          <tbody>
+            <tr><td>07-21 15:30</td><td>juice-shop.***.com</td><td>recon+exploit</td><td>5</td><td><span class="pill green">完成</span></td><td>#AUTH-204</td></tr>
+            <tr><td>07-20 11:02</td><td>dvwa.***.local</td><td>recon+exploit</td><td>11</td><td><span class="pill green">完成</span></td><td>#AUTH-198</td></tr>
+            <tr><td>07-19 09:41</td><td>ctf.***.net</td><td>recon only</td><td>3</td><td><span class="pill">已停止</span></td><td>#AUTH-191</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===== New Scan (wizard) ===== -->
+    <section class="view" id="view-newscan">
+      <div class="note"><b>核心护栏：</b>第 1 步就是<strong>授权 + 范围</strong>，且必须显式勾选法律声明才能进入下一步。这是 Web 化后新增的、CLI 没有的强制关卡。</div>
+      <div class="card">
+        <div class="steps">
+          <div class="st active" data-step="1"><span class="n">1</span> 目标与授权</div>
+          <div class="st" data-step="2"><span class="n">2</span> 模型与凭据</div>
+          <div class="st" data-step="3"><span class="n">3</span> 策略</div>
+          <div class="st" data-step="4"><span class="n">4</span> 复核启动</div>
+        </div>
+
+        <!-- Step 1 -->
+        <div class="wstep" data-step="1">
+          <label>目标 URL</label>
+          <input placeholder="https://your-target.example.com" value="https://juice-shop.example.com" />
+          <label>允许扫描的范围（主机 / 子域，正则）</label>
+          <input placeholder="^juice-shop\.example\.com$" value="^juice-shop\.example\.com$" />
+          <div class="muted" style="margin-top:4px">超出此范围的所有请求都会被后端拒绝（对应 sandbox / 范围校验）。</div>
+
+          <div class="consent" style="margin-top:16px">
+            <b>⚠ 法律与授权确认</b>
+            <div class="check"><input type="checkbox" id="c1"/><label for="c1" style="margin:0;font-weight:400">我拥有此目标系统的合法授权，或已获得书面渗透测试许可。</label></div>
+            <div class="check"><input type="checkbox" id="c2"/><label for="c2" style="margin:0;font-weight:400">我理解此工具会主动发起攻击性请求，仅用于授权范围内的安全测试。</label></div>
+            <div class="check"><input type="checkbox" id="c3"/><label for="c3" style="margin:0;font-weight:400">我同意所有操作记录在审计日志中（含目标、时间、发现）。</label></div>
+          </div>
+          <div class="map">对应后端：<code>embed_target(url)</code> 写入 RAG；范围正则用于 sandbox 请求过滤。授权勾选应由后端持久化（审计表）。</div>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="wstep" data-step="2" style="display:none">
+          <label>模型提供方（model-agnostic，经 LiteLLM）</label>
+          <select>
+            <option>本地 · Ollama (llama3.1)</option>
+            <option>云端 · OpenAI (gpt-4o)</option>
+            <option>云端 · Anthropic (claude)</option>
+            <option>自托管 · vLLM 端点</option>
+          </select>
+          <label>API Key / 令牌（仅本地使用，不外传）</label>
+          <input type="password" placeholder="sk-... 或留空使用本地模型" />
+          <div class="muted">项目原则：fully local / zero data exfiltration。Key 只在你本地后端内存，不会上传。</div>
+          <div class="map">对应后端：LiteLLM 抽象层；基本只改配置即可换模型，无需改代码。</div>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="wstep" data-step="3" style="display:none">
+          <label>执行阶段</label>
+          <select>
+            <option>侦察 + 利用 (recon → exploit)</option>
+            <option>仅侦察 (recon only)</option>
+          </select>
+          <div class="row">
+            <div><label>自主性上限（信心阈值 0.2/0.6/0.8）</label>
+              <input value="0.2 / 0.6 / 0.8" /></div>
+            <div><label>任务树最大深度</label>
+              <input value="5" /></div>
+          </div>
+          <label>验证策略 (ValidationGate)</label>
+          <select>
+            <option>flag 正则 + judge LLM（默认）</option>
+            <option>仅 flag 正则</option>
+            <option>多证据投票 judge（自定义·待开发）</option>
+          </select>
+          <div class="muted">这些旋钮直接对应 <code>core_agent.py</code> 的信心带与递归深度——把它们暴露给 UI，正是"二次开发后端"要做的。</div>
+        </div>
+
+        <!-- Step 4 -->
+        <div class="wstep" data-step="4" style="display:none">
+          <h3 style="margin-top:0">复核并启动</h3>
+          <table>
+            <tbody>
+              <tr><th>目标</th><td>https://juice-shop.example.com</td></tr>
+              <tr><th>范围</th><td>^juice-shop\.example\.com$</td></tr>
+              <tr><th>模型</th><td>本地 · Ollama (llama3.1)</td></tr>
+              <tr><th>阶段</th><td>侦察 + 利用</td></tr>
+              <tr><th>授权单</th><td>#AUTH-205（已确认 3 项声明）</td></tr>
+            </tbody>
+          </table>
+          <div class="map">对应后端：<code>instantiate_agent</code> + <code>run_agent_recursive(scope,...)</code>，启动后进入 <code>subscribe_events</code> 流式通道。</div>
+          <div class="btnrow" style="margin-top:14px">
+            <button class="btn primary" data-go="monitor" onclick="startScan()">▶ 启动评估</button>
+          </div>
+        </div>
+
+        <div class="btnrow" style="margin-top:18px">
+          <button class="btn ghost" id="prevBtn" disabled>← 上一步</button>
+          <button class="btn primary" id="nextBtn">下一步 →</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Monitor ===== -->
+    <section class="view" id="view-monitor">
+      <div class="phasebar">
+        <div class="ph done">① 初始化 init_all</div>
+        <div class="ph done">② 侦察 recon</div>
+        <div class="ph active">③ 利用 exploit（ADaPT 循环）</div>
+        <div class="ph">④ 验证停机</div>
+      </div>
+
+      <div class="grid g3">
+        <div class="card" style="grid-column:2 / span 2">
+          <h3>当前信心 / 策略</h3>
+          <div class="conf">
+            <div class="bar"><div class="mark" id="confMark" style="left:62%"></div></div>
+            <div class="val" id="confVal">0.62</div>
+          </div>
+          <div class="legend">
+            <span><i style="background:var(--band-fail)"></i>&lt;0.2 失败 FAIL</span>
+            <span><i style="background:var(--band-expand)"></i>0.2–0.6 扩张 EXPAND</span>
+            <span><i style="background:var(--band-refine)"></i>0.6–0.8 精炼 REFINE</span>
+            <span><i style="background:var(--band-validate)"></i>&gt;0.8 验证 VALIDATE</span>
+          </div>
+          <div class="map">对应后端：<code>core_agent.py</code> 每轮给 TaskNode 打信心分，据此在 fail/expand/refine/validate 间转移。</div>
+        </div>
+        <div class="card">
+          <h3>本次评估</h3>
+          <div class="muted">juice-shop.example.com</div>
+          <div style="margin-top:8px"><span class="pill warn">exploit 进行中</span></div>
+          <div class="btnrow" style="margin-top:12px">
+            <button class="btn danger" id="stopBtn">■ 停止</button>
+            <button class="btn" id="simBtn">⏵ 模拟下一条</button>
+          </div>
+          <div class="map">对应后端：停止 = 取消 <code>run_agent_recursive</code> 的迭代任务。</div>
+        </div>
+      </div>
+
+      <div class="grid g2">
+        <div class="card">
+          <h3>实时事件流（subscribe_events）</h3>
+          <p class="hint">后端通过流式通道推送每个子智能体的动作。非 CLI 用户靠这个"看见"AI 在做什么。</p>
+          <div class="feed" id="feed"></div>
+        </div>
+        <div class="card">
+          <h3>任务树（ADaPT 递归展开）</h3>
+          <p class="hint">信心分驱动树在运行时生长——这正是 LangGraph 式静态图做不到的。</p>
+          <div class="tree" id="tree">
+            <span class="node n-root">Root · 拿下目标</span><br/>
+            <span class="indent"></span><span class="node n-sup">Supervisor · 侦察</span><br/>
+            <span class="indent"></span><span class="indent"></span><span class="node n-leaf">WebappAnalyzer · 识别栈</span><br/>
+            <span class="indent"></span><span class="node n-sup">Supervisor · 利用</span><br/>
+            <span class="indent"></span><span class="indent"></span><span class="node n-leaf">Requester · 探测登录</span><br/>
+            <span class="indent"></span><span class="indent"></span><span class="node n-leaf">Python · 盲注脚本(REFINE)</span><br/>
+          </div>
+          <div class="map">对应后端：<code>get_agent_tasks</code> 轮询 + <code>subscribe_events</code> 推送，二者并存以兜底丢包。</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>子智能体活动</h3>
+        <div class="agentgrid" id="agents">
+          <div class="agent"><div class="nm">Requester</div><div class="st busy">● 执行中 · HTTP</div></div>
+          <div class="agent"><div class="nm">Python</div><div class="st busy">● REFINE · WASM</div></div>
+          <div class="agent"><div class="nm">Shell</div><div class="st idle">○ 空闲 · Docker</div></div>
+          <div class="agent"><div class="nm">WebappAnalyzer</div><div class="st done">✓ 完成</div></div>
+          <div class="agent"><div class="nm">Authenticator</div><div class="st idle">○ 空闲</div></div>
+          <div class="agent"><div class="nm">Router</div><div class="st idle">○ 空闲</div></div>
+          <div class="agent"><div class="nm">Memory</div><div class="st done">✓ RAG 已入库</div></div>
+        </div>
+        <div class="map">对应后端：<code>agents/factory.py</code> 的 <code>available_agents</code> 字典；每个角色的"授权工具 + 沙箱"即其能力边界。</div>
+      </div>
+    </section>
+
+    <!-- ===== Results ===== -->
+    <section class="view" id="view-results">
+      <div class="card">
+        <h3>侦察产出 · 威胁模型</h3>
+        <p class="hint">recon 阶段生成，自动写入 RAG，供 exploit 阶段复用（"78% 成绩"的隐藏功臣）。</p>
+        <table>
+          <thead><tr><th>资产 / 端点</th><th>技术栈</th><th>疑似风险</th></tr></thead>
+          <tbody>
+            <tr><td>/rest/user/login</td><td>Node/Express</td><td>认证绕过</td></tr>
+            <tr><td>/rest/products/search?q=</td><td>MySQL</td><td>SQL 注入（盲注）</td></tr>
+            <tr><td>/profile</td><td>JWT</td><td>JWT 弱密钥</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="grid g2">
+        <div class="card">
+          <h3>利用发现</h3>
+          <table>
+            <thead><tr><th>漏洞</th><th>置信度</th><th>证据</th></tr></thead>
+            <tbody>
+              <tr><td>盲注 SQLi（/products/search）</td><td><span class="pill green">0.91</span></td><td>FLAG 捕获</td></tr>
+              <tr><td>JWT 弱密钥 (alg:none)</td><td><span class="pill green">0.87</span></td><td>伪造 token</td></tr>
+              <tr><td>反射型 XSS</td><td><span class="pill warn">0.74</span></td><td>待复核</td></tr>
+            </tbody>
+          </table>
+          <div class="map">对应后端：ValidationGate 命中 flag 正则 → judge LLM 判定 → <code>stop</code>。</div>
+        </div>
+        <div class="card">
+          <h3>导出与重放</h3>
+          <p class="hint">roadmap 中的 save-replay 正是为"复盘一次评估"设计。</p>
+          <div class="btnrow">
+            <button class="btn">⬇ 导出报告 (Markdown)</button>
+            <button class="btn">⟳ 重放本次评估</button>
+          </div>
+          <div class="map">对应后端：复用 pgvector 上下文 + 记录的事件流重放。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Settings ===== -->
+    <section class="view" id="view-settings">
+      <div class="grid g2">
+        <div class="card">
+          <h3>模型与后端</h3>
+          <label>默认模型提供方</label>
+          <select><option>本地 · Ollama</option><option>云端 · OpenAI</option></select>
+          <label>后端地址</label>
+          <input value="http://localhost:8787/jsonrpc" />
+          <label>Docker / 沙箱</label>
+          <input value="docker-desktop · Kali 镜像已就绪" />
+        </div>
+        <div class="card">
+          <h3>验证策略 (ValidationGate)</h3>
+          <label>默认策略</label>
+          <select><option>flag 正则 + judge LLM</option><option>仅 flag</option></select>
+          <label>FLAG 正则（捕获即停）</label>
+          <textarea>FLAG\{[0-9a-f]{8,}\}</textarea>
+          <div class="map">对应后端：<code>config/validation.default.yaml</code> 的 <code>strategies</code>。</div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>预设工作流（roadmap：Preset workflows）</h3>
+        <p class="hint">README 明确标为 "In Progress" —— 这是给 Web 化预留的现成扩展缝。</p>
+        <div class="btnrow">
+          <span class="pill">OWASP Top10 快扫</span>
+          <span class="pill">API 专项</span>
+          <span class="pill">合规基线</span>
+          <span class="pill">+ 新建预设</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Backend mapping ===== -->
+    <section class="view" id="view-backend">
+      <div class="note"><b>这是你"二次开发后端"的蓝图：</b>Web 前端本身不跑任何渗透逻辑，它只是把用户操作翻译成对 Python 守护进程的调用。下面把每个 UI 区块映射到 <code>jsonrpc_server.py</code> 的方法与你需新增的桥接层。</div>
+      <div class="card">
+        <h3>UI 动作 → 后端方法 映射表</h3>
+        <table>
+          <thead><tr><th>前端动作</th><th>调用方法</th><th>需二次开发的点</th></tr></thead>
+          <tbody>
+            <tr><td>打开页面 / 看后端状态</td><td><code>init_all</code></td><td>用 HTTP 包一层 JSON-RPC over stdio；暴露 /health</td></tr>
+            <tr><td>新建评估·目标</td><td><code>embed_target(url)</code></td><td>范围正则做服务端校验，拒绝越界请求</td></tr>
+            <tr><td>新建评估·模型</td><td>LiteLLM 配置</td><td>模型列表接口 + Key 仅存本地</td></tr>
+            <tr><td>启动评估</td><td><code>instantiate_agent</code> + <code>run_agent_recursive</code></td><td>这步是异步的——需返回 sessionId</td></tr>
+            <tr><td>实时监控流</td><td><code>subscribe_events</code></td><td>stdio 推送 → 转 WebSocket / SSE 给浏览器</td></tr>
+            <tr><td>任务树 / 轮询</td><td><code>get_agent_tasks</code></td><td>双通道兜底：推送丢包时前端轮询</td></tr>
+            <tr><td>停止</td><td>取消递归任务</td><td>后端需支持 cancel(sessionId)</td></tr>
+            <tr><td>结果 / 导出</td><td>读 agent 上下文</td><td>pgvector / 事件流持久化 → 报告接口</td></tr>
+            <tr><td>授权审计</td><td>（新增）</td><td>CLI 没有——Web 必须自建审计表</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3>建议的二次开发后端结构</h3>
+        <div class="tree" style="font-size:13px">
+          <span class="node n-root">Web 前端 (本原型)</span><br/>
+          <span class="indent"></span><span class="node n-sup">Web 后端 (新增 · 如 FastAPI)</span><br/>
+          <span class="indent"></span><span class="indent"></span><span class="node n-leaf">/jsonrpc 代理 → spawn & 复用 Python 守护</span><br/>
+          <span class="indent"></span><span class="indent"></span><span class="node n-leaf">/events (SSE/WS) → 转发 subscribe_events</span><br/>
+          <span class="indent"></span><span class="indent"></span><span class="node n-leaf">/audit 授权与日志 (新增)</span><br/>
+          <span class="indent"></span><span class="indent"></span><span class="node n-leaf">/presets 预设工作流 (roadmap)</span><br/>
+          <span class="indent"></span><span class="node n-sup">Python 守护 (原 jsonrpc_server)</span><br/>
+          <span class="indent"></span><span class="indent"></span><span class="node n-leaf">ComponentManager → DeadEndAgent → CoreAgent</span><br/>
+        </div>
+        <p class="footnote">关键洞察：原架构已经是"进程分离"的（Deno CLI ↔ Python 守护）。你只需把 Deno 侧换成"浏览器 + 一个薄后端"，JSON-RPC 桥几乎可以原样复用——这正是作者分层设计的红利。</p>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+  // nav
+  const titles={dashboard:["总览 Dashboard","让不懂 CLI 的人也能安全使用 Deadend 自主渗透能力"],newscan:["新建评估","目标 · 授权 · 模型 · 策略 · 启动（护栏优先）"],monitor:["实时监控","看 AI 在做什么：事件流 / 任务树 / 子智能体"],results:["结果报告","威胁模型 · 发现 · 导出与重放"],settings:["设置","模型 · 验证策略 · 预设工作流"],backend:["后端映射","UI 动作 → jsonrpc_server 方法 → 二次开发点"]};
+  document.querySelectorAll('.nav button').forEach(b=>{
+    b.onclick=()=>{
+      const v=b.dataset.view;
+      document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');
+      document.querySelectorAll('.view').forEach(s=>s.classList.remove('active'));
+      document.getElementById('view-'+v).classList.add('active');
+      document.getElementById('viewTitle').textContent=titles[v][0];
+      document.getElementById('viewSub').textContent=titles[v][1];
+    };
+  });
+  document.querySelectorAll('[data-go]').forEach(b=>{
+    b.onclick=()=>document.querySelector('.nav button[data-view="'+b.dataset.go+'"]').click();
+  });
+
+  // wizard
+  let step=1;
+  const steps=document.querySelectorAll('.steps .st');
+  const wsteps=document.querySelectorAll('.wstep');
+  const prevBtn=document.getElementById('prevBtn'),nextBtn=document.getElementById('nextBtn');
+  function renderStep(){
+    steps.forEach(s=>{const n=+s.dataset.step;s.classList.toggle('active',n===step);s.classList.toggle('done',n<step);});
+    wsteps.forEach(w=>w.style.display=(+w.dataset.step===step)?'block':'none');
+    prevBtn.disabled=step===1;
+    nextBtn.disabled=step===4;
+    nextBtn.textContent=step===3?'下一步 →':'下一步 →';
+    if(step===4) nextBtn.style.display='none'; else nextBtn.style.display='';
+  }
+  nextBtn.onclick=()=>{ if(step<4){step++;renderStep();} };
+  prevBtn.onclick=()=>{ if(step>1){step--;renderStep();} };
+  renderStep();
+
+  // monitor simulation
+  const feed=document.getElementById('feed');
+  const confMark=document.getElementById('confMark'),confVal=document.getElementById('confVal');
+  const evs=[
+    ['t','[recon] WebappAnalyzer → 识别 Express + MySQL'],
+    ['ag','[exploit] Supervisor 展开子任务：探测 /products/search'],
+    ['ok','[Requester] GET /products/search?q=1  → 200，响应延迟异常'],
+    ['wn','[Python] REFINE：盲注脚本 v1，基于响应时长推断 → 信心 0.34'],
+    ['ag','[Python] EXPAND：拆分 3 个子查询并行验证'],
+    ['ok','[Python] REFINE：确认布尔盲注，提取库名 → 信心 0.72'],
+    ['ok','[Python] VALIDATE：FLAG{9f3c...} 命中正则 → judge LLM 确认'],
+    ['er','[Shell] 越界请求被 sandbox 拒绝（超出范围正则）'],
+  ];
+  let ei=0,conf=0.62;
+  function pushEv(){
+    if(ei>=evs.length){ei=0;}
+    const [c,t]=evs[ei++];
+    const time=new Date().toLocaleTimeString('en-GB');
+    const ln=document.createElement('div');ln.className='ln';
+    ln.innerHTML='<span class="t">'+time+'</span> <span class="'+c+'">'+t+'</span>';
+    feed.appendChild(ln);feed.scrollTop=feed.scrollHeight;
+    // nudge confidence
+    conf=Math.min(0.95,Math.max(0.1,conf+(Math.random()*0.18-0.06)));
+    confVal.textContent=conf.toFixed(2);
+    confMark.style.left=(conf*100)+'%';
+  }
+  // seed
+  for(let i=0;i<3;i++) pushEv();
+  document.getElementById('simBtn').onclick=pushEv;
+  const simTimer=setInterval(pushEv,2600);
+  document.getElementById('stopBtn').onclick=()=>{clearInterval(simTimer);alert('已向后端发送停止指令（cancel session）。');};
+
+  function startScan(){
+    clearInterval(simTimer);
+    pushEv();
+  }
+</script>
+</body>
+</html>
