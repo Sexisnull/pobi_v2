@@ -4,11 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Pobi v2 · AI 渗透测试平台</title>
-  <link rel="stylesheet" href="/static/css/styles.css" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260812a" />
 </head>
 <body>
   <!-- 登录视图 -->
-  <div id="login-view" class="login-view hidden" data-od-id="login-view">
+  <div id="login-view" class="login-view" data-od-id="login-view">
     <div class="login-card" data-od-id="login-card">
       <div class="brand" data-od-id="brand">
         <span class="brand-mark">P</span>
@@ -19,13 +19,16 @@
       </div>
       <div class="tabs">
         <button class="tab active" data-tab="login">登录</button>
+        <!-- 暂不开放注册：注册 tab 已隐藏
         <button class="tab" data-tab="register">注册</button>
+        -->
       </div>
       <form id="login-form" class="auth-form">
         <label>邮箱<input type="email" name="email" required placeholder="you@corp.com" /></label>
         <label>密码<input type="password" name="password" required placeholder="••••••••" /></label>
         <button type="submit" class="btn primary" data-od-id="cta-login">登录</button>
       </form>
+      <!-- 暂不开放注册：注册表单已隐藏
       <form id="register-form" class="auth-form hidden">
         <label>邮箱<input type="email" name="email" required placeholder="you@corp.com" /></label>
         <label>密码<input type="password" name="password" required minlength="8" placeholder="至少 8 位" /></label>
@@ -33,6 +36,7 @@
         <label>租户标识 (slug)<input type="text" name="tenant_slug" required placeholder="acme" /></label>
         <button type="submit" class="btn primary" data-od-id="cta-register">创建账户</button>
       </form>
+      -->
       <p id="auth-error" class="form-error"></p>
     </div>
   </div>
@@ -42,7 +46,7 @@
     <aside class="sidebar" data-od-id="sidebar">
       <div class="sidebar-brand"><span class="brand-mark">P</span> Pobi v2</div>
       <nav data-od-id="sidebar-nav">
-        <button class="nav-item active" data-view="tasks">任务</button>
+        <button class="nav-item active" data-view="tasks">任务看板</button>
         <button class="nav-item" data-view="targets">授权目标</button>
         <button class="nav-item" data-view="approvals">审批</button>
         <button class="nav-item" data-view="audit">审计</button>
@@ -54,13 +58,106 @@
     </aside>
 
     <main class="content">
-      <!-- 任务视图 -->
+      <!-- 任务看板 -->
       <section id="view-tasks" class="view" data-od-id="view-tasks">
-        <header class="view-head">
-          <h2>渗透任务</h2>
-          <button class="btn primary" data-action="new-task" data-od-id="cta-new-task">+ 新建任务</button>
+        <header class="dashboard-header">
+          <div>
+            <h2>任务看板</h2>
+            <p class="dashboard-subtitle">实时监控所有授权评估与 AI 代理活动</p>
+          </div>
+          <div class="header-actions">
+            <div id="worker-status" class="worker-pill" data-state="unknown" title="任务消费 Worker 状态">
+              <span class="status-dot"></span>
+              <span class="worker-text">检测中…</span>
+            </div>
+            <button id="reconcile-btn" class="btn ghost small" data-action="reconcile" title="手动对账：将 PG 中已终止/丢弃/超时的幽灵任务标记为终态">对账</button>
+            <button class="btn primary" data-action="new-task" data-od-id="cta-new-task">
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+              新建任务
+            </button>
+          </div>
         </header>
-        <div id="task-list" class="card-grid"></div>
+
+        <div class="stat-cards">
+          <div class="stat-card" data-stat="running">
+            <div class="stat-glow"></div>
+            <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div>
+            <div class="stat-number" id="stat-running">0</div>
+            <div class="stat-label">运行中</div>
+            <div class="stat-hint">正在执行渗透任务</div>
+          </div>
+          <div class="stat-card" data-stat="queued">
+            <div class="stat-glow"></div>
+            <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></div>
+            <div class="stat-number" id="stat-queued">0</div>
+            <div class="stat-label">排队中</div>
+            <div class="stat-hint">等待队列资源就绪</div>
+          </div>
+          <div class="stat-card" data-stat="pending">
+            <div class="stat-glow"></div>
+            <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg></div>
+            <div class="stat-number" id="stat-pending">0</div>
+            <div class="stat-label">待审批</div>
+            <div class="stat-hint">高危操作待人工审批</div>
+          </div>
+          <div class="stat-card" data-stat="completed">
+            <div class="stat-glow"></div>
+            <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg></div>
+            <div class="stat-number" id="stat-completed">0</div>
+            <div class="stat-label">已完成</div>
+            <div class="stat-hint">报告已生成可查看</div>
+          </div>
+        </div>
+
+        <div class="dashboard-grid">
+          <section class="dashboard-section wide">
+            <div class="section-head">
+              <div class="section-title">
+                <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                <h3>活跃任务</h3>
+              </div>
+              <span class="section-count" id="active-count">0</span>
+            </div>
+            <div id="active-task-list" class="active-task-grid">
+              <div class="empty">暂无活跃任务</div>
+            </div>
+          </section>
+
+          <section class="dashboard-section">
+            <div class="section-head">
+              <div class="section-title">
+                <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M12 20V10M12 20L4 20V4h16"/></svg>
+                <h3>最近完成</h3>
+              </div>
+            </div>
+            <div id="recent-completed-list" class="recent-list"></div>
+          </section>
+        </div>
+
+        <section class="dashboard-section">
+          <div class="section-head">
+            <div class="section-title">
+              <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+              <h3>历史任务</h3>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table id="history-task-table">
+              <thead>
+                <tr>
+                  <th class="col-status">状态</th>
+                  <th>任务名称</th>
+                  <th>目标</th>
+                  <th class="col-mode">执行约束</th>
+                  <th class="col-time">创建时间</th>
+                  <th class="col-action"></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="history-empty" class="empty hidden">暂无归档任务</div>
+        </section>
       </section>
 
       <!-- 目标视图 -->
@@ -104,8 +201,13 @@
     <div id="drawer-body" class="drawer"></div>
   </div>
 
+  <!-- 渗透任务实时监控控制台（全屏三栏） -->
+  <div id="console-root" class="console-root hidden">
+    <div id="console-body" class="console"></div>
+  </div>
+
   <div id="toast" class="toast hidden"></div>
 
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v=20260817"></script>
 </body>
 </html>

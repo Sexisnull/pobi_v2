@@ -13,19 +13,26 @@ import asyncio
 import pytest
 
 from pobi_v2.engine import scan_workflow as sw
+from pobi_v2.llm.config import get_model_spec
 
 
-def test_build_model_spec_parses_scheme_and_name():
-    spec = sw._build_model_spec("openai/gpt-4o")
+def test_model_spec_parses_scheme_and_name():
+    # ScanWorkflow 的模型解析已统一收敛到 pobi_v2.llm.get_model_spec
+    spec = get_model_spec("openai/gpt-4o")
     assert spec.provider == "openai"
     assert spec.model_name == "gpt-4o"
 
 
-def test_build_model_spec_defaults_when_no_scheme():
-    spec = sw._build_model_spec("claude-3-5-sonnet")
-    # 无 scheme 段时回退为 openai（与原 pobi_agent 行为一致）
-    assert spec.provider == "openai"
+def test_model_spec_defaults_when_no_scheme():
+    # 无 scheme 段（纯模型名简写）时按模型名启发式推断 provider：
+    # claude-* -> anthropic，使 API key/base_url 从 ANTHROPIC_* 读取（与原 pobi_agent 真实行为一致）
+    spec = get_model_spec("claude-3-5-sonnet")
+    assert spec.provider == "anthropic"
     assert spec.model_name == "claude-3-5-sonnet"
+
+    spec2 = get_model_spec("gpt-4o")
+    assert spec2.provider == "openai"
+    assert spec2.model_name == "gpt-4o"
 
 
 def test_extract_root_domains():
