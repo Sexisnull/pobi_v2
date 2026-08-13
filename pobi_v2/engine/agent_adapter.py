@@ -10,6 +10,7 @@ from pobi_agent.hooks import set_event_hooks
 
 from pobi_v2.core.config import settings
 from pobi_v2.engine.event_bus import PobiV2EventHooks
+from pobi_v2.llm import get_model_spec, to_litellm_model
 
 
 def install_event_hooks() -> None:
@@ -20,16 +21,19 @@ def install_event_hooks() -> None:
 def build_core_agent(name: str = "pobi-v2-agent", tools: list | None = None) -> CoreAgent:
     """构造一个配置好的 CoreAgent 实例。
 
+    模型与凭证统一经 pobi_v2.llm 入口解析，消除入口分叉。
+
     Args:
         name: Agent 名称（用于事件/追踪）。
         tools: 工具列表（M2 从 pobi_agent.tools 注入并加护栏）。
     """
+    spec = get_model_spec()
     return CoreAgent(
-        model=settings.llm_model,
+        model=to_litellm_model(spec),
         instructions="你是一名严谨的 Web 安全渗透测试助手，遵循授权范围，禁止猜测。",
         tools=tools or [],
-        api_key=settings.llm_api_key,
-        api_base=settings.llm_api_base,
+        api_key=spec.api_key,
+        api_base=spec.base_url,
         rate_limit_rpm=settings.llm_rate_limit_rpm,
         name=name,
     )
@@ -48,15 +52,14 @@ def build_pobi_agent(name: str = "pobi-v2-agent", tools: list | None = None, app
     try:
         from pobi_agent.pobi_agent import PobiAgent  # type: ignore
     except Exception:
-        agent = build_core_agent(name=name, tools=tools)
-        return agent
+        return build_core_agent(name=name, tools=tools)
 
+    # 统一入口解析出内核 ModelSpec（含 api_key/base_url），直接喂 PobiAgent。
+    spec = get_model_spec()
     agent = PobiAgent(
-        model=settings.llm_model,
+        model=spec,
         instructions="你是一名严谨的 Web 安全渗透测试助手，遵循授权范围，禁止猜测。",
         tools=tools or [],
-        api_key=settings.llm_api_key,
-        api_base=settings.llm_api_base,
         name=name,
     )
     if approval_callback is not None:

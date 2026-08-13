@@ -11,19 +11,19 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
-from pobi_v2.core.deps import get_current_user
+from pobi_v2.core.deps import get_current_user_from_query
 from pobi_v2.db.session import AsyncSessionLocal
 from pobi_v2.db.models import Task, User
 from pobi_v2.engine.event_bus import bus
 
-router = APIRouter(tags=["stream"], dependencies=[Depends(get_current_user)])
+router = APIRouter(tags=["stream"], dependencies=[Depends(get_current_user_from_query)])
 
 
 @router.get("/api/v1/tasks/{task_id}/stream")
 async def task_stream(
     task_id: str,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_from_query),
 ):
     async with AsyncSessionLocal() as session:
         task = await session.get(Task, task_id)

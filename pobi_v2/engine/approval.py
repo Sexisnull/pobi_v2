@@ -12,9 +12,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
+from pobi_v2.core.config import settings
 from pobi_v2.db.models import ApprovalRequest, ApprovalStatus
 
 _DEFAULT_HIGH_RISK_TOOLS = {
@@ -46,8 +48,10 @@ async def create_approval_request(
     tool_name: str,
     tool_args: dict,
     agent_name: str | None = None,
+    request_id: UUID | None = None,
 ) -> ApprovalRequest:
     req = ApprovalRequest(
+        id=request_id or uuid4(),
         task_id=task_id,
         tenant_id=tenant_id,
         tool_name=tool_name,
@@ -111,17 +115,77 @@ async def wait_for_decision(
     return "reject"
 
 
-def make_approval_callback(session_factory, request_id: UUID, timeout_seconds: float = 300.0):
+def make_approval_callback(
+    session_factory,
+    request_id: UUID | None = None,
+    timeout_seconds: float = 300.0,
+    tenant_id: UUID | None = None,
+    task_id: UUID | None = None,
+    auto_approve: bool | None = None,
+):
     """构造兼容 ``PobiAgent.set_approval_callback`` 的异步回调。
 
-    pobi_agent 在需要审批时调用该回调，回调阻塞等待 DB 决策并返回
-    "approve" / "reject" / "edit:<new_args>"。
+    pobi_agent 在需要审批时调用该回调。回调会**真实创建**审批请求
+    （每次调用生成唯一 request_id，避免同任务多次高危调用主键冲突），
+    随后：
+    - 若 ``auto_approve``（优先）或 ``settings.auto_approve`` 为真（授权靶场自动化，
+      或任务 mode=yolo），直接批准并返回 "approve"；
+    - 否则阻塞等待 DB 决策，超时返回 "reject"（fail-closed）。
     """
 
     async def _callback(*args, **kwargs) -> str:
-        decision = await wait_for_decision(
-            session_factory, request_id, timeout_seconds=timeout_seconds
+        # 任务级或全局级放行策略：yolo 模式 / 授权靶场自动化时免人工审批
+        effective_auto_approve = (
+            auto_approve if auto_approve is not None else settings.auto_approve
         )
-        return decision
+
+        # 解析被拦截的工具名 / 参数（pobi_agent 以关键字或位置参数传入）
+        tool_name = kwargs.get("tool_name") or (args[0] if args else None)
+        tool_args = kwargs.get("tool_args") or {}
+        if isinstance(tool_args, str):
+            try:
+                tool_args = json.loads(tool_args)
+            except (ValueError, TypeError):
+                tool_args = {"raw": tool_args}
+
+        # 每次审批回调必须生成唯一 request_id（避免同一任务多次高危调用时
+        # 主键冲突，并防止 wait_for_decision 误读到上一次已决审批导致放行/误拒）。
+        # 优先采用 pydantic-ai 传入的唯一工具调用标识，否则回落到 uuid4。
+        call_id = kwargs.get("tool_call_id") or uuid4()
+        if not isinstance(call_id, UUID):
+            try:
+                call_id = UUID(str(call_id))
+            except (ValueError, TypeError):
+                call_id = uuid4()
+
+        # 真实创建审批请求（修复断链 + ID 契约对齐）
+        if tenant_id is not None:
+            try:
+                async with session_factory() as session:
+                    await create_approval_request(
+                        session,
+                        task_id=task_id or call_id,
+                        tenant_id=tenant_id,
+                        tool_name=str(tool_name or "unknown"),
+                        tool_args=tool_args if isinstance(tool_args, dict) else {"raw": tool_args},
+                        request_id=call_id,
+                    )
+                    await session.commit()
+            except Exception:
+                # 创建失败不应阻断 agent；仍走 fail-closed 等待逻辑
+                pass
+
+        if effective_auto_approve:
+            try:
+                async with session_factory() as session:
+                    await decide_request(session, call_id, "approve", reason="授权靶场自动批准")
+                    await session.commit()
+            except Exception:
+                pass
+            return "approve"
+
+        return await wait_for_decision(
+            session_factory, call_id, timeout_seconds=timeout_seconds
+        )
 
     return _callback

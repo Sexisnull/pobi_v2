@@ -27,7 +27,9 @@
 """
 from __future__ import annotations
 
+import asyncio
 import os
+import logging
 import tempfile
 from pathlib import Path
 from typing import Any, Optional
@@ -45,62 +47,39 @@ from pobi_agent.pobi_agent import DeadEndAgent
 from pobi_agent.rag.sqlite_connector import SqliteRagConnector
 from pobi_agent.sandbox.sandbox_manager import SandboxManager
 from pobi_agent.scope import DEFAULT_PATH as SCOPE_YAML_PATH
+from pobi_agent.agents.components.validation_strategies import (
+    DEADEND_VALIDATION_CONFIG_PATH,
+)
 
 from pobi_v2.core.config import settings
 from pobi_v2.db.models import Task, Target
 from pobi_v2.engine.approval import make_approval_callback
+from pobi_v2.engine.event_bus import bus, MemoryEventBusBackend, persist_event_worker
+from pobi_v2.llm import get_model_spec, to_litellm_model
 
 
-# provider -> (api_key 环境变量, base_url 环境变量)
-_PROVIDER_ENV: dict[str, tuple[Optional[str], Optional[str]]] = {
-    "anthropic": ("ANTHROPIC_API_KEY", None),
-    "openai": ("OPENAI_API_KEY", None),
-    "open_router": ("OPEN_ROUTER_API_KEY", None),
-    "openrouter": ("OPEN_ROUTER_API_KEY", None),
-    "gemini": ("GEMINI_API_KEY", None),
-    "google": ("GEMINI_API_KEY", None),
-    "requesty": ("REQUESTY_API_KEY", "REQUESTY_BASE_URL"),
-    "local": ("LOCAL_API_KEY", "LOCAL_BASE_URL"),
-}
+# 内存事件总线下，worker 进程需自行启动持久化协程；Redis 由 FastAPI 统一消费。
+_local_persist_started = False
 
 
-# ---------------------------------------------------------------------------
-# 多 LLM：从 pobi_v2 配置解析 ``scheme/model``，复用原 pobi_agent 的 ModelSpec
-# ---------------------------------------------------------------------------
-def _build_model_spec(model_str: Optional[str]) -> ModelSpec:
-    """复用原 ``ModelSpec(provider, model_name, api_key, base_url)`` 构造多 LLM。
-
-    ``model_str`` 形如 ``anthropic/claude-sonnet-4`` / ``openai/gpt-4o`` /
-    ``openrouter/...`` / ``gemini/...`` / ``local/<alias>``。provider 段映射到
-    对应的 API Key / Base URL 环境变量（与原 pobi 的 Config 行为一致）。
-    """
-    raw = (model_str or settings.model or "").strip()
-    if "/" in raw:
-        provider, model_name = raw.split("/", 1)
-    else:
-        provider, model_name = "anthropic", raw or "claude-sonnet-4"
-
-    provider = provider.lower()
-    key_env, url_env = _PROVIDER_ENV.get(provider, (None, None))
-    api_key = os.environ.get(key_env) if key_env else None
-    base_url = os.environ.get(url_env) if url_env else None
-
-    return ModelSpec(
-        provider=provider,
-        model_name=model_name,
-        api_key=api_key,
-        base_url=base_url,
-    )
+def _ensure_local_persist_worker() -> None:
+    global _local_persist_started
+    if _local_persist_started:
+        return
+    if isinstance(bus, MemoryEventBusBackend):
+        asyncio.create_task(persist_event_worker())
+    _local_persist_started = True
 
 
 # ---------------------------------------------------------------------------
-# 授权范围：把 pobi_v2 的 Target 写入全局 scope.yaml，复用原 ScopePolicy 闸门
+# 授权范围：把 pobi_v2 的 Target 写入 scope.{task_id}.yaml，复用原 ScopePolicy 闸门
 # ---------------------------------------------------------------------------
-def _write_scope_file(target: Target) -> Path:
-    """把 pobi_v2 的 Target 范围写入原 pobi 的全局 scope.yaml。
+def _write_scope_file(target: Target, task_id: UUID) -> Path:
+    """把 pobi_v2 的 Target 范围写入按任务隔离的 scope.{task_id}.yaml。
 
     原 pobi 的授权闸门在 ``pw_requester`` 网络出口处通过 ``check_scope`` 读取
-    该文件。写入后，原 scope 逻辑自动对本次任务生效（不重写 scope 代码）。
+    该文件。多任务并发时，每个任务写独立文件（不再覆盖全局 scope.yaml），
+    从而消除全局单例被并发覆盖导致的越权扫描。文件缺失时内核回退为安全禁用策略。
     """
     import tldextract
 
@@ -115,7 +94,15 @@ def _write_scope_file(target: Target) -> Path:
         root_domains.append(_root_host(extra))
     root_domains = [d for d in root_domains if d]
 
-    out_of_scope = list(target.out_of_scope or [])
+    # 原 pobi 的 ScopePolicy 仅支持 host/IP 级排除：它会对 out_of_scope 条目做
+    # _normalize_host，把带 path 的 URL（如 http://host/path）归一化为裸 host 并
+    # 加入 deny 列表，从而把整台主机（含 in-scope 的根路径）误排除。因此这里只
+    # 保留纯 host/IP 级条目，path 级排除交由 LLM objective 约束，避免误伤。
+    _out_raw = list(target.out_of_scope or [])
+    out_of_scope = [
+        o for o in _out_raw
+        if o and "/" not in o.split("://", 1)[-1]
+    ]
 
     scope_doc: dict[str, Any] = {
         "enabled": bool(target.enabled and (target.in_scope or target.url)),
@@ -127,12 +114,51 @@ def _write_scope_file(target: Target) -> Path:
         "max_bytes": getattr(settings, "scope_max_bytes", 5_000_000),
     }
 
-    SCOPE_YAML_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SCOPE_YAML_PATH.write_text(
+    scope_path = SCOPE_YAML_PATH.parent / f"scope.{task_id}.yaml"
+    scope_path.parent.mkdir(parents=True, exist_ok=True)
+    scope_path.write_text(
         yaml.safe_dump(scope_doc, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
     )
-    return SCOPE_YAML_PATH
+    return scope_path
+
+
+# ---------------------------------------------------------------------------
+# 验证策略：把 Target 的 Validation Configuration 写入 validation.{task_id}.yaml
+# ---------------------------------------------------------------------------
+def _write_validation_config(target: Target, task_id: UUID) -> Path:
+    """把授权目标的验证策略写入按任务隔离的 validation.{task_id}.yaml。
+
+    原 pobi 的 ValidationGate(Flag+Judge) 在运行时通过 ``load_validation_config``
+    读取该文件，从而决定「怎样才算找到漏洞」（flag 正则、judge LLM、信心阈值）。
+    多任务并发时每个任务写独立文件，消除全局 validation.yaml 被并发覆盖的缺陷。
+    """
+    strategies: list[dict[str, Any]] = []
+    if target.flag_regex:
+        strategies.append({"name": "flag", "pattern": target.flag_regex})
+    # judge 始终启用（LLM  судья 兜底验证），与 deadend-cli 默认一致
+    judge_block: dict[str, Any] = {"name": "judge"}
+    if target.validation_format:
+        judge_block["validation_format"] = target.validation_format
+    strategies.append(judge_block)
+
+    validation_doc: dict[str, Any] = {
+        "validation_format": target.validation_format or "FLAG{}",
+        "validation_type": "flag" if target.flag_regex else "security assessment",
+        "strategies": strategies,
+        # 信心阈值带与任务树深度作为注释级元信息写入，供人工审阅；
+        # 阈值核心调度走 Task.agent 参数，深度约束走 max_turns 上限。
+        "_confidence_threshold": target.confidence_threshold,
+        "_max_tree_depth": target.max_tree_depth,
+    }
+
+    validation_path = DEADEND_VALIDATION_CONFIG_PATH.parent / f"validation.{task_id}.yaml"
+    validation_path.parent.mkdir(parents=True, exist_ok=True)
+    validation_path.write_text(
+        yaml.safe_dump(validation_doc, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return validation_path
 
 
 # ---------------------------------------------------------------------------
@@ -188,26 +214,63 @@ def _build_available_agents(
 # ---------------------------------------------------------------------------
 def _prepare_env_dependencies(
     sandbox_manager: SandboxManager,
-    session_id: str,
-) -> tuple[Any, EmbedderClient, SqliteRagConnector]:
-    """准备 ``DeadEndAgent.prepare_dependencies`` 所需的环境依赖。
+) -> tuple[Any, EmbedderClient]:
+    """准备 ``DeadEndAgent.prepare_dependencies`` 所需的运行期环境依赖。
 
     与原 pobi 一致：
-    - ``embedder_client``：占位 ``EmbedderClient``（检索为可选能力）。
-    - ``rag_connector``：``SqliteRagConnector``（按 session 隔离的本地向量库）。
-    - ``sandbox``：真实 Docker 沙箱（每个任务独立容器）。
-    """
-    rag_manager = init_rag_session_manager()
-    rag_connector = rag_manager.create_session(session_id=session_id)
+    - ``embedder_client``：``EmbedderClient``（向量检索依赖，外部 LLM API）。
+    - ``sandbox``：真实 Docker 沙箱（每个任务独立容器，核心必需）。
 
+    RAG 连接器（``SqliteRagConnector``）此处不准备：它按 ``(agent_id,
+    session_id, target)`` 隔离，需要 ``DeadEndAgent`` 实例化后才能拿到
+    ``agent.agent_id``，故在 ``run_deadend_agent`` 内、agent 实例化之后获取。
+    """
     try:
-        sandbox = sandbox_manager.create_sandbox()
+        sandbox_id = sandbox_manager.create_sandbox()
+        sandbox = sandbox_manager.get_sandbox(sandbox_id)
+        if sandbox is None:
+            raise RuntimeError(f"沙箱创建后无法获取实例：{sandbox_id}")
     except Exception as exc:  # 沙箱是核心依赖，缺失时明确报错
         raise RuntimeError(
             "Docker 沙箱不可用，无法运行原 pobi DeadEndAgent（沙箱执行验证是核心能力）"
         ) from exc
 
-    return sandbox, EmbedderClient(), rag_connector
+    # EmbedderClient 依赖外部 LLM API（生成 embedding），初始化失败仅告警降级，
+    # 不阻断主流程（检索为增强能力）。凭证统一走 pobi_v2.llm 解析入口，
+    # 保证 POBI_V2_LLM_API_KEY 与模型路径行为一致。
+    embedder_client = None
+    try:
+        _embed_spec = get_model_spec()
+        embedder_client = EmbedderClient(
+            model_name=to_litellm_model(_embed_spec),
+            api_key=_embed_spec.api_key,
+            base_url=_embed_spec.base_url,
+            vector_dim=1024,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("EmbedderClient 初始化失败，降级为 None：%s", exc)
+        embedder_client = None
+
+    return sandbox, embedder_client
+
+
+async def _prepare_rag_connector(
+    agent_id: UUID,
+    session_id: str,
+    target: str,
+) -> SqliteRagConnector:
+    """获取本任务的 RAG 连接器（按 agent/session 隔离的本地 SQLite 向量库）。
+
+    RAG 默认开启、零外部依赖（SQLite + numpy 本地检索），不降级为 None：
+    初始化失败即明确报错，避免静默丢失检索能力。
+    """
+    rag_manager = init_rag_session_manager()
+    connector = await rag_manager.get_connector(
+        agent_id=agent_id,
+        embedding_session_id=session_id,
+        target=target,
+    )
+    return connector
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +282,7 @@ async def run_deadend_agent(
     target: Target,
     task_id: UUID,
     max_turns: int = 50,
+    auto_approve: bool = False,
 ) -> dict:
     """构建并驱动原 ``DeadEndAgent`` 完成一次完整的自主渗透测试。
 
@@ -226,11 +290,15 @@ async def run_deadend_agent(
     （``summary`` / ``confidence`` / ``structured_report`` / ``findings``），
     以便 ``executor.py`` 无需修改落库逻辑。
     """
-    # 1) 多 LLM 模型规格（复用原 ModelSpec）
-    model_spec = _build_model_spec(task.model or settings.model)
+    # 1) 多 LLM 模型规格（统一入口产出内核 ModelSpec）
+    model_spec = get_model_spec(task.model or settings.model)
 
-    # 2) 授权范围（写入全局 scope.yaml，复用原 ScopePolicy 闸门）
-    _write_scope_file(target)
+    # 2) 授权范围（写入 scope.{task_id}.yaml，按任务隔离，复用原 ScopePolicy 闸门）
+    # 该文件由内核 pw_requester 按 session_id 命名约定读取，无需返回值。
+    _write_scope_file(target, task_id)
+
+    # 2.5) 验证策略（写入 validation.{task_id}.yaml，按任务隔离，复用原 ValidationGate(Flag+Judge)）
+    validation_path = _write_validation_config(target, task_id)
 
     # 3) 沙箱管理器 + 能力集合
     sandbox_manager = sandbox_setup()
@@ -238,8 +306,13 @@ async def run_deadend_agent(
 
     # 4) 全局事件钩子（PobiV2EventHooks 已在应用启动时按 session_id==task_id 注册）
     hooks = get_event_hooks()
-    # 5) 审批回调（接入 pobi_v2 高危工具审批，fail-closed）
-    approval_cb = make_approval_callback(_async_session_factory(), request_id=task_id)
+    # 5) 审批回调（接入 pobi_v2 高危工具审批；yolo 模式免人工审批）
+    approval_cb = make_approval_callback(
+        _async_session_factory(),
+        tenant_id=task.tenant_id,
+        task_id=task_id,
+        auto_approve=auto_approve,
+    )
 
     # 6) 实例化原 DeadEndAgent（完整多智能体协作系统）
     agent = DeadEndAgent(
@@ -248,14 +321,19 @@ async def run_deadend_agent(
         available_agents=available_agents,
         agents_storage_root=str(_agents_storage_root()),
         local_agent_id=None,  # 让 Config 自动分配/创建 local_agent_id
+        validation_config_path=str(validation_path),
     )
 
     # 7) 设置目标（原 DeadEndAgent 内部通过 init_webtarget_indexer 绑定 target）
     agent.init_webtarget_indexer(target.url)
 
     # 8) 注入环境依赖（Sandbox / Embedder / RAG）—— 沙箱为必需
-    sandbox, embedder_client, rag_connector = _prepare_env_dependencies(
-        sandbox_manager, session_id=str(task_id)
+    # RAG 连接器需在 agent 实例化后获取（需 agent.agent_id），默认开启不降级。
+    sandbox, embedder_client = _prepare_env_dependencies(sandbox_manager)
+    rag_connector = await _prepare_rag_connector(
+        agent_id=agent.agent_id,
+        session_id=str(task_id),
+        target=target.url,
     )
     agent.prepare_dependencies(
         embedder_client=embedder_client,
@@ -268,25 +346,41 @@ async def run_deadend_agent(
     agent.set_approval_callback(approval_cb)
 
     # 10) 逐阶段驱动（威胁建模 -> 利用 -> 报告）
+    _ensure_local_persist_worker()
     objective = task.objective or f"Perform a security assessment of {target.url}"
 
+    hooks.emit_phase_changed(task_id, "initialization", detail="任务启动，准备环境")
+
     # threat_model 返回 (task_node, reporter_output, validation_token)
+    hooks.emit_phase_changed(task_id, "reconnaissance", detail="开始威胁建模与信息收集")
     _, recon_report, _ = await agent.threat_model(task=objective)
+    recon_report = recon_report or ""
 
     # run_exploitation 返回 (plan, validation_token)
     # 内部会：通过 SupervisorAgent 工具委派 6 个子 Agent 协作；
     # 在 Docker 沙箱中执行 shell / python 验证 payload；
     # 通过 ADaPT 递归分解任务；通过 ValidationGate(Flag+Judge) 验证目标达成。
+    hooks.emit_phase_changed(task_id, "exploitation", detail="开始利用与验证")
     plan, validation_token = await agent.run_exploitation(
         threat_model=str(recon_report),
         task=objective,
     )
+
+    hooks.emit_phase_changed(task_id, "reporting", detail="生成最终报告")
+
+    # 最终安全评估报告正文：利用阶段达成目标后由 ReporterAgent 写入
+    # self.stop_result.reporter_output（对齐 deadend-cli CLI 的 report 产物）。
+    report = ""
+    stop_result = getattr(agent, "stop_result", None)
+    if stop_result is not None and getattr(stop_result, "reporter_output", None):
+        report = stop_result.reporter_output
 
     # 11) 归一化为 executor 兼容的产出
     return _normalize_outcome(
         recon_report=recon_report,
         plan=plan,
         validation_token=validation_token,
+        report=report,
     )
 
 
@@ -295,8 +389,9 @@ def _normalize_outcome(
     recon_report: Any,
     plan: Any,
     validation_token: str,
+    report: str | None = None,
 ) -> dict:
-    """把 DeadEndAgent 的产出（recon_report / plan / validation_token）归一化。"""
+    """把 DeadEndAgent 的产出（recon_report / plan / validation_token / report）归一化。"""
     summary_parts: list[str] = []
     structured_report: dict[str, Any] = {}
     findings: list[dict] = []
@@ -307,6 +402,10 @@ def _normalize_outcome(
         structured_report.update(recon_report)
     elif isinstance(recon_report, str):
         summary_parts.append(recon_report)
+
+    if report:
+        summary_parts.append(report)
+        structured_report["report"] = report
 
     if plan is not None:
         if hasattr(plan, "confidence_score"):

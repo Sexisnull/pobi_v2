@@ -109,6 +109,13 @@ class Target(Base):
     # 授权范围（白名单），对应原 pobi 的 scope 闸门
     in_scope: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     out_of_scope: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    # 验证策略（Validation Configuration）：决定「怎样才算找到漏洞」
+    # flag 正则（捕获即停）、验证格式（如 FLAG{}）、信心阈值带、任务树深度。
+    # 运行任务前写入全局 validation.yaml，复用原 ValidationGate(Flag+Judge) 逻辑。
+    flag_regex: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    validation_format: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    confidence_threshold: Mapped[float] = mapped_column(Float, default=0.6, nullable=False)
+    max_tree_depth: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -142,6 +149,8 @@ class Task(Base):
     # 模型与经济参数（M2 透传给 CoreAgent）
     model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     max_turns: Mapped[int] = mapped_column(default=50)
+    # 自主策略模式：hacker=谨慎需人工审批（默认），yolo=自动批准高危工具调用
+    agent_mode: Mapped[str] = mapped_column(String(32), default="hacker", nullable=False)
     # 结果（M3 结构化落库，result 存最终摘要/报告引用）
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

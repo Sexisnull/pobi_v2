@@ -9,13 +9,22 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from pobi_v2.core.deps import get_current_user
 from pobi_v2.core.exceptions import NotFoundError
-from pobi_v2.db.models import Task, TaskStatus, User
+from pobi_v2.db.models import Task, TaskEvent, TaskStatus, User
 from pobi_v2.db.session import get_session
 from pobi_v2.db.persistence import record_audit
-from pobi_v2.schemas.task import TaskCreate, TaskRead, TaskUpdate
+from pobi_v2.schemas.task import (
+    TaskCreate,
+    TaskRead,
+    TaskUpdate,
+    PlanStep,
+    PlanSummary,
+    AgentRuntime,
+    TaskLiveState,
+)
 from pobi_v2.engine.queue import enqueue_task
 from pobi_v2.engine.guardrails import check_scope
 from pobi_v2.engine.cancel_state import request_cancel
@@ -176,3 +185,150 @@ async def cancel_task(
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+async def _load_or_404(session: AsyncSession, task_id: str, tenant_id) -> Task:
+    task = await session.get(Task, task_id)
+    if task is None or task.tenant_id != tenant_id:
+        raise NotFoundError("任务不存在")
+    return task
+
+
+@router.get("/{task_id}/plan", response_model=PlanSummary)
+async def get_task_plan(
+    task_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """结构化执行计划：聚合 persisted plan_step 事件，按 seq 还原步骤顺序与状态。"""
+    task = await session.get(Task, task_id)
+    if task is None or task.tenant_id != user.tenant_id:
+        raise NotFoundError("任务不存在")
+
+    rows = await session.execute(
+        select(TaskEvent)
+        .where(TaskEvent.task_id == task_id, TaskEvent.event_type == "plan_step")
+        .order_by(TaskEvent.seq.asc(), TaskEvent.created_at.asc())
+    )
+    events = rows.scalars().all()
+    by_step: dict[str, "PlanStep"] = {}
+    order: list[str] = []
+    for ev in events:
+        p = ev.payload or {}
+        sid = p.get("step_id")
+        if not sid:
+            continue
+        prev = by_step.get(sid)
+        step = PlanStep(
+            step_id=sid,
+            seq=p.get("seq", 0) if p.get("seq", -1) >= 0 else (prev.seq if prev else 0),
+            title=p.get("title", ""),
+            status=p.get("status", "pending"),
+            detail=p.get("detail"),
+        )
+        if sid not in by_step:
+            order.append(sid)
+        by_step[sid] = step
+    steps = [by_step[s] for s in order]
+    return PlanSummary(
+        steps=steps,
+        total=len(steps),
+        completed=sum(1 for s in steps if s.status == "completed"),
+        running=sum(1 for s in steps if s.status == "running"),
+        failed=sum(1 for s in steps if s.status == "failed"),
+    )
+
+
+@router.get("/{task_id}/live", response_model=TaskLiveState)
+async def get_task_live(
+    task_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """任务实时状态聚合：供控制台中栏顶部与运行视图即时渲染。"""
+    task = await session.get(Task, task_id, options=[selectinload(Task.target)])
+    if task is None or task.tenant_id != user.tenant_id:
+        raise NotFoundError("任务不存在")
+
+    ev_rows = await session.execute(
+        select(TaskEvent)
+        .where(TaskEvent.task_id == task_id)
+        .order_by(TaskEvent.seq.desc())
+        .limit(30)
+    )
+    ev_objs = list(reversed(ev_rows.scalars().all()))
+    recent_events = [
+        {
+            "seq": ev.seq,
+            "type": ev.event_type,
+            "payload": ev.payload,
+            "created_at": ev.created_at.isoformat() if ev.created_at else None,
+        }
+        for ev in ev_objs
+    ]
+
+    current_phase = None
+    current_agent = None
+    agents: dict[str, "AgentRuntime"] = {}
+    for ev in ev_objs:
+        p = ev.payload or {}
+        if ev.event_type == "phase_changed" and p.get("new_phase"):
+            current_phase = p["new_phase"]
+        if ev.event_type == "agent_start" and p.get("agent_name"):
+            current_agent = p["agent_name"]
+            agents.setdefault(
+                p["agent_name"],
+                AgentRuntime(
+                    name=p["agent_name"],
+                    role=p.get("role", "agent"),
+                    status="running",
+                    last_event_at=ev.created_at.isoformat() if ev.created_at else None,
+                ),
+            )
+        if ev.event_type == "agent_end" and p.get("agent_name") and p["agent_name"] in agents:
+            agents[p["agent_name"]].status = "done"
+
+    # 执行计划概览
+    plan_rows = await session.execute(
+        select(TaskEvent)
+        .where(TaskEvent.task_id == task_id, TaskEvent.event_type == "plan_step")
+        .order_by(TaskEvent.seq.asc(), TaskEvent.created_at.asc())
+    )
+    seen: dict[str, "PlanStep"] = {}
+    for ev in plan_rows.scalars().all():
+        p = ev.payload or {}
+        sid = p.get("step_id")
+        if not sid:
+            continue
+        seen[sid] = PlanStep(
+            step_id=sid,
+            seq=p.get("seq", 0),
+            title=p.get("title", ""),
+            status=p.get("status", "pending"),
+            detail=p.get("detail"),
+        )
+    plan = PlanSummary(
+        steps=list(seen.values()),
+        total=len(seen),
+        completed=sum(1 for s in seen.values() if s.status == "completed"),
+        running=sum(1 for s in seen.values() if s.status == "running"),
+        failed=sum(1 for s in seen.values() if s.status == "failed"),
+    )
+
+    from pobi_v2.engine.instruction_channel import peek_instructions
+
+    pending = await peek_instructions(str(task_id))
+    target_url = getattr(task.target, "url", None) if getattr(task, "target", None) else None
+
+    return TaskLiveState(
+        status=task.status.value if hasattr(task.status, "value") else str(task.status),
+        current_phase=current_phase,
+        current_agent=current_agent,
+        agent_mode=task.agent_mode,
+        objective=task.objective,
+        target_url=target_url,
+        agents=list(agents.values()),
+        plan=plan,
+        pending_instructions=len(pending),
+        recent_events=recent_events,
+    )

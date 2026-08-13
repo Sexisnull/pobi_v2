@@ -17,7 +17,7 @@ from pobi_v2.schemas.persistence import TaskDetailRead
 router = APIRouter(prefix="/api/v1/tasks", tags=["report"])
 
 
-@router.get("/{task_id}/report", response_model=TaskDetailRead)
+@router.get("/{task_id}/report", response_model=None)
 async def get_report(
     task_id: str,
     session: AsyncSession = Depends(get_session),

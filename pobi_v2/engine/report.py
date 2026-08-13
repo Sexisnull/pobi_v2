@@ -60,6 +60,9 @@ def build_report(
         "findings": [
             {
                 "id": str(f.id),
+                "task_id": str(f.task_id),
+                "target_id": str(f.target_id),
+                "created_at": f.created_at.isoformat() if f.created_at else None,
                 "title": f.title,
                 "severity": f.severity.value,
                 "description": f.description,

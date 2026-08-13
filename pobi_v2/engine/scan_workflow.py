@@ -44,6 +44,7 @@ from pobi_agent.hooks import EventHooks
 
 from pobi_v2.core.config import settings
 from pobi_v2.engine.scan_tools import ToolContext, build_scope_policy, http_request, run_shell
+from pobi_v2.llm import get_model_spec, to_litellm_model
 
 
 def _out_summary(output: Any) -> str:
@@ -83,43 +84,45 @@ def _parse_decision(text: str) -> dict:
 
 
 def _extract_root_domains(url: str) -> list[str]:
-    try:
-        netloc = urlparse(url).netloc or url
-    except Exception:
-        netloc = url
+    """从目标串提取根域名（授权范围用）。
+
+    仅当串具备 URL 形态（含 scheme:// 或 netloc）或纯主机名形态时才返回，
+    否则（如自然语言描述 "not a url"）返回空列表，避免把非目标误纳入 scope。
+    """
+    import re
+
+    cleaned = (url or "").strip()
+    if not cleaned:
+        return []
+    parsed = urlparse(cleaned)
+    netloc = parsed.netloc
+    # 无 scheme 且无 netloc：可能是纯主机名，需校验形态（禁止含空格/路径符/中文等）
+    if not parsed.scheme and not netloc:
+        if not re.fullmatch(r"[A-Za-z0-9.\-_]+", cleaned):
+            return []
+        netloc = cleaned
     netloc = netloc.split("@")[-1].split(":")[0]
     return [netloc] if netloc else []
 
 
-def _build_model_spec(model: str) -> "ModelSpec":
-    """从 `scheme/model_name` 字符串构造原 `ModelSpec`。
-
-    与原 pobi_agent 的 CoreAgent 解析方式一致：scheme 段作为 provider，
-    model_name 段作为模型名，API key / base_url 从对应环境变量的大写读取
-    （如 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`）。
-    """
-    import os
-
-    scheme, _, model_name = model.partition("/")
-    scheme = scheme or "openai"
-    model_name = model_name or model
-    upper = scheme.upper()
-    return ModelSpec(
-        provider=scheme,
-        model_name=model_name,
-        api_key=os.getenv(f"{upper}_API_KEY"),
-        base_url=os.getenv(f"{upper}_BASE_URL"),
-    )
+# 模型规格统一由 pobi_v2.llm.get_model_spec 解析（消除主/降级路径分叉）。
 
 
 def _make_core_agent(model: str) -> CoreAgent:
-    """复刻核心 LLM 代理构造（与原 CoreAgent 一致的 instructions 约束）。"""
+    """复刻核心 LLM 代理构造（与原 CoreAgent 一致的 instructions 约束）。
+
+    模型解析统一走 pobi_v2.llm 入口，凭证（POBI_V2_LLM_API_KEY 优先、裸供应商
+    变量兜底）一并注入，确保降级路径不再读不到平台统一前缀凭证。
+    """
+    spec = get_model_spec(model)
     return CoreAgent(
-        model=model,
+        model=to_litellm_model(spec),
         instructions=(
             "你是一名严谨的 Web 安全渗透测试助手，遵循授权范围，"
             "禁止猜测，所有结论需基于真实工具返回的数据。"
         ),
+        api_key=spec.api_key,
+        api_base=spec.base_url,
     )
 
 
@@ -162,7 +165,7 @@ class ScanWorkflow:
         )
 
         # 复用原 ValidationGate（FlagStrategy 确定性 + JudgeAgentStrategy LLM 判定）
-        model_spec = _build_model_spec(self.model)
+        model_spec = get_model_spec(self.model)
         self.validation_gate = ValidationGate(
             strategies=[FlagStrategy(), JudgeAgentStrategy(model_spec)]
         )
@@ -281,7 +284,7 @@ class ScanWorkflow:
                 "下一步执行（输出工具调用 JSON 或 done JSON）："
             )
             out = await _make_core_agent(self.model).run(
-                system_prompt=system, prompt=prompt, deps=None
+                instructions=system, prompt=prompt, deps=None
             )
             text = _out_summary(out)
             decision = _parse_decision(text)

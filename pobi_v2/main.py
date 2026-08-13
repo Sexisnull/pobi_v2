@@ -1,6 +1,7 @@
 """Pobi v2 FastAPI 应用入口。"""
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,9 +12,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from pobi_v2.core.exceptions import register_exception_handlers
+from pobi_v2.core.seed import seed_admin_if_needed
 from pobi_v2.db.session import Base, engine
 from pobi_v2.engine.agent_adapter import install_event_hooks
-from pobi_v2.routers import targets, tasks, stream, persistence, auth, approval, report
+from pobi_v2.engine.event_bus import persist_event_worker
+from pobi_v2.routers import targets, tasks, stream, persistence, auth, approval, report, system, instruction
 
 # 前端静态资源目录（M6 引入的纯静态 SPA）
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -24,6 +27,10 @@ WEB_STATIC_DIR = WEB_DIR / "static"
 async def lifespan(app: FastAPI):
     # 启动时：安装事件钩子，使 CoreAgent 的事件进入 pobi_v2 事件总线
     install_event_hooks()
+    # 后台持久化 plan_step 事件（供执行计划聚合端点读取）
+    asyncio.create_task(persist_event_worker())
+    # 首次启动时自动创建 admin 账号（幂等：仅当库内无用户时）
+    await seed_admin_if_needed()
     yield
     # 关闭时：释放连接池
     await engine.dispose()
@@ -49,10 +56,12 @@ if WEB_STATIC_DIR.exists():
 app.include_router(auth.router)
 app.include_router(targets.router)
 app.include_router(tasks.router)
+app.include_router(instruction.router)
 app.include_router(stream.router)
 app.include_router(persistence.router)
 app.include_router(approval.router)
 app.include_router(report.router)
+app.include_router(system.router)
 
 
 @app.get("/health", tags=["meta"])

@@ -19,6 +19,7 @@ router = APIRouter(prefix="/api/v1/approvals", tags=["approvals"])
 @router.get("", response_model=list[ApprovalRead])
 async def list_approvals(
     status_filter: ApprovalStatus | None = Query(default=None, alias="status"),
+    task_id: str | None = Query(default=None, description="按任务过滤（任务控制台审批右栏）"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_session),
@@ -27,6 +28,8 @@ async def list_approvals(
     stmt = select(ApprovalRequest).where(ApprovalRequest.tenant_id == user.tenant_id)
     if status_filter is not None:
         stmt = stmt.where(ApprovalRequest.status == status_filter)
+    if task_id is not None:
+        stmt = stmt.where(ApprovalRequest.task_id == task_id)
     stmt = stmt.order_by(ApprovalRequest.created_at.desc()).limit(limit).offset(offset)
     return list((await session.execute(stmt)).scalars().all())
 

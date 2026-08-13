@@ -13,6 +13,7 @@ ValidationGate(F lag+Judge) 目标达成验证、ReporterAgent 报告生成。
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from uuid import UUID
@@ -75,11 +76,81 @@ def _build_finding_from_report(report: dict) -> list[dict]:
     return findings
 
 
-async def run_task(task_id: str) -> dict:
-    """ARQ 任务入口：执行一次渗透测试任务。"""
+async def _publish_status_change(task_id: UUID, new_status: TaskStatus) -> None:
+    """把任务终态变更发给事件总线，让前端 SSE 即时感知（不依赖轮询）。"""
+    try:
+        from pobi_v2.engine.event_bus import bus
+
+        await bus.publish(
+            str(task_id),
+            {
+                "type": "task_status_changed",
+                "session_id": str(task_id),
+                "task_id": str(task_id),
+                "old_status": "running",
+                "new_status": new_status.value,
+            },
+        )
+    except Exception:
+        # 推送失败不影响终态落库
+        pass
+
+
+async def run_task(ctx, task_id: str) -> dict:
+    """ARQ 任务入口：执行一次渗透测试任务。
+
+    arq 调用约定为 ``function(ctx, *args)``，故首个参数为任务上下文（未使用）。
+
+    健壮性：用 ``try/finally`` + ``except BaseException`` 兜底，确保任何退出路径
+    （含 ARQ 在 ``job_timeout`` 撞墙时抛出的 ``CancelledError``、普通异常）都能把
+    任务终态写回 PG 并发出 ``task_status_changed`` 事件，避免出现“Worker 已丢弃、
+    前端仍显示 running”的幽灵任务。
+    """
     tid = UUID(task_id)
     await clear_cancel(tid)  # 重置上次运行的中断标志
 
+    try:
+        return await _run_task_body(tid)
+    except BaseException as exc:  # noqa: BLE001 — 必须覆盖 CancelledError
+        if isinstance(exc, asyncio.CancelledError):
+            _status = TaskStatus.failed
+            _err = "任务被强制中断（可能超过 job_timeout 或 Worker 重启）"
+        elif isinstance(exc, Exception):
+            _status = TaskStatus.cancelled if is_cancelled_sync(tid) else TaskStatus.failed
+            _err = str(exc)
+        else:
+            _status = TaskStatus.failed
+            _err = f"未知退出：{exc!r}"
+
+        # 兜底落库（独立 session，不依赖主体）
+        try:
+            async with AsyncSessionLocal() as s2:
+                t = await s2.get(Task, tid)
+                if t is not None and t.status not in (
+                    TaskStatus.completed, TaskStatus.cancelled
+                ):
+                    t.status = _status
+                    t.error = _err
+                    t.finished_at = _utcnow()
+                    await record_audit(
+                        s2, action="task.terminated",
+                        outcome="error" if _status == TaskStatus.failed else "success",
+                        detail=_err, task_id=tid, target_id=t.target_id,
+                        tenant_id=t.tenant_id,
+                    )
+                    await s2.commit()
+        except Exception:
+            pass
+
+        await _publish_status_change(tid, _status)
+        # CancelledError 继续向上传播；其余异常已处理，返回结果避免 ARQ 误判重试
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        return {"task_id": str(tid), "status": _status.value, "error": _err}
+
+
+async def _run_task_body(tid: UUID) -> dict:
+    """执行任务主体；异常统一由 ``run_task`` 兜底落库。"""
     async with AsyncSessionLocal() as session:
         task, target = await _load_task(session, tid)
         task.attempts += 1
@@ -97,6 +168,7 @@ async def run_task(task_id: str) -> dict:
             await record_audit(
                 session, action="task.scope_check", outcome="denied",
                 detail=str(exc), task_id=tid, target_id=target.id,
+                tenant_id=task.tenant_id,
                 meta={"objective": task.objective},
             )
             await session.commit()
@@ -108,8 +180,13 @@ async def run_task(task_id: str) -> dict:
 
         # 取全局事件钩子（已在应用启动时 install_event_hooks 安装，按 session_id==task_id 分发）
         hooks = get_event_hooks()
-        # 构建审批回调（fail-closed 的高危工具 gate）
-        approval_cb = make_approval_callback(AsyncSessionLocal, request_id=tid)
+        # 构建审批回调（fail-closed 的高危工具 gate；yolo 模式免人工审批）
+        approval_cb = make_approval_callback(
+            AsyncSessionLocal,
+            tenant_id=task.tenant_id,
+            task_id=tid,
+            auto_approve=(task.agent_mode == "yolo"),
+        )
 
         # 主路径：直接驱动原 pobi_agent.DeadEndAgent（完整 AI 自主渗透系统，
         # 含 Docker 沙箱执行验证、多智能体协作、ADaPT 规划、ValidationGate、
@@ -122,6 +199,7 @@ async def run_task(task_id: str) -> dict:
                 target=target,
                 task_id=tid,
                 max_turns=task.max_turns or 50,
+                auto_approve=(task.agent_mode == "yolo"),
             )
         except RuntimeError as exc:
             if "沙箱" in str(exc) or "Docker" in str(exc):
@@ -132,6 +210,7 @@ async def run_task(task_id: str) -> dict:
                     session, action="task.engine_fallback", outcome="info",
                     detail="Docker 沙箱不可用，回退到 ScanWorkflow（不含沙箱验证）",
                     task_id=tid, target_id=target.id,
+                tenant_id=task.tenant_id,
                 )
                 workflow = ScanWorkflow(
                     target=target,
@@ -147,46 +226,34 @@ async def run_task(task_id: str) -> dict:
             else:
                 raise
 
-        try:
-
-            # 取消检查：若运行期间被请求取消
-            if is_cancelled_sync(tid):
-                task.status = TaskStatus.cancelled
-                task.finished_at = _utcnow()
-                await record_audit(
-                    session, action="task.cancelled", outcome="success",
-                    task_id=tid, target_id=target.id,
-                )
-                await session.commit()
-                return {"task_id": task_id, "status": "cancelled"}
-
-            # 落库：运行结果 + 发现 + 轨迹
-            task.status = TaskStatus.completed
-            task.result = serialize_result(outcome.get("summary")) or ""
-            task.confidence = outcome.get("confidence")
+        # 取消检查：若运行期间被请求取消
+        if is_cancelled_sync(tid):
+            task.status = TaskStatus.cancelled
             task.finished_at = _utcnow()
-            await _persist_outcome(session, task, target, outcome)
             await record_audit(
-                session, action="task.completed", outcome="success",
+                session, action="task.cancelled", outcome="success",
                 task_id=tid, target_id=target.id,
-                meta={"confidence": outcome.get("confidence")},
+            tenant_id=task.tenant_id,
             )
             await session.commit()
-            return {"task_id": task_id, "status": "completed"}
-        except Exception as exc:
-            if is_cancelled_sync(tid):
-                task.status = TaskStatus.cancelled
-            else:
-                task.status = TaskStatus.failed
-                task.error = str(exc)
-            task.finished_at = _utcnow()
-            await record_audit(
-                session, action="task.failed", outcome="error",
-                detail=str(exc), task_id=tid, target_id=target.id,
-            )
-            await session.commit()
-            return {"task_id": task_id, "status": task.status.value, "error": str(exc)}
+            await _publish_status_change(tid, TaskStatus.cancelled)
+            return {"task_id": task_id, "status": "cancelled"}
 
+        # 落库：运行结果 + 发现 + 轨迹
+        task.status = TaskStatus.completed
+        task.result = serialize_result(outcome.get("summary")) or ""
+        task.confidence = outcome.get("confidence")
+        task.finished_at = _utcnow()
+        await _persist_outcome(session, task, target, outcome)
+        await record_audit(
+            session, action="task.completed", outcome="success",
+            task_id=tid, target_id=target.id,
+            tenant_id=task.tenant_id,
+            meta={"confidence": outcome.get("confidence")},
+        )
+        await session.commit()
+        await _publish_status_change(tid, TaskStatus.completed)
+        return {"task_id": task_id, "status": "completed"}
 
 async def _persist_outcome(session, task: Task, target: Target, outcome: dict) -> None:
     """把工作流产出落库：运行轨迹事件 + 结构化发现。"""

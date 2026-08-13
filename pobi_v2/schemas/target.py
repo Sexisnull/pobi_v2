@@ -18,6 +18,11 @@ class TargetCreate(BaseModel):
     description: str | None = None
     in_scope: list[str] = Field(default_factory=list)
     out_of_scope: list[str] = Field(default_factory=list)
+    # 验证策略（Validation Configuration）
+    flag_regex: str | None = Field(default=None, max_length=512)
+    validation_format: str | None = Field(default=None, max_length=64)
+    confidence_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+    max_tree_depth: int = Field(default=4, ge=1, le=16)
     enabled: bool = True
 
 
@@ -27,6 +32,10 @@ class TargetUpdate(BaseModel):
     description: str | None = None
     in_scope: list[str] | None = None
     out_of_scope: list[str] | None = None
+    flag_regex: str | None = Field(default=None, max_length=512)
+    validation_format: str | None = Field(default=None, max_length=64)
+    confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_tree_depth: int | None = Field(default=None, ge=1, le=16)
     enabled: bool | None = None
 
 
@@ -37,6 +46,10 @@ class TargetRead(BaseModel):
     description: str | None
     in_scope: list[str]
     out_of_scope: list[str]
+    flag_regex: str | None
+    validation_format: str | None
+    confidence_threshold: float
+    max_tree_depth: int
     enabled: bool
     created_at: datetime
     updated_at: datetime

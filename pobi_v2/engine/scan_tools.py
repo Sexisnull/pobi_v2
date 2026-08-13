@@ -213,13 +213,21 @@ def build_scope_policy(
         if host and host not in roots:
             # pobi_v2 的 scope 语义：条目即「该域及其子域」授权，统一按根域处理
             roots.append(host)
-    # out_of_scope：原 ScopePolicy 仅支持 host 级。path 级规则（含 /*）留给
-    # http_request 的 _path_excluded 处理，避免把整个 host 误排除。
-    excluded_hosts = [
-        _extract_host(o)
-        for o in (out_of_scope or [])
-        if o and not _is_wildcard(o)
-    ]
+    # out_of_scope：原 ScopePolicy 仅支持 host 级。path 级规则（含 /* 或带 path）
+    # 交由 http_request 的 _path_excluded 处理，避免把整个 host 误排除。
+    # 因此这里只收集「纯 host（不含路径）」的条目进入 host 级黑名单；
+    # 含 path 的条目不提取 host，否则 _extract_host 会剥掉端口/path 得到裸主机，
+    # 导致整台主机（含 in_scope 的根）被错误排除。
+    excluded_hosts = []
+    for o in out_of_scope or []:
+        if not o or _is_wildcard(o):
+            continue
+        bare = o.split("://", 1)[-1]
+        if "/" in bare:  # 含 path 的条目 → 仅 path 级排除，不进 host 黑名单
+            continue
+        host = _extract_host(o)
+        if host and host not in excluded_hosts:
+            excluded_hosts.append(host)
     data: dict[str, Any] = {
         "enabled": enabled,
         "root_domains": roots,

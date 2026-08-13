@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 from sqlalchemy import select
@@ -25,15 +25,12 @@ class AuthError(AppError):
     code = "unauthorized"
 
 
-async def get_current_user(
-    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
-    session: AsyncSession = Depends(get_session),
-) -> User:
-    """解析 Bearer JWT 并返回已加载 tenant 的 User。"""
-    if creds is None or not creds.credentials:
+async def _resolve_user(token: str | None, session: AsyncSession) -> User:
+    """按 JWT 字符串解析并返回已加载 tenant 的 User。"""
+    if not token:
         raise AuthError("缺少认证令牌")
     try:
-        payload = decode_access_token(creds.credentials)
+        payload = decode_access_token(token)
     except ExpiredSignatureError:
         raise AuthError("令牌已过期")
     except InvalidTokenError:
@@ -50,6 +47,23 @@ async def get_current_user(
     # 确保 tenant 已加载
     await session.refresh(user, attribute_names=["tenant"])
     return user
+
+
+async def get_current_user(
+    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    """解析 Bearer JWT 并返回已加载 tenant 的 User。"""
+    token = creds.credentials if creds else None
+    return await _resolve_user(token, session)
+
+
+async def get_current_user_from_query(
+    token: str | None = Query(default=None, description="SSE/EventSource 通过 query 传递的 JWT"),
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    """兼容浏览器原生 EventSource：无法设置 Authorization 头，改由 ?token= 传递。"""
+    return await _resolve_user(token, session)
 
 
 def get_tenant_id(user: User = Depends(get_current_user)) -> object:

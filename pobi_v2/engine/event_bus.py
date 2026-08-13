@@ -116,25 +116,22 @@ class PobiV2EventHooks:
     实现 hooks.EventHooks Protocol 的全部方法（结构化子类型，方法名/签名需匹配）。
     """
 
-    def emit_agent_start(self, session_id, agent_name, task, task_id=None, depth=0, parent_task_id=None):
-        asyncio.create_task(
-            bus.publish(
-                session_id,
-                _wrap("agent_start", session_id, agent_name=agent_name, task=task,
-                      task_id=task_id, depth=depth, parent_task_id=parent_task_id),
-            )
-        )
+    def emit_agent_start(self, session_id, agent_name, task, task_id=None, depth=0,
+                         parent_task_id=None, role=None):
+        payload = _wrap("agent_start", session_id, agent_name=agent_name, task=task,
+                        task_id=task_id, depth=depth, parent_task_id=parent_task_id,
+                        role=role or "agent")
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
 
     def emit_agent_end(self, session_id, agent_name, task, confidence_score, task_id=None,
-                       notes=None, thought_summary=None, attempts=None):
-        asyncio.create_task(
-            bus.publish(
-                session_id,
-                _wrap("agent_end", session_id, agent_name=agent_name, task=task,
-                      confidence_score=confidence_score, task_id=task_id, notes=notes,
-                      thought_summary=thought_summary, attempts=attempts),
-            )
-        )
+                       notes=None, thought_summary=None, attempts=None, role=None):
+        payload = _wrap("agent_end", session_id, agent_name=agent_name, task=task,
+                        confidence_score=confidence_score, task_id=task_id, notes=notes,
+                        thought_summary=thought_summary, attempts=attempts,
+                        role=role or "agent")
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
 
     def emit_agent_error(self, session_id, agent_name, task, error_type, error_message,
                          task_id=None, partial_reasoning=None):
@@ -242,8 +239,109 @@ class PobiV2EventHooks:
             )
         )
 
+    def emit_plan_step(self, session_id, step_id, seq, title, status, detail=None):
+        """结构化执行计划步骤：发布到事件总线（前端『执行计划』左栏消费）。
+
+        status 取值：pending | running | completed | failed。
+        同时发布到 __plan_persist__ 通道，由 persist_event_worker 落库（供 /plan 聚合）。
+        """
+        payload = _wrap("plan_step", session_id, step_id=step_id, seq=seq,
+                        title=title, status=status, detail=detail)
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
+
+    def emit_phase_changed(self, session_id, phase, detail=None):
+        """阶段流转事件：发布到事件总线并持久化（供 /live 聚合当前阶段）。"""
+        payload = _wrap("phase_changed", session_id, new_phase=phase, detail=detail)
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
+
+    def emit_llm_iteration(self, session_id, agent_name, iteration, message_count):
+        """LLM 迭代开始：推送迭代号与消息计数，前端渲染为『Iteration N』标题。"""
+        asyncio.create_task(
+            bus.publish(
+                session_id,
+                _wrap("llm_iteration", session_id,
+                      agent_name=agent_name, iteration=iteration, message_count=message_count),
+            )
+        )
+
+    def emit_llm_input(self, session_id, agent_name, role, content, tool_name=None):
+        """LLM 输入：本轮发给模型的最后一条消息（user prompt 或 tool result）。
+
+        content 截断至 2000 字符，防止 SSE 消息过大阻塞事件循环。
+        """
+        payload: dict[str, Any] = {
+            "agent_name": agent_name,
+            "role": role,
+            "content": _truncate(content, 2000),
+        }
+        if tool_name:
+            payload["tool_name"] = tool_name
+        asyncio.create_task(
+            bus.publish(session_id, _wrap("llm_input", session_id, **payload))
+        )
+
+    def emit_llm_response(self, session_id, agent_name, response_text, thinking_text=None):
+        """LLM 响应：模型返回的完整文本（含可选 thinking/reasoning）。
+
+        response_text 截断至 3000 字符；thinking_text 截断至 2000 字符。
+        前端以可折叠面板展示，保留可观测性同时避免刷屏。
+        """
+        payload: dict[str, Any] = {
+            "agent_name": agent_name,
+            "response_text": _truncate(response_text, 3000),
+        }
+        if thinking_text:
+            payload["thinking_text"] = _truncate(thinking_text, 2000)
+        asyncio.create_task(
+            bus.publish(session_id, _wrap("llm_response", session_id, **payload))
+        )
+
     def is_interrupted(self, session_id: str) -> bool:
         # M3：协作式取消——查询 cancel_state 的中断标志
         from pobi_v2.engine.cancel_state import is_cancelled_sync
 
         return is_cancelled_sync(session_id)
+
+
+async def persist_event_worker() -> None:
+    """后台持久化：把总线上的控制台事件写入 TaskEvent 表（供 /plan 与 /live 聚合）。
+
+    持久化类型包括 plan_step（执行计划）、phase_changed（当前阶段）、
+    agent_start/agent_end（运行视图）。其他事件由 SSE 实时消费，无需落库。
+    """
+    from pobi_v2.db.session import AsyncSessionLocal
+    from pobi_v2.db.persistence import record_task_event
+
+    persist_event_types = {"plan_step", "phase_changed", "agent_start", "agent_end"}
+    queue = await bus.subscribe("__plan_persist__")
+    while True:
+        try:
+            event = await queue.get()
+        except Exception:  # noqa: BLE001
+            continue
+        event_type = event.get("type")
+        if event_type not in persist_event_types:
+            continue
+        task_id = event.get("session_id")
+        if not task_id:
+            continue
+        try:
+            from uuid import UUID as _UUID
+
+            task_uuid = _UUID(str(task_id))
+            async with AsyncSessionLocal() as session:
+                detail = dict(event)
+                detail.pop("type", None)
+                detail.pop("session_id", None)
+                await record_task_event(
+                    session,
+                    task_uuid,
+                    event_type,
+                    detail,
+                )
+                await session.commit()
+        except Exception:  # noqa: BLE001
+            # 持久化失败不影响主流程与实时推送
+            continue

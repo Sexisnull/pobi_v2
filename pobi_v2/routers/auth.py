@@ -29,42 +29,42 @@ def _slugify(text: str) -> str:
     return "".join(c if c.isalnum() else "-" for c in text.lower()).strip("-")
 
 
-@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def register(body: UserRegister, session: AsyncSession = Depends(get_session)) -> dict:
-    if not settings.allow_open_registration:
-        raise AppError("当前已关闭开放注册", status_code=status.HTTP_403_FORBIDDEN)
-
-    tenant = (
-        await session.execute(select(Tenant).where(Tenant.slug == body.tenant_slug))
-    ).scalar_one_or_none()
-    if tenant is None:
-        tenant = Tenant(name=body.tenant_slug, slug=body.tenant_slug)
-        session.add(tenant)
-        await session.flush()
-
-    exists = (
-        await session.execute(select(User).where(User.email == body.email))
-    ).scalar_one_or_none()
-    if exists is not None:
-        raise ConflictError("该邮箱已注册")
-
-    user = User(
-        tenant_id=tenant.id,
-        email=body.email,
-        full_name=body.full_name,
-        hashed_password=hash_password(body.password),
-        is_active=True,
-        is_admin=False,
-    )
-    session.add(user)
-    await session.commit()
-    await session.refresh(user)
-    token = create_access_token(str(user.id), str(user.tenant_id))
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "user": to_user_read(user),
-    }
+# @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+# async def register(body: UserRegister, session: AsyncSession = Depends(get_session)) -> dict:
+#     if not settings.allow_open_registration:
+#         raise AppError("当前已关闭开放注册", status_code=status.HTTP_403_FORBIDDEN)
+#
+#     tenant = (
+#         await session.execute(select(Tenant).where(Tenant.slug == body.tenant_slug))
+#     ).scalar_one_or_none()
+#     if tenant is None:
+#         tenant = Tenant(name=body.tenant_slug, slug=body.tenant_slug)
+#         session.add(tenant)
+#         await session.flush()
+#
+#     exists = (
+#         await session.execute(select(User).where(User.email == body.email))
+#     ).scalar_one_or_none()
+#     if exists is not None:
+#         raise ConflictError("该邮箱已注册")
+#
+#     user = User(
+#         tenant_id=tenant.id,
+#         email=body.email,
+#         full_name=body.full_name,
+#         hashed_password=hash_password(body.password),
+#         is_active=True,
+#         is_admin=False,
+#     )
+#     session.add(user)
+#     await session.commit()
+#     await session.refresh(user)
+#     token = create_access_token(str(user.id), str(user.tenant_id))
+#     return {
+#         "access_token": token,
+#         "token_type": "bearer",
+#         "user": to_user_read(user),
+#     }
 
 
 @router.post("/login", response_model=TokenResponse)

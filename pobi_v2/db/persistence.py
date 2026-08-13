@@ -122,12 +122,16 @@ async def record_audit(
     task_id: UUID | None = None,
     target_id: UUID | None = None,
     meta: dict | None = None,
+    tenant_id: UUID | None = None,
+    actor_id: UUID | None = None,
 ) -> AuditEvent:
     """写入一条结构化审计事件。"""
     evt = AuditEvent(
         id=uuid4(),
         task_id=task_id,
         target_id=target_id,
+        tenant_id=tenant_id,
+        actor_id=actor_id,
         actor=actor,
         action=action,
         outcome=outcome,
