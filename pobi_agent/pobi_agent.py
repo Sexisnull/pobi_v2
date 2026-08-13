@@ -245,7 +245,7 @@ class DeadEndAgent:
         """Configure the AVFS workspace for this agent session."""
         if workspace_root is None:
             self.workspace_root = None
-            avfs.umount(session_id=str(self.agent_id), workspace="workspace")
+            avfs.umount(session_id=str(self.session_id), workspace="workspace")
             return
 
         # avfs.mount requires the host directory to already exist -- create it
@@ -253,8 +253,8 @@ class DeadEndAgent:
         # workspace_root) can mount a fresh default workspace without a
         # FileNotFoundError.
         Path(workspace_root).expanduser().resolve().mkdir(parents=True, exist_ok=True)
-        avfs.mount(workspace_root=workspace_root, session_id=str(self.agent_id), workspace="workspace")
-        mounted_root = avfs.current_workspace_root(session_id=str(self.agent_id), workspace="workspace")
+        avfs.mount(workspace_root=workspace_root, session_id=str(self.session_id), workspace="workspace")
+        mounted_root = avfs.current_workspace_root(session_id=str(self.session_id), workspace="workspace")
         self.workspace_root = None if mounted_root is None else str(mounted_root)
 
     def _prepare_memory_workspace(self) -> str:
@@ -402,7 +402,7 @@ class DeadEndAgent:
 
         self.shell_deps = ShellDeps(
             shell_runner=shell_runner,
-            session_id=self.agent_id,
+            session_id=self.session_id,
             workspace_root=self.workspace_root,
             memory_workspace_root=self.memory_workspace_root,
             memory_context=self.memory_context,
@@ -432,7 +432,7 @@ class DeadEndAgent:
             model=self.model,
             context=self.context,
             available_agents=self.available_agents,
-            session_id=str(self.agent_id),
+            session_id=str(self.session_id),
             validation_gate=self.validation_gate,
             reporter=self.reporter,
         )
@@ -556,7 +556,7 @@ IMPORTANT:
 """
         threat_model_data = await reporter_agent.run(
             prompt=prompt_assessment,
-            deps=ReporterDeps(session_id=str(self.agent_id)),
+            deps=ReporterDeps(session_id=str(self.session_id)),
             usage=RunUsage(),
             usage_limits=UsageLimits(),
             deferred_tool_results=None,
@@ -669,7 +669,7 @@ IMPORTANT:
 """
         threat_model_data = await reporter_agent.run(
             prompt=prompt_assessment,
-            deps=ReporterDeps(session_id=str(self.agent_id)),
+            deps=ReporterDeps(session_id=str(self.session_id)),
             usage=RunUsage(),
             usage_limits=UsageLimits(),
             deferred_tool_results=None,
@@ -843,7 +843,7 @@ IMPORTANT:
 """
         security_report = await reporter_agent.run(
             prompt=prompt_assessment,
-            deps=ReporterDeps(session_id=str(self.agent_id)),
+            deps=ReporterDeps(session_id=str(self.session_id)),
             usage=RunUsage(),
             usage_limits=UsageLimits(),
             deferred_tool_results=None,
@@ -979,7 +979,7 @@ IMPORTANT:
 """
         threat_model_data = await reporter_agent.run(
             prompt=prompt_assessment,
-            deps=ReporterDeps(session_id=str(self.agent_id)),
+            deps=ReporterDeps(session_id=str(self.session_id)),
             usage=RunUsage(),
             usage_limits=UsageLimits(),
             deferred_tool_results=None,
