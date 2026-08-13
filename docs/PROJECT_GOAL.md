@@ -77,6 +77,22 @@
 
 > 注：旧文档 `PROJECT_STATUS.md` 记录的 F1–F5 缺陷（record_audit 签名、system_prompt、llm_model、审批回调、审计租户）**均已修复**，请勿再作为待办。
 
+### 2.5 扫描内核后续优化方向（2026-08-13 评审新增）
+
+> 以下为扫描内核（pobi_agent）后续迭代的核心优化方向，供后续开发 Agent 排期参考。
+> 这些问题均属于「能力增强 / 架构演进」范畴，非当前阻塞项，但决定内核从「能跑」到「好用」的跃迁。
+
+| 编号 | 问题 | 类别 | 说明 / 优化方向 |
+|------|------|------|------------------|
+| S1 | **侦查阶段内容无格式化、无向量化** | 数据治理 | 当前侦查产出（端点/技术栈/认证面等）以纯文本/Markdown 落入上下文，未做结构化抽取，也未向量化入库。应定义统一侦查产物 schema（如 `ReconFinding` 结构化对象），并对可检索内容做 embedding 入库，支撑后续 RAG 检索而非全文堆上下文 |
+| S2 | **侦查产物全部加载至上下文** | 上下文管理 | 当前 `ContextEngine.get_unified_context` 将侦查结果整段塞入上下文（见 `run_exploitation` 传 `previous_context`），随目标规模膨胀导致上下文爆炸、噪声淹没、成本攀升。应改为「按需检索 + 摘要 + 向量召回」，仅在利用阶段拉取与当前子目标相关的侦查片段 |
+| S3 | **侦查阶段调用工具太少，连指纹识别都没有** | 能力缺口 | 当前侦查阶段子 Agent 调度偏重 RAG 检索与基础请求，缺少主动指纹识别能力（技术栈识别、banner/版本探测、中间件/框架指纹、WAF/CDN 识别等）。应补充指纹识别类工具（如 `fingerprint_target` / 集成 Nuclei-template 探测 / WhatWeb 风格识别），把「识别」从「LLM 猜」下沉为确定性的工具产出 |
+| S4 | **利用阶段调用工具太少，没有常见漏洞利用工具** | 能力缺口 | 当前利用阶段主要靠 LLM + 子 Agent 自由编排 HTTP/Shell/Python，缺少常见漏洞利用工具链（如 Sqlmap、Xray、Nuclei 漏洞模板、SSRF/XXE 专项 payload 库等）。应把成熟利用工具封装为可审批、可复用的 `Tool`，让 LLM 决策「调哪个工具」而非「手写每一步 exploit」 |
+| S5 | **Supervisor prompt 过于针对化（假设目标必有 flag）** | 提示词治理 | 通用 `supervisor.instructions.jinja2` 含「每端点最多 2 次调用、无 flag 即转向」等利用期措辞，隐含「目标是靶场、必有 flag」假设，对真实业务系统不适用（无 flag、需按风险面推进）。应按阶段拆分：侦查阶段用「信息充分即停」软约束，利用阶段按漏洞确认/风险证据而非 flag 推进；避免把靶场假设硬编码进通用 prompt |
+| S6 | **LLM 应专注决策，固定性动作交给可调用的工具** | 架构原则 | 当前 LLM 既做决策又承担大量可确定化的执行细节（手写请求、手工拼 payload、重复推断）。应明确分工边界：**LLM 负责任务分解、工具选择、结果研判；确定性/高频/易错动作封装为可调工具**（指纹识别、漏洞扫描、exploit 模板、标准化请求构造器等），降低幻觉与 token 消耗，提升可复现性 |
+
+> 核心原则（S6 延伸）：把内核从「LLM 全包」演进为「LLM 调度 + 工具执行」的确定性协作范式——LLM 做规划与判断，工具做动作与产出，上下文只承载决策所需的最小相关信息（呼应 S1/S2）。
+
 ---
 
 ## 3. 架构总览
@@ -146,7 +162,8 @@ FastAPI routers/tasks  ──► [Redis 队列] push "run_task"
                                     ▼
                             [pobi_agent.DeadEndAgent]
                              threat_model → run_exploitation → report
-                             （Supervisor 派 6 子 Agent；Docker 沙箱验证；
+                             （Phase 1 与 Phase 2 共用同一套 supervisor+子 Agent
+                              引擎，仅 goal prompt 不同；Docker 沙箱验证；
                               ADaPT 递归规划；ValidationGate 验证；ReporterAgent 报告）
                                     │ 事件经 PobiV2EventHooks 发往 event_bus
                             ┌───────┴────────┐
@@ -168,7 +185,7 @@ FastAPI routers/tasks  ──► [Redis 队列] push "run_task"
 - 委托 `deadend_runner.run_deadend_agent`（适配层，不重写内核）：把 pobi_v2 的 `Target/Task` 翻译成 pobi_agent 输入——写 `scope.yaml`（复用 ScopePolicy）、写 `validation.yaml`（复用 ValidationGate）、解析 `ModelSpec`（多 LLM）、按 Docker 可用性决定开不开 `shell/python_interpreter`；
 - 主路径 `DeadEndAgent` 沙箱不可用时，自动降级到不依赖沙箱的 `ScanWorkflow`；
 - 内核跑完后 `_persist_outcome` 把结果/findings/轨迹落 PG。
-真正的多智能体协作在 `run_exploitation` 内部（Supervisor 委派 6 子 Agent、Docker 沙箱验证、ADaPT、ValidationGate、ReporterAgent）——这部分归 pobi_agent 内核，engine 不管。
+真正的多智能体协作在 `DeadEndAgent` 内部：Phase 1 侦查（`threat_model`）与 Phase 2 利用（`run_exploitation`）**均经 `execute_supervisor` 驱动同一套 `SupervisorAgent` + 6 子 Agent 引擎**，仅传入的 `goal prompt` 不同（侦查收集端点/技术栈/认证/攻击面，利用做 ADaPT 递归求解）；其余 Docker 沙箱验证、ADaPT、ValidationGate、ReporterAgent 亦归 pobi_agent 内核，engine 不管。
 
 **（3）Worker 如何工作**
 - 启动 `uv run arq ...WorkerSettings` 后，进程连 Redis 阻塞监听 `run_task` 队列（`functions=[run_task]`、`job_timeout=6h`、`max_tries=2`）；

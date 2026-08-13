@@ -20,9 +20,9 @@
 - **M4 多租户鉴权**：User/Tenant 模型 + JWT 认证 + 资源租户隔离，所有接口默认需 Bearer 令牌
 - **M5 审批护栏 + 结构化报告**：高危工具调用需人工审批（fail-closed），任务报告 Markdown/JSON 导出
 - **M6 前端 SPA**：纯静态单页应用（vanilla JS + SSE），由 FastAPI 直接挂载 `web/` 目录，零额外依赖、零构建步骤，覆盖登录/注册、目标与任务管理、实时事件流、审批决策、报告导出
-- **M7 复刻 agent 扫描逻辑（轻量版）**：以 `ScanWorkflow` 复刻原 `DeadEndAgent` 的三阶段工作流（threat_model → supervisor/exploitation 循环 + ValidationGate → report）；**复用原 pobi_agent 的核心组件**（`ScopePolicy` 授权闸门、`ValidationGate` 置信度判定、`ReporterAgent` 报告、`CoreAgent`/`EventHooks`），并以 `scan_tools` 重新实现 HTTP 侦察（httpx）+ 受限 shell，出口复用 `ScopePolicy` 做 host/path 级 scope 闸门
+- **M7 复刻 agent 扫描逻辑（轻量版）**：以 `ScanWorkflow` 复刻原 `DeadEndAgent` 的两阶段工作流（**Phase 1 侦查 threat_model → Phase 2 利用 exploitation 循环** + ValidationGate → report）；**复用原 pobi_agent 的核心组件**（`ScopePolicy` 授权闸门、`ValidationGate` 置信度判定、`ReporterAgent` 报告、`CoreAgent`/`EventHooks`），并以 `scan_tools` 重新实现 HTTP 侦察（httpx）+ 受限 shell，出口复用 `ScopePolicy` 做 host/path 级 scope 闸门
 - **M8 完全复刻原 AI 自主渗透系统（主路径）**：直接驱动原 `pobi_agent.pobi_agent.DeadEndAgent`（**完整多智能体协作系统**），而非轻量重写。`engine/deadend_runner.py` 作为集成适配层，把 pobi_v2 的 `Target`/`Task` 注入原引擎，并完整复用其全部能力：
-  - **多智能体协作**：`SupervisorAgent`（pydantic_ai）通过工具委派调用 6 个专业子 Agent（requester / python_interpreter / shell / webapp_analyzer / memory / authenticator），每个子 Agent 返回结构化 `AgentOutput`（confidence_score / detailed_summary / proofs / thoughts）
+  - **两阶段共用同一套 supervisor+子 Agent 引擎**：Phase 1 侦查与 Phase 2 利用均经 `execute_supervisor` 驱动，区别仅在 `goal prompt` 不同（侦查专用 prompt 收集端点/技术栈/认证/攻击面，利用专用 prompt 做 ADaPT 递归求解）。`SupervisorAgent`（pydantic_ai）通过工具委派调用 6 个专业子 Agent（requester / python_interpreter / shell / webapp_analyzer / memory / authenticator），每个子 Agent 返回结构化 `AgentOutput`（confidence_score / detailed_summary / proofs / thoughts）
   - **Docker 沙箱执行验证**：`python_interpreter` / `shell` 在真实 Docker 沙箱中执行 payload，验证漏洞可利用性（沙箱为必需依赖；无 Docker 时回退到 M7 的 `ScanWorkflow`）
   - **多 LLM**：通过 `ModelSpec(provider, model_name, api_key, base_url)` 支持 `anthropic` / `openai` / `openrouter` / `gemini` / `requesty` / `local`，读 `settings.model` 的 `scheme/model` 字符串选择
   - **ADaPT 递归规划**：`PlannerAgent` + `ADaPTAgent` 分解任务为子目标树
@@ -284,6 +284,17 @@ docker compose exec api alembic upgrade head
 - **A5 CORS 不安全（P2）**：`allow_origins=["*"]` + `allow_credentials=True` 被浏览器规范禁止，生产须收敛。
 - **A6 `main.py:web_app` 分支矛盾（P2）**：`if not index.exists(): return ... if index.exists() else ...` 自相矛盾，须修正。
 - **A7 `routers/system.py` 脆弱写法（P3）**：`len(active) if "active" in dir() else 0`，宜在 except 中初始化。
+
+### 9. 扫描内核优化待办（2026-08-13）
+
+详见 `docs/PROJECT_GOAL.md` § 2.5，属能力增强方向（非阻塞）：
+
+- **S1 侦查产物无格式化 / 无向量化**：定义 `ReconFinding` 结构化 schema，可检索内容做 embedding 入库，支撑 RAG 召回而非全文堆上下文。
+- **S2 侦查产物全量加载上下文**：改为按需检索 + 摘要 + 向量召回，仅拉取与当前子目标相关的侦查片段，避免上下文爆炸。
+- **S3 侦查缺指纹识别能力**：补充技术栈 / banner / 版本 / 中间件 / WAF / CDN 等指纹识别工具，将「识别」从 LLM 猜测下沉为确定性工具产出。
+- **S4 利用缺常见漏洞利用工具**：封装 Sqlmap / Xray / Nuclei 模板 / 专项 payload 库等为可审批、可复用的 `Tool`，让 LLM 决策「调哪个」而非手写 exploit。
+- **S5 Supervisor prompt 过于靶场化**：通用 `supervisor.instructions.jinja2` 含「必有 flag、无 flag 即转向」等假设，对真实业务系统不适用；按阶段拆分，去硬编码 flag 假设，侦查按「信息充分即停」、利用按漏洞/风险证据推进。
+- **S6 LLM 应专注决策、固定动作下沉工具**：确立「LLM 调度 + 工具执行」协作范式——LLM 做任务分解、工具选择、结果研判；确定性 / 高频 / 易错动作封装为可调工具，降低幻觉与 token 消耗。
 
 ### 7. 发布流程（AGENTS.md 规范）
 
