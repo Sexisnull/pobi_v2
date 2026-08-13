@@ -37,3 +37,6 @@ uv.lock
 .vscode/
 *.swp
 .DS_Store
+
+# 本地临时验证脚本（dvwa/test/probe 等一次性调试产物）
+python_scripts/
