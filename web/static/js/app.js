@@ -213,10 +213,10 @@
         const btn = priceForm.querySelector('button[type="submit"]');
         btn.disabled = true;
         try {
-          await api("PUT", "/api/v1/pricing", payload);
+          await api("/pricing", { method: "PUT", body: payload });
           toast("价格已保存", "ok");
           // 重新计算成本展示
-          const summary = await api("GET", "/api/v1/tasks/usage/summary");
+          const summary = await api("/tasks/usage/summary");
           await applyPricingToUI(summary);
         } catch (err) {
           toast("保存失败: " + (err.message || err), "err");
@@ -252,8 +252,8 @@
     if (sumEl) sumEl.textContent = "…";
     try {
       const [summary, pricing] = await Promise.all([
-        api("GET", "/api/v1/tasks/usage/summary"),
-        api("GET", "/api/v1/pricing"),
+        api("/tasks/usage/summary"),
+        api("/pricing"),
       ]);
       renderTokenSummary(summary, pricing);
       renderTokenTasks(pricing);
@@ -262,7 +262,7 @@
     }
   }
   async function applyPricingToUI(summary) {
-    const pricing = await api("GET", "/api/v1/pricing");
+    const pricing = await api("/pricing");
     renderTokenSummary(summary, pricing);
   }
   function renderTokenSummary(summary, pricing) {
@@ -294,7 +294,7 @@
   async function renderTokenTasks(pricing) {
     let tasks;
     try {
-      tasks = await api("GET", "/api/v1/tasks");
+      tasks = await api("/tasks");
     } catch {
       tasks = [];
     }

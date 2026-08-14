@@ -248,6 +248,15 @@ class AgentRunner:
             # This preserves the original object (e.g., SupervisorDeps) so tools can access
             # attributes like .requester_agent, .shell_agent, etc.
 
+            # 运行视图：发出 agent_start（前端"什么智能体在做哪个任务"实时展示）
+            session_id = self._extract_session_id(deps)
+            get_event_hooks().emit_agent_start(
+                session_id=session_id,
+                agent_name=self.name,
+                task=prompt[:200] if prompt else "",
+                role="agent",
+            )
+
             # Convert usage_limits to dict
             limits_dict = {}
             if usage_limits:
@@ -294,11 +303,25 @@ class AgentRunner:
                 if not result.output.thoughts and result.thoughts:
                     result.output.thoughts = result.thoughts
 
+            # 运行视图：正常完成发出 agent_end
+            get_event_hooks().emit_agent_end(
+                session_id=session_id,
+                agent_name=self.name,
+                task=prompt[:200] if prompt else "",
+            )
+
             return result
 
         except UsageLimitExceeded as e:
             error_msg = str(e)
             logger.debug("AgentRunner UsageLimitExceeded: %s", error_msg)
+
+            # 运行视图：超限退出发出 agent_end
+            get_event_hooks().emit_agent_end(
+                session_id=session_id,
+                agent_name=self.name,
+                task=prompt[:200] if prompt else "",
+            )
 
             # Create a fallback result with the correct output type
             fallback_output = self._create_fallback_output(error_msg, "Usage limit exceeded")
@@ -312,6 +335,13 @@ class AgentRunner:
             error_msg = str(e)
             logger.debug("AgentRunner Error: %s", error_msg)
 
+            # 运行视图：异常退出发出 agent_end
+            get_event_hooks().emit_agent_end(
+                session_id=session_id,
+                agent_name=self.name,
+                task=prompt[:200] if prompt else "",
+            )
+
             # Create a fallback result with the correct output type
             fallback_output = self._create_fallback_output(error_msg, "Agent error")
             return FallbackAgentResult(
@@ -319,6 +349,18 @@ class AgentRunner:
                 error=error_msg,
                 raw_messages=[]
             )
+
+    def _extract_session_id(self, deps: Any) -> str:
+        """从 deps 中提取 session_id（兼容 dict / 对象 / 缺失）。"""
+        if deps is None:
+            return "default"
+        if isinstance(deps, dict):
+            sid = deps.get("session_id", "default")
+        else:
+            sid = getattr(deps, "session_id", "default")
+        if sid is None or sid == "default":
+            return "default"
+        return str(sid)
 
     def _deps_to_dict(self, deps: Any) -> dict:
         """Convert dataclass/object deps to dict for CoreAgent.

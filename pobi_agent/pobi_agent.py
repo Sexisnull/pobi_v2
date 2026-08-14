@@ -511,6 +511,16 @@ AUTHENTICATION IS PART OF RECON (mandatory when the target requires login):
         # Set root task in context
         self.context.set_root_task(task)
 
+        # 执行计划：把威胁建模作为 Phase 1 的首个 plan_step 注入（前端左栏展示）
+        get_event_hooks().emit_plan_step(
+            session_id=str(self.session_id),
+            step_id="recon",
+            seq=0,
+            title="威胁建模与信息收集",
+            status="running",
+            detail="Phase 1：收集端点 / 技术栈 / 认证面 / 攻击面",
+        )
+
         target_context =f"Target : {self.context.target}"
         context = {}
         confidence_score = 0.0
@@ -525,6 +535,13 @@ AUTHENTICATION IS PART OF RECON (mandatory when the target requires login):
                 stop_result = self._record_validation_stop(event)
                 task_node.confidence_score = event.confidence_score
                 task_node.status = "completed"
+                get_event_hooks().emit_plan_step(
+                    session_id=str(self.session_id),
+                    step_id="recon",
+                    seq=0,
+                    title="威胁建模与信息收集",
+                    status="completed",
+                )
                 return task_node, stop_result.reporter_output, stop_result.validation_token
 
             if isinstance(event, ResultEvent):
@@ -533,6 +550,14 @@ AUTHENTICATION IS PART OF RECON (mandatory when the target requires login):
 
         task_node.confidence_score = confidence_score
         task_node.status = "completed"
+
+        get_event_hooks().emit_plan_step(
+            session_id=str(self.session_id),
+            step_id="recon",
+            seq=0,
+            title="威胁建模与信息收集",
+            status="completed",
+        )
 
         reporter_agent = ReporterAgent(
             model=self.model,

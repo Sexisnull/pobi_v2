@@ -329,24 +329,44 @@ async def get_task_live(
 
     current_phase = None
     current_agent = None
-    agents: dict[str, "AgentRuntime"] = {}
+    # 运行视图：从 recent 窗口取当前阶段（phase_changed 低频，不会被淹没）
     for ev in ev_objs:
         p = ev.payload or {}
         if ev.event_type == "phase_changed" and p.get("new_phase"):
             current_phase = p["new_phase"]
-        if ev.event_type == "agent_start" and p.get("agent_name"):
-            current_agent = p["agent_name"]
+
+    # 运行视图：独立查询 agent_start/agent_end，避免被 plan_step 等高频事件淹没
+    # （recent 30 条窗口只用于事件流展示，agents 聚合须走全量查询）
+    agent_rows = await session.execute(
+        select(TaskEvent)
+        .where(
+            TaskEvent.task_id == task_id,
+            TaskEvent.event_type.in_(["agent_start", "agent_end"]),
+        )
+        .order_by(TaskEvent.created_at.asc())
+    )
+    agents: dict[str, "AgentRuntime"] = {}
+    for ev in agent_rows.scalars().all():
+        p = ev.payload or {}
+        name = p.get("agent_name")
+        if not name:
+            continue
+        if ev.event_type == "agent_start":
+            current_agent = name
             agents.setdefault(
-                p["agent_name"],
+                name,
                 AgentRuntime(
-                    name=p["agent_name"],
+                    name=name,
                     role=p.get("role", "agent"),
                     status="running",
                     last_event_at=ev.created_at.isoformat() if ev.created_at else None,
                 ),
             )
-        if ev.event_type == "agent_end" and p.get("agent_name") and p["agent_name"] in agents:
-            agents[p["agent_name"]].status = "done"
+            agents[name].status = "running"
+            agents[name].last_event_at = ev.created_at.isoformat() if ev.created_at else None
+        elif ev.event_type == "agent_end" and name in agents:
+            agents[name].status = "done"
+            agents[name].last_event_at = ev.created_at.isoformat() if ev.created_at else None
 
     # 执行计划概览
     plan_rows = await session.execute(
