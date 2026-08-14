@@ -6,77 +6,109 @@
 （`CoreAgent` 决策内核、`DeadEndAgent` 编排、`EventHooks` 事件总线、
 工具链与置信度护栏），但拥有独立的前后端架构、独立依赖与独立运行方式。
 
-## 当前进度：里程碑 1–8（M8 已完全复刻原 AI 自主渗透系统，直接驱动原 DeadEndAgent）+ M8+ 演进（运行指令通道 / 系统状态对账 / 统一 LLM 抽象层预留）
+## 核心能力
 
-- FastAPI 应用骨架
-- SQLAlchemy 2.0 + Alembic（PostgreSQL）
-- `Target` / `Task` CRUD 接口
-- Pydantic Schema 与统一异常处理中间件
-- `CoreAgent` 适配层 + 事件总线（`EventHooks` → 内存/Redis pub-sub 通道）
-- **ARQ 任务队列**：创建任务即入队，Worker 进程内异步运行 `CoreAgent`
-- **SSE 实时推送**：`GET /api/v1/tasks/{id}/stream` 实时推送思考/工具/置信度/状态
-- **授权范围护栏**：基于 `pobi_agent.scope.ScopePolicy`，从 Target 的 scope 注入，越权创建任务直接拒绝
-- **M3 持久化与产物落库**：运行轨迹 / 发现 / 审计 / 产物入库，支持取消与续跑
-- **M4 多租户鉴权**：User/Tenant 模型 + JWT 认证 + 资源租户隔离，所有接口默认需 Bearer 令牌
-- **M5 审批护栏 + 结构化报告**：高危工具调用需人工审批（fail-closed），任务报告 Markdown/JSON 导出
-- **M6 前端 SPA**：纯静态单页应用（vanilla JS + SSE），由 FastAPI 直接挂载 `web/` 目录，零额外依赖、零构建步骤，覆盖登录/注册、目标与任务管理、实时事件流、审批决策、报告导出
-- **M7 复刻 agent 扫描逻辑（轻量版）**：以 `ScanWorkflow` 复刻原 `DeadEndAgent` 的两阶段工作流（**Phase 1 侦查 threat_model → Phase 2 利用 exploitation 循环** + ValidationGate → report）；**复用原 pobi_agent 的核心组件**（`ScopePolicy` 授权闸门、`ValidationGate` 置信度判定、`ReporterAgent` 报告、`CoreAgent`/`EventHooks`），并以 `scan_tools` 重新实现 HTTP 侦察（httpx）+ 受限 shell，出口复用 `ScopePolicy` 做 host/path 级 scope 闸门
-- **M8 完全复刻原 AI 自主渗透系统（主路径）**：直接驱动原 `pobi_agent.pobi_agent.DeadEndAgent`（**完整多智能体协作系统**），而非轻量重写。`engine/deadend_runner.py` 作为集成适配层，把 pobi_v2 的 `Target`/`Task` 注入原引擎，并完整复用其全部能力：
-  - **两阶段共用同一套 supervisor+子 Agent 引擎**：Phase 1 侦查与 Phase 2 利用均经 `execute_supervisor` 驱动，区别仅在 `goal prompt` 不同（侦查专用 prompt 收集端点/技术栈/认证/攻击面，利用专用 prompt 做 ADaPT 递归求解）。`SupervisorAgent`（pydantic_ai）通过工具委派调用 6 个专业子 Agent（requester / python_interpreter / shell / webapp_analyzer / memory / authenticator），每个子 Agent 返回结构化 `AgentOutput`（confidence_score / detailed_summary / proofs / thoughts）
-  - **Docker 沙箱执行验证**：`python_interpreter` / `shell` 在真实 Docker 沙箱中执行 payload，验证漏洞可利用性（沙箱为必需依赖；无 Docker 时回退到 M7 的 `ScanWorkflow`）
-  - **多 LLM**：通过 `ModelSpec(provider, model_name, api_key, base_url)` 支持 `anthropic` / `openai` / `openrouter` / `gemini` / `requesty` / `local`，读 `settings.model` 的 `scheme/model` 字符串选择
-  - **ADaPT 递归规划**：`PlannerAgent` + `ADaPTAgent` 分解任务为子目标树
-  - **ValidationGate**：`FlagStrategy` + `JudgeAgentStrategy` 做目标达成验证
-  - **ReporterAgent**：生成最终报告
-  - **授权范围闸门**：复用原 `ScopePolicy`——运行前把 `Target` 的 scope 写入全局 `~/.cache/pobi/scope.yaml`，原 `pw_requester` 网络出口处 `check_scope` 自动生效（不重写 scope 逻辑）
-  - **事件总线**：通过全局已注册的 `PobiV2EventHooks`，安全事件实时写入 pobi_v2 DB + SSE（session_id == task_id）
-  - **审批护栏**：通过 `make_approval_callback` 接入原 `set_approval_callback`（fail-closed）
-- `docker-compose.yml`（PostgreSQL + Redis）
+- **FastAPI 应用骨架**：SQLAlchemy 2.0 + Alembic（PostgreSQL），Pydantic Schema 与统一异常处理。
+- **ARQ 任务队列**：创建任务即入队，Worker 进程内异步驱动渗透引擎。
+- **SSE 实时推送**：`GET /api/v1/tasks/{task_id}/stream` 实时推送思考 / 工具调用 / 置信度 / 状态流转。
+- **授权范围护栏**：基于 `pobi_agent.scope.ScopePolicy`，从 Target 的 scope 注入，越权创建任务直接拒绝。
+- **多智能体渗透引擎（M8 主路径）**：直接驱动原 `pobi_agent.DeadEndAgent` 完整多智能体系统。Phase 1 侦查与 Phase 2 利用共用同一套 supervisor + 6 子 Agent 引擎，仅 goal prompt 不同；Docker 沙箱执行验证、ADaPT 递归规划、ValidationGate 置信度判定、ReporterAgent 报告全链复用原内核。无 Docker 时回退轻量 `ScanWorkflow`（M7）。
+- **多 LLM 支持**：通过 `ModelSpec(provider, model_name, api_key, base_url)` 支持 `anthropic` / `openai` / `openrouter` / `gemini` / `requesty` / `local`。
+- **多租户鉴权**：User/Tenant 模型 + JWT 认证 + 资源租户隔离，所有接口默认需 Bearer 令牌。
+- **审批护栏**：高危工具调用需人工审批（fail-closed，超时 / 拒绝均拦截）。
+- **持久化与产物落库**：运行轨迹 / 发现 / 审计 / 产物入库，支持取消与续跑。
+- **Token 用量统计**：会话级 token 累计落库，按每百万 token 单价估算成本。
+- **前端 SPA**：纯静态单页应用（vanilla JS + SSE），FastAPI 直接挂载 `web/`，零构建步骤。
 
-### 里程碑 2 新增端点
-- `POST /api/v1/tasks`：创建任务 → 护栏校验 → 状态 `queued` → 入队 ARQ
-- `POST /api/v1/tasks/{id}/enqueue`：将 pending/failed/cancelled 任务重新入队
-- `GET /api/v1/tasks/{id}/stream`：SSE 实时事件流（思考/工具调用/置信度/状态流转）
+## 里程碑进度
 
-### 里程碑 3 新增端点
-- `POST /api/v1/tasks/{id}/cancel`：请求取消运行/排队中的任务（协作式取消）
-- `GET  /api/v1/tasks/{id}`：任务详情（含 findings / artifacts / 事件计数）
-- `GET  /api/v1/tasks/{id}/events`：有序运行轨迹（task_events，可回放）
-- `GET  /api/v1/tasks/{id}/findings`：该任务发现的漏洞/风险点
-- `GET  /api/v1/tasks/{id}/artifacts`：该任务的产物（截图/PoC/报告/日志元数据）
-- `GET  /api/v1/audit`：全局结构化审计日志（可按 task/target/action 过滤）
+| 里程碑 | 内容 | 状态 |
+|--------|------|------|
+| M1 | FastAPI 骨架 / SQLAlchemy / CRUD / 事件总线 | ✅ |
+| M2 | ARQ 任务队列 / SSE 实时推送 / 授权护栏 | ✅ |
+| M3 | 持久化与产物落库 / 取消与续跑 | ✅ |
+| M4 | 多租户鉴权（JWT + 资源隔离） | ✅ |
+| M5 | 审批护栏 + 结构化报告导出 | ✅ |
+| M6 | 前端 SPA（vanilla JS + SSE） | ✅ |
+| M7 | 轻量扫描工作流（`ScanWorkflow`，Docker 缺失时回退） | ✅ |
+| M8 | 完整复刻原 `DeadEndAgent` 多智能体系统（主路径） | ✅ |
+| M8+ | 运行指令通道 / 系统状态对账 / 统一 LLM 抽象层预留 / Token 用量统计 | ✅ |
 
-### 里程碑 4 新增端点（鉴权）
-- `POST /api/v1/auth/register`：注册用户（归属指定租户 slug），返回 JWT
-- `POST /api/v1/auth/login`：邮箱/密码登录，返回 JWT
-- `GET  /api/v1/auth/me`：当前登录用户信息
-- `POST /api/v1/auth/tenants`：创建租户
-- 所有 `/targets` `/tasks` `/audit` 等接口默认需 `Authorization: Bearer <JWT>`，且仅返回当前租户资源
+## API 接口
 
-### 里程碑 5 新增端点（审批护栏 + 报告）
-- `GET  /api/v1/approvals`：列出本租户审批请求（可按 status 过滤）
-- `GET  /api/v1/approvals/{id}`：审批请求详情
-- `POST /api/v1/approvals/{id}/decision`：批准/拒绝（fail-closed，超时/拒绝均拦截）
-- `GET  /api/v1/tasks/{id}/report`：结构化报告（JSON）
-- `GET  /api/v1/tasks/{id}/report/markdown`：Markdown 报告导出
-- `GET  /api/v1/tasks/{id}/report/json`：JSON 报告导出
+> 除 `/auth` 部分端点外，所有接口默认需 `Authorization: Bearer <JWT>`，并按租户隔离。
+> `{task_id}` 为任务 ID，`{approval_id}` 为审批请求 ID。
 
-### 里程碑 6 新增（前端 SPA）
-- 纯静态单页应用，由后端直接托管于 `/app`，无需 Node / 构建步骤。
-- 覆盖登录/注册、目标与任务 CRUD、SSE 实时事件流、审批决策、报告导出。
+### 鉴权（`/api/v1/auth`）
 
-### 里程碑 8 之后新增端点（M8+）
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/auth/register` | 注册用户（归属租户 slug），返回 JWT；开放注册模式下租户不存在则自动创建 |
+| POST | `/auth/login` | 邮箱 / 密码登录，返回 JWT |
+| GET | `/auth/me` | 当前登录用户信息 |
+| POST | `/auth/tenants` | 创建租户 |
 
-- `POST /api/v1/tasks/{id}/instructions`：向运行中任务追加指令（`instruction`），由 Worker 协作式检查点消费并注入主控 Agent 上下文。
-- `GET  /api/v1/tasks/{id}/live`：任务实时态聚合（`TaskLiveState`）——当前阶段/智能体、执行计划 `PlanSummary`、待生效指令数、最近事件，供控制台中栏展示。
-- `GET  /api/v1/system/worker-status`：ARQ Worker 在线情况与队列积压（基于 `arq:queue:health-check` 键）。
-- `POST /api/v1/system/task-reconcile`：任务状态对账，收敛幽灵任务（取消标志 / 队列丢失 / 超时三类终止）。
+### 目标（`/api/v1/targets`）
 
-> 上述端点默认需 `Authorization: Bearer <JWT>`，并按租户隔离。
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/targets` | 列出租户下的授权目标 |
+| POST | `/targets` | 创建目标（`in_scope` / `out_of_scope` 以 JSONB 存储） |
+| GET/PUT/DELETE | `/targets/{target_id}` | 目标 CRUD |
 
-> 实现说明（关联修复）：
-> - `/auth/register` 在开放注册模式下，若 `tenant_slug` 对应租户不存在则**自动创建租户**，使自助注册自洽。生产环境关闭开放注册（`POBI_V2_ALLOW_OPEN_REGISTRATION=false`）后，需先用 `POST /auth/tenants` 预建租户。
-> - `Target.in_scope` / `out_of_scope` 以 **JSONB** 列存储（列表原生读写），前端直接获得数组。
+### 任务（`/api/v1/tasks`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/tasks` | 任务列表（含 token 三列） |
+| POST | `/tasks` | 创建任务 -> 护栏校验 -> 状态 `queued` -> 入队 ARQ |
+| GET | `/tasks/{task_id}` | 任务详情（含 findings / artifacts / 事件计数） |
+| POST | `/tasks/{task_id}/enqueue` | 重新入队 pending / failed / cancelled 任务 |
+| POST | `/tasks/{task_id}/cancel` | 协作式取消运行 / 排队中的任务 |
+| GET | `/tasks/{task_id}/stream` | SSE 实时事件流（思考 / 工具调用 / 置信度 / 状态） |
+| GET | `/tasks/{task_id}/live` | 实时态聚合（当前阶段 / 智能体 / 计划 / 待生效指令） |
+| POST | `/tasks/{task_id}/instructions` | 向运行中任务追加指令，协作式检查点消费注入上下文 |
+| GET | `/tasks/usage/summary` | 全部任务 token 用量汇总（含已完成任务拆分） |
+| GET | `/tasks/{task_id}/usage` | 单任务 token 用量明细 |
+
+### 持久化查询（`/api/v1`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/tasks/{task_id}/events` | 有序运行轨迹（可回放） |
+| GET | `/tasks/{task_id}/findings` | 该任务发现的漏洞 / 风险点 |
+| GET | `/tasks/{task_id}/artifacts` | 该任务的产物（截图 / PoC / 报告 / 日志元数据） |
+| GET | `/audit` | 全局结构化审计日志（可按 task / target / action 过滤） |
+
+### 审批（`/api/v1/approvals`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/approvals` | 列出本租户审批请求（可按 status 过滤） |
+| GET | `/approvals/{approval_id}` | 审批请求详情 |
+| POST | `/approvals/{approval_id}/decision` | 批准 / 拒绝（fail-closed） |
+
+### 报告（`/api/v1/tasks`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/tasks/{task_id}/report` | 结构化报告（JSON） |
+| GET | `/tasks/{task_id}/report/markdown` | Markdown 报告导出 |
+| GET | `/tasks/{task_id}/report/json` | JSON 报告导出 |
+
+### 系统（`/api/v1/system`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/system/worker-status` | ARQ Worker 在线情况与队列积压 |
+| POST | `/system/task-reconcile` | 任务状态对账，收敛幽灵任务（取消标志 / 队列丢失 / 超时） |
+
+### 定价（`/api/v1/pricing`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/pricing` | 读取全局价格配置（单条 upsert，id 固定 `default`） |
+| PUT | `/pricing` | 更新输入 / 输出每百万 token 单价与币种 |
 
 ## 目录结构
 
@@ -89,7 +121,7 @@ pobi_v2/
 ├── alembic/
 │   ├── env.py
 │   └── versions/
-├── web/                     # M6 前端 SPA（由 FastAPI 直接挂载，无需构建）
+├── web/                     # 前端 SPA（FastAPI 直接挂载，无需构建）
 │   ├── index.html
 │   └── static/
 │       ├── css/styles.css
@@ -105,43 +137,45 @@ pobi_v2/
     │   └── seed.py          # 启动幂等 seed admin
     ├── db/
     │   ├── session.py       # engine / session / Base
-    │   ├── models.py        # Tenant/User/Target/Task/ApprovalRequest/Finding/AuditEvent/TaskEvent/Artifact
+    │   ├── models.py        # Tenant/User/Target/Task/ApprovalRequest/Finding/AuditEvent/TaskEvent/Artifact/PricingConfig
     │   └── persistence.py   # 落库辅助（事件/发现/审计/产物）
     ├── schemas/
     │   ├── target.py
-    │   ├── task.py          # 含 PlanStep / TaskLiveState / TaskInstructionIn
+    │   ├── task.py          # 含 PlanStep / TaskLiveState / TaskInstructionIn / TaskUsage / UsageSummary
     │   ├── persistence.py   # 查询返回 Schema
     │   ├── auth.py          # 用户/租户/令牌 Schema
-    │   └── approval.py      # 审批请求 Schema
+    │   ├── approval.py      # 审批请求 Schema
+    │   └── pricing.py       # 价格配置 Schema
     ├── routers/
     │   ├── auth.py          # 注册/登录/me/租户
     │   ├── targets.py       # 租户隔离
-    │   ├── tasks.py         # 含 cancel / live，租户隔离
+    │   ├── tasks.py         # 任务 CRUD / cancel / live / usage，租户隔离
     │   ├── instruction.py   # 运行指令追加（M8+）
-    │   ├── system.py        # Worker 状态 + 任务对账（M8+）
     │   ├── stream.py        # SSE，租户隔离
     │   ├── persistence.py   # findings/events/artifacts/audit，租户隔离
-    │   ├── approval.py      # M5 审批请求列表/决策
-    │   └── report.py        # M5 报告导出
+    │   ├── approval.py      # 审批请求列表/决策
+    │   ├── report.py        # 报告导出
+    │   ├── pricing.py       # LLM 价格配置 GET/PUT
+    │   └── system.py        # Worker 状态 + 任务对账（M8+）
     ├── llm/                 # 统一 LLM 抽象层（LiteLLM+Instructor），预留未接入消费方
     │   ├── __init__.py
     │   ├── client.py        # complete / complete_json / chat
     │   ├── config.py        # 多供应商模型规格解析（本地优先）
     │   └── types.py         # ModelSpec / LLMMessage / UsageRecord / LLMError
     └── engine/
-        ├── event_bus.py           # 事件总线（对接 pobi_agent EventHooks）
+        ├── event_bus.py           # 事件总线（对接 pobi_agent EventHooks）+ 会话级 token 累计
         ├── agent_adapter.py       # CoreAgent/PobiAgent 适配层（含审批回调挂载）
         ├── guardrails.py          # 授权范围护栏（复用 scan_tools.build_scope_policy）
-        ├── scan_workflow.py       # M7 扫描工作流（复刻 DeadEndAgent 三阶段）
+        ├── scan_workflow.py       # M7 扫描工作流（复刻 DeadEndAgent 两阶段，Docker 缺失时回退）
         ├── scan_tools.py          # M7 HTTP 侦察(httpx)+受限 shell（复用 ScopePolicy 闸门）
         ├── deadend_runner.py      # M8 完整引擎适配层（驱动原 DeadEndAgent）
-        ├── executor.py            # 任务执行管线（驱动 deadend_runner / 落库/取消/续跑）
+        ├── executor.py            # 任务执行管线（驱动 deadend_runner / 落库 / 取消 / 续跑 / token 落库）
         ├── instruction_channel.py # 运行指令通道（与 cancel_state 同构，memory/redis）
         ├── queue.py               # ARQ 队列
-        ├── worker.py             # ARQ WorkerSettings
-        ├── cancel_state.py       # 取消标志存储（memory/redis）
-        ├── approval.py           # M5 审批引擎（判定/决策/回调）
-        └── report.py             # M5 结构化报告渲染
+        ├── worker.py              # ARQ WorkerSettings
+        ├── cancel_state.py        # 取消标志存储（memory/redis）
+        ├── approval.py            # M5 审批引擎（判定/决策/回调）
+        └── report.py              # M5 结构化报告渲染
 ```
 
 > **注**：`pobi_agent/`（内嵌 AI 引擎）位于**仓库根目录**，非 `pobi_v2/pobi_v2/` 子包；通过 uv workspace 复用。
@@ -169,33 +203,32 @@ API 文档： http://localhost:8000/docs
 
 ### 前端访问
 
-M6 引入纯静态前端 SPA，由后端直接托管，**无需 Node / 构建步骤**：
+纯静态前端 SPA 由后端直接托管，**无需 Node / 构建步骤**：
 
 ```bash
 # 后端启动后直接访问
 open http://localhost:8000/app
 ```
 
-- 登录页：邮箱/密码登录，或开放注册（默认开启，生产请置
-  `POBI_V2_ALLOW_OPEN_REGISTRATION=false`）。
-- 主界面：左侧切换「任务 / 授权目标 / 审批 / 审计」。
-  - **任务**：新建（校验授权范围 → 入队）、查看详情、SSE 实时事件流、取消/重入队、报告导出。
+- 登录页：邮箱 / 密码登录，或开放注册（默认开启，生产请置 `POBI_V2_ALLOW_OPEN_REGISTRATION=false`）。
+- 主界面左侧切换页面：
+  - **任务看板**：新建（校验授权范围 -> 入队）、查看详情、SSE 实时事件流、取消 / 重入队、报告导出；任务控制台内嵌 token 概览卡片。
   - **授权目标**：管理 `in_scope` / `out_of_scope`，护栏据此拒绝越权任务。
-  - **审批**：高危工具调用待审批时，可一键批准/拒绝（fail-closed）。
+  - **审批**：高危工具调用待审批时，可一键批准 / 拒绝（fail-closed）。
   - **审计**：按时间倒序查看全局审计事件。
+  - **Token 用量**：全局汇总卡片 + 价格配置 + 任务明细表，按每百万 token 单价估算成本。
 - 静态资源挂载于 `/static`，SPA 路由走 `/web/*`（非资源回退 `index.html`）。
 
 > 仅做本地文件打开（`file://`）不可用，必须经过后端 `/app` 以携带同源 Cookie 与 CORS。
 
 ### 端到端流程
+
 1. `POST /api/v1/targets` 创建授权目标（填写 `in_scope` / `out_of_scope`）。
-2. `POST /api/v1/tasks` 创建任务（自动校验授权范围 → 入队）。
-3. 前端订阅 `GET /api/v1/tasks/{id}/stream` 实时查看 Agent 思考与工具调用。
+2. `POST /api/v1/tasks` 创建任务（自动校验授权范围 -> 入队）。
+3. 前端订阅 `GET /api/v1/tasks/{task_id}/stream` 实时查看 Agent 思考与工具调用。
 4. Worker 执行完成后，任务状态流转为 `completed` / `failed`，结果写入 `Task.result`。
 
-> 注意：M2 的 Worker 默认以 `CoreAgent` 运行（事件钩子实时推流已验证）。
-> 完整渗透编排（威胁建模 / 利用 / 报告）可切换为 `DeadEndAgent`（见 `engine/executor.py`）。
-> 沙箱工具（Docker/Playwright/AVFS）需要相应环境，M3 将产物落库。
+> 沙箱工具（Docker / Playwright / AVFS）需要相应环境。M8 主路径默认驱动 `DeadEndAgent`，无 Docker 时回退 M7 `ScanWorkflow`（见 `engine/executor.py`）。
 
 ## 生产部署
 
@@ -217,7 +250,7 @@ POBI_V2_DB_NAME=pobi_v2
 # ---- 安全 ----
 POBI_V2_JWT_SECRET=<32 字节以上随机串，务必替换 dev 默认值>
 POBI_V2_ALLOW_OPEN_REGISTRATION=false   # 生产关闭开放注册
-POBI_V2_CORS_ORIGINS=https://your-domain  # 生产收敛 CORS（dev �放行 *，禁止与 credentials 同用 *）
+POBI_V2_CORS_ORIGINS=https://your-domain  # 生产收敛 CORS（dev 放行 *，禁止与 credentials 同用 *）
 
 # ---- LLM（透传给 pobi_agent.CoreAgent）----
 POBI_V2_MODEL=openai/gpt-4o
@@ -235,21 +268,21 @@ POBI_V2_TASK_MAX_TURNS=50
 # 构建镜像（强制 ACR 前缀）
 docker build -f Dockerfile.prod -t ${ACR_REGISTRY}/pobi_v2:1.0.0 .
 
-# 一键编排：postgres → redis → api → worker → web(nginx)
+# 一键编排：postgres -> redis -> api -> worker -> web(nginx)
 docker compose up -d --build
 
 # 数据库迁移（首启或升级时）
 docker compose exec api alembic upgrade head
 ```
 
-启动顺序依赖：`postgres`/`redis` 健康检查通过 → `api`/`worker` 启动 → `web`(nginx) 反代就绪。
+启动顺序依赖：`postgres` / `redis` 健康检查通过 -> `api` / `worker` 启动 -> `web`(nginx) 反代就绪。
 访问入口为 `http://<host>/`（nginx 已开启 Gzip 并正确透传 SSE 长连接）。
 
 ### 3. 服务说明
 
 | 服务 | 镜像 | 职责 |
 |------|------|------|
-| `postgres` | `${ACR_REGISTRY}/postgres:16-alpine` | 主数据存储（SQLModel/Alembic） |
+| `postgres` | `${ACR_REGISTRY}/postgres:16-alpine` | 主数据存储 |
 | `redis` | `${ACR_REGISTRY}/redis:7-alpine` | ARQ 队列 + 事件总线 + 取消状态 |
 | `api` | `pobi_v2:1.0.0` | FastAPI（gunicorn+uvicorn），提供 `/api/v1` 与 SSE |
 | `worker` | `pobi_v2:1.0.0` | `arq pobi_v2.engine.worker.WorkerSettings`，异步执行扫描 |
@@ -273,29 +306,6 @@ docker compose exec api alembic upgrade head
 或按 `NOTICE` 说明的途径提供源码归档。内嵌的 `pobi_agent/` 衍生自上游 pobi，其版权与
 许可证见 `pobi_agent/THIRD_PARTY_NOTICE.md`。
 
-### 8. 工程治理待办（架构评审 2026-08-13）
-
-详见 `docs/PROJECT_GOAL.md` § 2.4，要点：
-
-- **A1 分层倒置（P0）**：`pobi_agent/pobi_agent.py` 反向 `import pobi_v2.engine.instruction_channel`，构成内核→平台的抽象循环，须改为通过可注入协议（如 `InstructionSink`）解耦。
-- **A2 `python_scripts/` 失序（P1）**：堆积 20+ 个 DVWA 一次性测试脚本，应归档至 `scripts/dvwa/` 或删除。
-- **A3 `logs/` 入版本控制（P1）**：应加入 `.gitignore`。
-- **A4 `pobi_v2/llm/` 孤儿模块（P2）**：完整 LiteLLM 抽象层但无消费方，须接入或标注预留。
-- **A5 CORS 不安全（P2）**：`allow_origins=["*"]` + `allow_credentials=True` 被浏览器规范禁止，生产须收敛。
-- **A6 `main.py:web_app` 分支矛盾（P2）**：`if not index.exists(): return ... if index.exists() else ...` 自相矛盾，须修正。
-- **A7 `routers/system.py` 脆弱写法（P3）**：`len(active) if "active" in dir() else 0`，宜在 except 中初始化。
-
-### 9. 扫描内核优化待办（2026-08-13）
-
-详见 `docs/PROJECT_GOAL.md` § 2.5，属能力增强方向（非阻塞）：
-
-- **S1 侦查产物无格式化 / 无向量化**：定义 `ReconFinding` 结构化 schema，可检索内容做 embedding 入库，支撑 RAG 召回而非全文堆上下文。
-- **S2 侦查产物全量加载上下文**：改为按需检索 + 摘要 + 向量召回，仅拉取与当前子目标相关的侦查片段，避免上下文爆炸。
-- **S3 侦查缺指纹识别能力**：补充技术栈 / banner / 版本 / 中间件 / WAF / CDN 等指纹识别工具，将「识别」从 LLM 猜测下沉为确定性工具产出。
-- **S4 利用缺常见漏洞利用工具**：封装 Sqlmap / Xray / Nuclei 模板 / 专项 payload 库等为可审批、可复用的 `Tool`，让 LLM 决策「调哪个」而非手写 exploit。
-- **S5 Supervisor prompt 过于靶场化**：通用 `supervisor.instructions.jinja2` 含「必有 flag、无 flag 即转向」等假设，对真实业务系统不适用；按阶段拆分，去硬编码 flag 假设，侦查按「信息充分即停」、利用按漏洞/风险证据推进。
-- **S6 LLM 应专注决策、固定动作下沉工具**：确立「LLM 调度 + 工具执行」协作范式——LLM 做任务分解、工具选择、结果研判；确定性 / 高频 / 易错动作封装为可调工具，降低幻觉与 token 消耗。
-
 ### 7. 发布流程（AGENTS.md 规范）
 
 1. 本地源码修改验证通过后，更新 `version.txt` 与 `pyproject.toml` 版本号。
@@ -304,3 +314,9 @@ docker compose exec api alembic upgrade head
 4. Push 前确认是否打 Tag（`v*`）触发自动构建。
 5. 部署前确认最新镜像已就绪，再执行 `start-prod.sh`（或 `docker compose up -d`）。
 
+## 待办
+
+工程治理与扫描内核优化方向详见 `docs/PROJECT_GOAL.md`：
+
+- **§ 2.4 工程治理待办（A1–A7）**：分层倒置 / `python_scripts/` 失序 / `logs/` 入版本控制 / `llm/` 孤儿模块 / CORS 不安全 / `main.py:web_app` 分支矛盾 / `routers/system.py` 脆弱写法。
+- **§ 2.5 扫描内核优化方向（S1–S6）**：侦查产物结构化与向量化 / 上下文按需检索 / 指纹识别能力 / 漏洞利用工具补全 / Supervisor prompt 去靶场假设 / LLM 决策与工具执行分工。
