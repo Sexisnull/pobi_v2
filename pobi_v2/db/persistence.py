@@ -9,7 +9,7 @@ import json
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pobi_v2.db.models import (
@@ -49,10 +49,10 @@ async def record_task_event(
 
 
 async def _next_seq(session: AsyncSession, task_id: UUID) -> int:
-    stmt = select(TaskEvent.seq).where(TaskEvent.task_id == task_id)
+    stmt = select(func.max(TaskEvent.seq)).where(TaskEvent.task_id == task_id)
     result = await session.execute(stmt)
-    rows = result.scalars().all()
-    return (max(rows) + 1) if rows else 1
+    current = result.scalar()
+    return (current + 1) if current is not None else 1
 
 
 async def record_finding(

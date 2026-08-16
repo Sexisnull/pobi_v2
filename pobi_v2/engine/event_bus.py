@@ -18,6 +18,7 @@ from typing import Any, Optional
 from pobi_agent.hooks import EventHooks
 
 from pobi_v2.core.config import settings
+from pobi_v2.db.models import Task
 
 
 def _truncate(text: Any, limit: int) -> str:
@@ -134,7 +135,7 @@ class PobiV2EventHooks:
         asyncio.create_task(bus.publish(session_id, payload))
         asyncio.create_task(bus.publish("__plan_persist__", payload))
 
-    def emit_agent_end(self, session_id, agent_name, task, confidence_score, task_id=None,
+    def emit_agent_end(self, session_id, agent_name, task, confidence_score=None, task_id=None,
                        notes=None, thought_summary=None, attempts=None, role=None):
         payload = _wrap("agent_end", session_id, agent_name=agent_name, task=task,
                         confidence_score=confidence_score, task_id=task_id, notes=notes,
@@ -145,118 +146,101 @@ class PobiV2EventHooks:
 
     def emit_agent_error(self, session_id, agent_name, task, error_type, error_message,
                          task_id=None, partial_reasoning=None):
-        asyncio.create_task(
-            bus.publish(
-                session_id,
-                _wrap("agent_error", session_id, agent_name=agent_name, task=task,
-                      error_type=error_type, error_message=error_message,
-                      task_id=task_id, partial_reasoning=partial_reasoning),
-            )
-        )
+        payload = _wrap("agent_error", session_id, agent_name=agent_name, task=task,
+                        error_type=error_type, error_message=error_message,
+                        task_id=task_id, partial_reasoning=partial_reasoning)
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
 
     def emit_agent_thought(self, session_id, agent_name, thought, summary=None):
-        asyncio.create_task(
-            bus.publish(
-                session_id,
-                _wrap("agent_thought", session_id, agent_name=agent_name,
-                      thought=thought, summary=summary),
-            )
-        )
+        payload = _wrap("agent_thought", session_id, agent_name=agent_name,
+                        thought=thought, summary=summary)
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
 
     def emit_agent_routed(self, session_id, task, selected_agent, reasoning, available_agents=None):
-        asyncio.create_task(
-            bus.publish(
-                session_id,
-                _wrap("agent_routed", session_id, task=task, selected_agent=selected_agent,
-                      reasoning=reasoning, available_agents=available_agents),
-            )
-        )
+        payload = _wrap("agent_routed", session_id, task=task, selected_agent=selected_agent,
+                        reasoning=reasoning, available_agents=available_agents)
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
 
     def emit_tool_call_start(self, session_id, agent_name, tool_name, args="", tool_call_id=None):
-        asyncio.create_task(
-            bus.publish(
-                session_id,
-                _wrap("tool_call_start", session_id, agent_name=agent_name, tool_name=tool_name,
-                      args=args, tool_call_id=tool_call_id),
-            )
-        )
+        payload = _wrap("tool_call_start", session_id, agent_name=agent_name, tool_name=tool_name,
+                        args=args, tool_call_id=tool_call_id)
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
 
     def emit_tool_call_end(self, session_id, agent_name, tool_name, success, result="",
                            error=None, tool_call_id=None, duration_ms=None):
-        asyncio.create_task(
-            bus.publish(
-                session_id,
-                _wrap("tool_call_end", session_id, agent_name=agent_name, tool_name=tool_name,
-                      success=success, result=result, error=error,
-                      tool_call_id=tool_call_id, duration_ms=duration_ms),
-            )
-        )
+        payload = _wrap("tool_call_end", session_id, agent_name=agent_name, tool_name=tool_name,
+                        success=success, result=result, error=error,
+                        tool_call_id=tool_call_id, duration_ms=duration_ms)
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
 
     def emit_task_created(self, session_id, task, task_id, depth, parent_task_id=None, initial_confidence=0.0):
-        asyncio.create_task(
-            bus.publish(
-                session_id,
-                _wrap("task_created", session_id, task=task, task_id=task_id, depth=depth,
-                      parent_task_id=parent_task_id, initial_confidence=initial_confidence),
-            )
-        )
+        payload = _wrap("task_created", session_id, task=task, task_id=task_id, depth=depth,
+                        parent_task_id=parent_task_id, initial_confidence=initial_confidence)
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
 
     def emit_task_expanded(self, session_id, parent_task, parent_task_id, subtasks):
-        asyncio.create_task(
-            bus.publish(
-                session_id,
-                _wrap("task_expanded", session_id, parent_task=parent_task,
-                      parent_task_id=parent_task_id, subtasks=subtasks),
-            )
-        )
+        payload = _wrap("task_expanded", session_id, parent_task=parent_task,
+                        parent_task_id=parent_task_id, subtasks=subtasks)
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
 
     def emit_task_status_changed(self, session_id, task, task_id, old_status, new_status, confidence_score=None):
-        asyncio.create_task(
-            bus.publish(
-                session_id,
-                _wrap("task_status_changed", session_id, task=task, task_id=task_id,
-                      old_status=old_status, new_status=new_status,
-                      confidence_score=confidence_score),
-            )
-        )
+        payload = _wrap("task_status_changed", session_id, task=task, task_id=task_id,
+                        old_status=old_status, new_status=new_status,
+                        confidence_score=confidence_score)
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
 
     def emit_confidence_update(self, session_id, task, task_id, old_confidence, new_confidence, decision):
-        asyncio.create_task(
-            bus.publish(
-                session_id,
-                _wrap("confidence_update", session_id, task=task, task_id=task_id,
-                      old_confidence=old_confidence, new_confidence=new_confidence, decision=decision),
-            )
-        )
+        payload = _wrap("confidence_update", session_id, task=task, task_id=task_id,
+                        old_confidence=old_confidence, new_confidence=new_confidence, decision=decision)
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
 
     def emit_validation_result(self, session_id, task, task_id, valid, confidence_score, critique,
                                validation_token=None):
-        asyncio.create_task(
-            bus.publish(
-                session_id,
-                _wrap("validation_result", session_id, task=task, task_id=task_id, valid=valid,
-                      confidence_score=confidence_score, critique=critique,
-                      validation_token=validation_token),
-            )
-        )
+        payload = _wrap("validation_result", session_id, task=task, task_id=task_id, valid=valid,
+                        confidence_score=confidence_score, critique=critique,
+                        validation_token=validation_token)
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
 
     def emit_log_message(self, session_id, message, level="info", source=None, agent_name=None):
-        asyncio.create_task(
-            bus.publish(
-                session_id,
-                _wrap("log", session_id, message=message, level=level,
-                      source=source, agent_name=agent_name),
-            )
-        )
+        payload = _wrap("log", session_id, message=message, level=level,
+                        source=source, agent_name=agent_name)
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
 
-    def emit_plan_step(self, session_id, step_id, seq, title, status, detail=None):
+    def emit_report(self, session_id, summary, title=None):
+        """最终安全评估报告：推送到实时 SSE 并落库（前端聊天流以 report_task_event 渲染）。
+
+        summary 截断至 8000 字符，避免超大报告阻塞事件循环。
+        """
+        payload = _wrap("report_task_event", session_id, content=_truncate(summary, 8000),
+                        summary=_truncate(summary, 8000), title=title or "安全评估报告")
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
+
+    def emit_plan_step(self, session_id, step_id, seq, title, status, detail=None,
+                       total=None, completed=None):
         """结构化执行计划步骤：发布到事件总线（前端『执行计划』左栏消费）。
 
         status 取值：pending | running | completed | failed。
+        total/completed 可选，提供时前端进度以该权威值为准，避免新增行污染计数。
         同时发布到 __plan_persist__ 通道，由 persist_event_worker 落库（供 /plan 聚合）。
         """
         payload = _wrap("plan_step", session_id, step_id=step_id, seq=seq,
                         title=title, status=status, detail=detail)
+        if total is not None:
+            payload["payload"]["total"] = total
+        if completed is not None:
+            payload["payload"]["completed"] = completed
         asyncio.create_task(bus.publish(session_id, payload))
         asyncio.create_task(bus.publish("__plan_persist__", payload))
 
@@ -268,13 +252,10 @@ class PobiV2EventHooks:
 
     def emit_llm_iteration(self, session_id, agent_name, iteration, message_count):
         """LLM 迭代开始：推送迭代号与消息计数，前端渲染为『Iteration N』标题。"""
-        asyncio.create_task(
-            bus.publish(
-                session_id,
-                _wrap("llm_iteration", session_id,
-                      agent_name=agent_name, iteration=iteration, message_count=message_count),
-            )
-        )
+        payload = _wrap("llm_iteration", session_id,
+                        agent_name=agent_name, iteration=iteration, message_count=message_count)
+        asyncio.create_task(bus.publish(session_id, payload))
+        asyncio.create_task(bus.publish("__plan_persist__", payload))
 
     def emit_llm_input(self, session_id, agent_name, role, content, tool_name=None):
         """LLM 输入：本轮发给模型的最后一条消息（user prompt 或 tool result）。
@@ -288,9 +269,9 @@ class PobiV2EventHooks:
         }
         if tool_name:
             payload["tool_name"] = tool_name
-        asyncio.create_task(
-            bus.publish(session_id, _wrap("llm_input", session_id, **payload))
-        )
+        wrapped = _wrap("llm_input", session_id, **payload)
+        asyncio.create_task(bus.publish(session_id, wrapped))
+        asyncio.create_task(bus.publish("__plan_persist__", wrapped))
 
     def emit_llm_response(self, session_id, agent_name, response_text, thinking_text=None,
                            usage=None):
@@ -312,9 +293,9 @@ class PobiV2EventHooks:
         }
         if thinking_text:
             payload["thinking_text"] = _truncate(thinking_text, 2000)
-        asyncio.create_task(
-            bus.publish(session_id, _wrap("llm_response", session_id, **payload))
-        )
+        wrapped = _wrap("llm_response", session_id, **payload)
+        asyncio.create_task(bus.publish(session_id, wrapped))
+        asyncio.create_task(bus.publish("__plan_persist__", wrapped))
 
     def is_interrupted(self, session_id: str) -> bool:
         # M3：协作式取消——查询 cancel_state 的中断标志
@@ -330,10 +311,36 @@ async def persist_event_worker() -> None:
     agent_start/agent_end（运行视图）。其他事件由 SSE 实时消费，无需落库。
     """
     from pobi_v2.db.session import AsyncSessionLocal
-    from pobi_v2.db.persistence import record_task_event
+    from pobi_v2.db.persistence import record_task_event, _utcnow
 
-    persist_event_types = {"plan_step", "phase_changed", "agent_start", "agent_end"}
+    persist_event_types = {
+        # 原有骨架（计划/阶段/运行视图）
+        "plan_step",
+        "phase_changed",
+        "agent_start",
+        "agent_end",
+        "tool_call_start",
+        "tool_call_end",
+        "report_task_event",
+        # 新增明细（agent 思考与 LLM 过程，补全 API 不可见缺口）
+        "agent_thought",
+        "agent_error",
+        "agent_routed",
+        "llm_iteration",
+        "llm_input",
+        "llm_response",
+        "confidence_update",
+        "validation_result",
+        "task_created",
+        "task_expanded",
+        "task_status_changed",
+        "log",
+    }
     queue = await bus.subscribe("__plan_persist__")
+    # 节流：每落库 _TOUCH_EVERY 条事件刷新一次任务的 updated_at，
+    # 避免高频事件下每条都写库，同时防止长时间任务在 API 侧 updated_at 冻结。
+    _TOUCH_EVERY = 10
+    since_touch = 0
     while True:
         try:
             event = await queue.get()
@@ -348,6 +355,8 @@ async def persist_event_worker() -> None:
         try:
             from uuid import UUID as _UUID
 
+            from sqlalchemy import update
+
             task_uuid = _UUID(str(task_id))
             async with AsyncSessionLocal() as session:
                 detail = dict(event)
@@ -359,6 +368,14 @@ async def persist_event_worker() -> None:
                     event_type,
                     detail,
                 )
+                since_touch += 1
+                if since_touch >= _TOUCH_EVERY:
+                    since_touch = 0
+                    await session.execute(
+                        update(Task)
+                        .where(Task.id == task_uuid)
+                        .values(updated_at=_utcnow())
+                    )
                 await session.commit()
         except Exception:  # noqa: BLE001
             # 持久化失败不影响主流程与实时推送

@@ -113,9 +113,9 @@ class ADaPTAgent:
             ],
         )
         # 同步发出结构化执行计划步骤：控制台左栏「执行计划」据此渲染并高亮。
-        # 父节点作为第 0 步，子任务按 depth+顺序排序。
+        # 父节点从 1 开始编号，避免与威胁建模阶段(recon, seq=0)抢占同一序号导致前端重复"步骤 1"。
         ordered = [parent] + list(subtasks)
-        seq = 0
+        seq = 1
         for node in ordered:
             get_event_hooks().emit_plan_step(
                 session_id=self._session_id(),

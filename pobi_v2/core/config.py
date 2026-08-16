@@ -53,10 +53,24 @@ class Settings(BaseSettings):
     # 默认使用本地已下载的 xoxruns/sandboxed_kali，可通过环境变量覆盖。
     sandbox_image: str = "xoxruns/sandboxed_kali:latest"
 
+    # ---- 沙箱网络（全面容器化）----
+    # 所有组件（api/worker/postgres/redis/kali 沙箱）接入的统一 bridge 网络。
+    # 容器内经 DooD（挂载 /var/run/docker.sock）复用宿主机 Docker daemon，
+    # 跨容器访问使用服务名（postgres/redis/api），不再使用 host 网络。
+    sandbox_network: str = "pobi_net"
+
+    # ---- 全局共享 Kali 容器名 ----
+    # 常驻单实例 Kali 容器：shell 命令与 Python 验证共用，生命周期随 docker-compose。
+    # API/Worker 各自持有一个连接，底层指向同一容器。
+    kali_container_name: str = "pobi_kali"
+
     # ---- M4 鉴权 ----
     jwt_secret: str = "dev-insecure-change-me"
     # 注册开关：生产环境关闭开放注册
     allow_open_registration: bool = True
+    # PAT 加密密钥（POBI_V2_TOKEN_ENCRYPTION_KEY）：用于持久化加密 API 令牌明文，
+    # 支撑前端「点击查看」。未配置时令牌仍可创建与校验，但创建后不可再 reveal。
+    token_encryption_key: str = ""
 
     # ---- 启动时自动创建的 admin 账号（仅在库中无任何用户时 seed）----
     admin_email: str = "admin@example.com"

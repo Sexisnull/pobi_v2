@@ -435,6 +435,9 @@ class DeadEndAgent:
             session_id=str(self.session_id),
             validation_gate=self.validation_gate,
             reporter=self.reporter,
+            # memory workspace 以 agent_id 命名空间挂载，子 agent 必须用同一命名空间访问，
+            # 否则报 "AVFS workspace 'memory' is not mounted"（历史监控 131 次基础设施阻塞）。
+            memory_session_id=str(self.agent_id),
         )
         self.executor.set_auth_session_key(self._target_session_key())
         self.executor.set_memory_context(self.memory_context)

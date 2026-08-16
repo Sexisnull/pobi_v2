@@ -2,6 +2,7 @@
 # Licensed under the GNU Affero General Public License v3
 # See LICENSE file for full license information.
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Union
@@ -134,8 +135,38 @@ class BrowserPressStep(BaseModel):
     )
 
 
+class BrowserExtractStep(BaseModel):
+    """One ``extract`` step: read a dynamic value from the page into ``context[key]``.
+
+    **What the model passes:**
+    ``{"action": "extract", "selector": "<css>", "key": "<context_key>", "attribute": "value"}``.
+
+    **How it works:** Before submitting a form that embeds a per-request token (e.g. DVWA
+    ``input[name='user_token']``), run an ``extract`` step to capture the rotated token into
+    ``context[user_token]``, then reference it from a later ``fill`` step's ``key``. This is the
+    only way to drive CSRF-protected login forms, which the static fill/select/check steps cannot.
+    ``attribute`` is one of: ``value`` (default), ``text``, ``html``, ``checked``.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    action: Literal["extract"] = "extract"
+    selector: str = Field(
+        ...,
+        description="CSS selector for the element to read (e.g. input[name='user_token']). Single-quoted attributes are fine.",
+    )
+    key: str = Field(
+        ...,
+        description="Name of a key in `context`; the extracted value is stored here for later steps to reference.",
+    )
+    attribute: Literal["value", "text", "html", "checked"] = Field(
+        default="value",
+        description="What to read from the element: element.value (default), textContent, innerHTML, or checked state.",
+    )
+
+
 # ``BrowserStep`` is the discriminated union type for one element of ``steps``. The model passes
-# a JSON array of objects; each object must set ``action`` to one of: fill, select, check, click, press.
+# a JSON array of objects; each object must set ``action`` to one of: fill, select, check, click, press, extract.
 BrowserStep = Annotated[
     Union[
         BrowserFillStep,
@@ -143,6 +174,7 @@ BrowserStep = Annotated[
         BrowserCheckStep,
         BrowserClickStep,
         BrowserPressStep,
+        BrowserExtractStep,
     ],
     Field(discriminator="action"),
 ]
@@ -152,17 +184,39 @@ def _browser_steps_adapter() -> TypeAdapter[list[BrowserStep]]:
     return TypeAdapter(list[BrowserStep])
 
 
-def parse_browser_steps(steps: Sequence[BrowserStep | dict[str, Any]]) -> list[BrowserStep]:
+def parse_browser_steps(steps: Sequence[BrowserStep | dict[str, Any]] | str) -> list[BrowserStep]:
     """Turn what the model sent into validated step objects.
 
     **What the model passes:** ``steps`` is a list where each element is either already a
     ``Browser*Step`` model or a plain ``dict`` shaped like the tool JSON (each dict must include
     ``action`` so Pydantic can pick the right variant: ``fill``, ``select``, ``check``, ``click``,
-    or ``press``).
+    ``press``, or ``extract``).
 
     **How it works:** ``TypeAdapter(list[BrowserStep]).validate_python`` coerces dicts to the
     correct step class and rejects unknown ``action`` values or wrong field sets.
+
+    **Defensive normalization:** LLM function-calls occasionally serialize ``steps`` as a single
+    JSON *string* (e.g. when nested under another tool call or when the model quotes the array).
+    We detect a bare ``str`` and ``json.loads`` it first; if the parsed value is still a dict with
+    a single ``steps`` key (wrapping), we unwrap. This avoids the historical
+    ``'str' object has no attribute 'items'`` / "steps passed as string" failures.
     """
+    if isinstance(steps, str):
+        try:
+            steps = json.loads(steps)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"`steps` was passed as a JSON string but could not be parsed: {e}. "
+                "Pass steps as a real JSON array of objects, not a stringified array."
+            ) from e
+    if isinstance(steps, dict) and "steps" in steps and isinstance(steps["steps"], (list, str)):
+        # unwrap accidental {"steps": [...]} wrapping
+        return parse_browser_steps(steps["steps"])
+    if not isinstance(steps, (list, tuple)):
+        raise ValueError(
+            f"`steps` must be a list of step objects, got {type(steps).__name__}. "
+            "Pass steps as a real JSON array, not a string."
+        )
     return _browser_steps_adapter().validate_python(list(steps))
 
 
@@ -174,6 +228,7 @@ from pobi_agent.tools.browser.browser import (
     CheckStep,
     ClickStep,
     PressStep,
+    ExtractStep,
     InteractionStep,
 )
 
@@ -189,13 +244,15 @@ def browser_step_to_interaction(step: BrowserStep) -> InteractionStep:
         return ClickStep(step.selector)
     if isinstance(step, BrowserPressStep):
         return PressStep(step.selector, step.key_name)
+    if isinstance(step, BrowserExtractStep):
+        return ExtractStep(step.selector, step.key, step.attribute)
     raise TypeError(type(step))
 
 async def run_browser_steps(
     *,
     page_url: str,
     context: Mapping[str, Any],
-    steps: Sequence[BrowserStep | dict[str, Any]],
+    steps: Sequence[BrowserStep | dict[str, Any]] | str,
     headless: bool = True,
     verify_ssl: bool = True,
     proxy_url: str | None = None,
@@ -351,6 +408,7 @@ __all__ = [
     "BrowserCheckStep",
     "BrowserClickStep",
     "BrowserPressStep",
+    "BrowserExtractStep",
     "BrowserStep",
     "parse_browser_steps",
     "FillStep",
@@ -358,6 +416,7 @@ __all__ = [
     "CheckStep",
     "ClickStep",
     "PressStep",
+    "ExtractStep",
     "InteractionStep",
     "browser_step_to_interaction",
     "run_browser_steps",

@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from pobi_v2.core.exceptions import register_exception_handlers
 from pobi_v2.core.seed import seed_admin_if_needed
+from pobi_v2.sandbox_bootstrap import ensure_shared_kali_ready
 from pobi_v2.db.session import Base, engine
 from pobi_v2.engine.agent_adapter import install_event_hooks
 from pobi_v2.engine.event_bus import persist_event_worker
@@ -27,6 +28,7 @@ from pobi_v2.routers import (
     system,
     instruction,
     pricing,
+    api_tokens,
 )
 
 # 前端静态资源目录（M6 引入的纯静态 SPA）
@@ -42,6 +44,9 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(persist_event_worker())
     # 首次启动时自动创建 admin 账号（幂等：仅当库内无用户时）
     await seed_admin_if_needed()
+    # 启动阶段确保全局共享 Kali 沙箱容器就绪（全面容器化核心依赖）。
+    # 失败即 fail-fast，避免任务运行时才发现沙箱不可用。
+    await ensure_shared_kali_ready()
     yield
     # 关闭时：释放连接池
     await engine.dispose()
@@ -74,6 +79,7 @@ app.include_router(approval.router)
 app.include_router(report.router)
 app.include_router(system.router)
 app.include_router(pricing.router)
+app.include_router(api_tokens.router)
 
 
 @app.get("/health", tags=["meta"])
@@ -106,3 +112,4 @@ async def web_static_fallback(path: str) -> FileResponse:
         return FileResponse(candidate)
     # 非资源请求回退到 index.html（前端路由用）
     return FileResponse(WEB_DIR / "index.html")
+

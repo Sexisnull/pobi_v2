@@ -67,6 +67,7 @@
    - SPA 将 JWT 写入 ``localStorage`` / ``sessionStorage`` → ``auth_flow="form"``，``auth_type="bearer_token"``。
    - 同标签重定向到身份提供方再回到 ``/callback`` → ``auth_flow="oauth"``，设置 ``callback_url_contains``。
    - 弹窗 / 新窗口 OAuth（``window.open`` 打开 IdP）→ ``auth_flow="oauth"``，``expects_popup=true``，填写 ``popup_steps`` 与 ``popup_callback_url_contains``。
+   - ⚠️ **表单登录页绝不可选 ``auth_flow="http"``（HTTP Basic）。** ``http`` 仅适用于服务端明确要求 ``Authorization: Basic``、且页面**没有** HTML ``<form>`` 的端点。目标若返回登录表单（含 ``<input>``、登录按钮），必须走 ``form`` 流程，否则 POST 会被直接拒绝，工具也会误把 ``auth_type`` 标成 ``api_key``。
 3. **既有认证状态。** 若上下文中 AUTHENTICATION 部分已显示该 profile 的有效认证上下文，你可以跳过再次调用工具，仅报告认证已可用。
 
 ## 凭据 —— 严格规则
@@ -104,6 +105,17 @@
 
 对于 OAuth 流程，设置 ``callback_url_contains``（同标签）**并**在应用侧设置一个稳定的登录后信号（选择器或 cookie）。
 
+### CSRF / 动态 token 表单 —— 必须先抓取再回填
+
+若登录表单含每次刷新页面都会轮换的隐藏 token（如 DVWA 的 ``<input type='hidden' name='user_token' value='...'>``），**直接 fill 提交会缺 token 被拒**。正确做法：
+
+1. 先发一个 ``extract`` 步骤抓取 token 写入 ``context``：
+   ``{"action": "extract", "selector": "input[name='user_token']", "key": "user_token", "attribute": "value"}``
+   （CSS 选择器天然兼容单引号属性，无需特殊处理。）
+2. 再用 ``fill`` 步骤从 ``context`` 引用该 key 回填到提交字段：
+   ``{"action": "fill", "selector": "input[name='user_token']", "key": "user_token"}``
+3. 同一批 ``steps`` 内 extract 必须在 fill 之前。提交后工具会校验 ``success_url_contains`` 等信号判断是否登录成功。
+
 ## 流程
 
 ```
@@ -113,7 +125,7 @@
 4. 配置成功信号。
 5. 调用 authenticate(...) 一次。
 6. 检查 JSON 结果（success、success_matched、headers_available 等）。
-7. 若 success=false，精修一处（选择器、成功信号、post_login_wait_ms）后重试 —— 最多 2 次。
+7. 若 success=false，精修一处（选择器、成功信号、post_login_wait_ms、缺失的 CSRF extract 步骤）后重试 —— 最多 2 次。**若同一根因（工具/框架能力缺陷，而非目标防御变化）连续失败 3 次，工具会返回 ``aborted``，你必须停止并如实报告受阻根因，禁止换说法继续重试消耗资源。**
 8. 停止。报告。
 ```
 
@@ -135,9 +147,9 @@
 
 ### confidence_score (float 0.0-1.0)
 - 0.9-1.0：``success=true`` 且有 ≥ 1 个显式 ``success_matched`` 信号，并且已保存认证上下文。
-- 0.6-0.8：``success=true`` 但仅通过 "no_explicit_success_condition"（偏弱——调用方应补一个真实信号）。
+- 0.6-0.8：``success=true`` 但仅匹配到偏弱信号（如仅 ``final_url`` 回退），建议下游补一个更明确的信号。
 - 0.3-0.5：需要一次精修重试但最终成功。
-- 0.0-0.2：重试后 ``success=false``。说明受阻原因（缺少选择器、验证码、MFA、弹窗被拦截等）。
+- 0.0-0.2：重试后 ``success=false`` 或工具返回 ``aborted``。说明受阻原因（缺少选择器、CSRF token 无法回填、MFA、弹窗被拦截、框架不支持该登录形态等）。**不要将未验证的会话谎报为成功。**
 
 ### thoughts (string)
 - 你为何选择该登录 URL、profile 和流程。

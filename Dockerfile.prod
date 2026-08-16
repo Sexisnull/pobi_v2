@@ -18,7 +18,7 @@ RUN apt-get update \
 RUN pip install --no-cache-dir uv
 COPY pyproject.toml README.md ./
 RUN uv venv /opt/venv \
-    && uv pip install --python /opt/venv/bin/python --no-install-project --no-cache .
+    && uv pip install --python /opt/venv/bin/python --no-cache .
 
 # ---------- 阶段 2：运行时 ----------
 FROM python:3.12-slim AS runtime
@@ -30,19 +30,36 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# 仅运行时所需的最小系统库（Playwright/浏览器可选；默认不装以缩减体积）
+# 运行时系统库：
+# - curl / postgresql-client：健康检查与 DB 运维
+# - docker.io：docker CLI（DooD 需要），api/worker 经挂载的 /var/run/docker.sock
+#   复用宿主机 Docker daemon 连接全局共享 Kali 容器（无需容器内跑 daemon）
+# - ripgrep：ripgrepy 调用的系统二进制（AVFS 代码搜索能力，开箱即用）
+# - 浏览器系统依赖：Playwright / pydoll 浏览器自动化的 chromium 运行库（开箱即用）
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl postgresql-client \
+    && apt-get install -y --no-install-recommends \
+        curl postgresql-client docker.io ripgrep \
+        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+        libdrm2 libdbus-1-3 libxkbcommon0 libxcomposite1 libxdamage1 \
+        libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 \
+        libatspi2.0-0 fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
-# 从构建器复制纯净的虚拟环境
+# 浏览器二进制固化进镜像：Playwright + pydoll 均依赖 chromium，随镜像预装，
+# 用户无需任何后装即获得完整浏览器自动化 / 认证解析 / Web 资源提取能力。
+# PLAYWRIGHT_BROWSERS_PATH=0 将浏览器装到 venv 内，避免依赖外部路径。
+ENV PLAYWRIGHT_BROWSERS_PATH=0
+
+# 从构建器复制纯净的虚拟环境（必须在 playwright install 之前，否则 /opt/venv 不存在）
 COPY --from=builder /opt/venv /opt/venv
+
+# venv 就位后再安装 chromium 浏览器二进制
+RUN /opt/venv/bin/python -m playwright install --with-deps chromium
 
 # 复制应用源码（含内嵌 pobi_agent / pobi_prompts / web）
 COPY pobi_v2 ./pobi_v2
 COPY pobi_agent ./pobi_agent
 COPY pobi_prompts ./pobi_prompts
-COPY python_sandbox_client ./python_sandbox_client
 COPY alembic ./alembic
 COPY alembic.ini ./alembic.ini
 COPY web ./web
@@ -52,7 +69,8 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
 # 默认启动 API（worker 通过 command 覆盖）
+# 依赖仅含 uvicorn（无 gunicorn），直接用 uvicorn 拉起 ASGI 应用
+# 注：uvicorn CLI 无 --timeout 参数（那是 gunicorn 的），超时由应用层/反向代理控制
 EXPOSE 8000
-CMD ["gunicorn", "pobi_v2.main:app", \
-     "--worker-class", "uvicorn.workers.UvicornWorker", \
-     "--workers", "2", "--bind", "0.0.0.0:8000", "--timeout", "3600"]
+CMD ["uvicorn", "pobi_v2.main:app", \
+     "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

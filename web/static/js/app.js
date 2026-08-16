@@ -5,6 +5,11 @@
   const API = "/api/v1";
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+  function escapeHtml(s) {
+    return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
 
   // ---- 状态 ----
   const state = {
@@ -33,6 +38,19 @@
     if (!s) return "—";
     const d = new Date(s);
     return isNaN(d) ? String(s) : d.toLocaleString("zh-CN", { hour12: false });
+  }
+  /**
+   * 气泡时间戳：MM/DD HH:MM:SS。
+   * - 接受 ISO 字符串或毫秒时间戳；缺省回退到当前时间，避免无时间戳的气泡。
+   * - 跨天后会在日期段切换显示，年内不会重复年份，避免信息冗余。
+   */
+  function fmtClock(s) {
+    const d = s == null ? new Date() : new Date(s);
+    if (isNaN(d)) return "";
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(
+      d.getMinutes()
+    )}:${pad(d.getSeconds())}`;
   }
 
   // ---- API 封装 ----
@@ -174,6 +192,8 @@
         if (v === "approvals") loadApprovals();
         if (v === "audit") loadAudit();
         if (v === "tokens") loadTokens();
+        if (v === "apikeys") loadApiKeys();
+        if (v === "health") loadHealth();
       });
     });
 
@@ -186,7 +206,15 @@
       if (a === "refresh-approvals") loadApprovals();
       if (a === "refresh-audit") loadAudit();
       if (a === "refresh-tokens") loadTokens();
+      if (a === "refresh-apikeys") loadApiKeys();
+      if (a === "new-apikey") openApiKeyModal();
+      if (a === "submit-apikey") createApiKey();
+      if (a === "reveal-apikey") revealApiKey(act.dataset.id);
+      if (a === "revoke-apikey") revokeApiKey(act.dataset.id);
       if (a === "reconcile") triggerReconcile();
+      if (a === "refresh-health") loadHealth();
+      if (a === "run-probe") runProbe();
+      if (a === "cancel-modal") closeModal();
     });
 
     // 模态 / 抽屉关闭
@@ -324,6 +352,150 @@
         </tr>`;
       })
       .join("");
+  }
+
+  // ---- API 令牌（PAT）管理 ----
+  function fmtDateTime(v) {
+    if (!v) return "—";
+    const d = new Date(v);
+    return isNaN(d) ? "—" : d.toLocaleString();
+  }
+
+  async function loadApiKeys() {
+    const tbody = $("#apikey-table tbody");
+    const empty = $("#apikey-empty");
+    tbody.innerHTML = `<tr><td colspan="7" class="muted">加载中…</td></tr>`;
+    try {
+      const list = await api("/tokens");
+      if (!Array.isArray(list) || list.length === 0) {
+        tbody.innerHTML = "";
+        empty.classList.remove("hidden");
+        return;
+      }
+      empty.classList.add("hidden");
+      tbody.innerHTML = list
+        .map((k) => {
+          const scopes = (k.scopes || []).join(", ") || "*";
+          const expired = k.expires_at && new Date(k.expires_at) < new Date();
+          const statusCls = k.revoked ? "revoked" : expired ? "expired" : "active";
+          const statusTxt = k.revoked ? "已吊销" : expired ? "已过期" : "有效";
+          return `<tr data-id="${k.id}">
+            <td><span class="token-name">${escapeHtml(k.name)}</span></td>
+            <td><span class="token-key">${escapeHtml(k.prefix)}...</span></td>
+            <td><span class="token-scope">${escapeHtml(scopes)}</span></td>
+            <td><span class="token-expiry">${fmtDateTime(k.expires_at) || "长期"}</span></td>
+            <td><span class="token-expiry">${fmtDateTime(k.last_used_at) || "—"}</span></td>
+            <td><span class="token-status ${statusCls}"><i class="status-dot"></i>${statusTxt}</span></td>
+            <td class="col-action">
+              <button class="btn ghost xs" data-action="reveal-apikey" data-id="${k.id}">查看</button>
+              <button class="btn danger xs" data-action="revoke-apikey" data-id="${k.id}" ${k.revoked ? "disabled style=opacity:.4;cursor:not-allowed" : ""}>吊销</button>
+            </td>
+          </tr>`;
+        })
+        .join("");
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="7" class="muted">加载失败：${escapeHtml(e.message || e)}</td></tr>`;
+    }
+  }
+
+  function openApiKeyModal() {
+    openModal(`
+      <h3 style="margin-bottom:4px">新建 API 令牌</h3>
+      <p class="muted" style="margin-bottom:16px;font-size:12px">生成后请立即保存明文令牌，仅显示一次。</p>
+      <div class="apikey-form">
+        <div class="form-row">
+          <label>名称</label>
+          <input id="ak-name" type="text" placeholder="例如：benchmark-script" />
+        </div>
+        <div class="form-hint">用于标识用途，如 ci-cd-deploy、benchmark-script</div>
+        <div class="form-row">
+          <label>有效期</label>
+          <input id="ak-expire" type="number" min="1" max="3650" placeholder="留空 = 长期有效" />
+          <span style="font-size:12px;color:var(--text-muted)">天</span>
+        </div>
+        <div class="form-row">
+          <label>权限范围</label>
+          <input id="ak-scopes" type="text" placeholder="task:write, target:read" />
+        </div>
+        <div class="form-hint">逗号分隔，留空表示全量权限（*）</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn ghost" data-action="cancel-modal">取消</button>
+        <button class="btn primary" data-action="submit-apikey">生成令牌</button>
+      </div>
+    `);
+  }
+
+  async function createApiKey() {
+    const name = ($("#ak-name").value || "").trim();
+    if (!name) {
+      alert("请填写名称");
+      return;
+    }
+    const expireRaw = ($("#ak-expire").value || "").trim();
+    const scopesRaw = ($("#ak-scopes").value || "").trim();
+    const body = {
+      name,
+      expires_in_days: expireRaw ? Number(expireRaw) : null,
+      scopes: scopesRaw ? scopesRaw.split(",").map((s) => s.trim()).filter(Boolean) : [],
+    };
+    try {
+      const created = await api("/tokens", { method: "POST", body });
+      openModal(`
+        <h3 style="margin-bottom:4px">令牌已生成</h3>
+        <p class="muted" style="margin-bottom:12px;font-size:12px">
+          请立即复制保存，明文仅显示这一次${created.revealable ? "（之后可再次查看）" : "（未配置加密密钥，之后无法查看）"}。
+        </p>
+        <div class="result-box">
+          <pre id="ak-plain">${escapeHtml(created.plaintext_token)}</pre>
+          <div class="copy-row">
+            <span class="muted" style="font-size:11px">点击复制到剪贴板</span>
+            <button class="btn primary xs" id="ak-copy">复制令牌</button>
+        </div>
+      `);
+      $("#ak-copy").onclick = () => {
+        const t = $("#ak-plain").textContent;
+        navigator.clipboard?.writeText(t);
+        $("#ak-copy").textContent = "已复制";
+      };
+      loadApiKeys();
+    } catch (e) {
+      alert("创建失败：" + (e.message || e));
+    }
+  }
+
+  async function revealApiKey(id) {
+    try {
+      const r = await api(`/tokens/${id}/reveal`, { method: "POST", body: {} });
+      openModal(`
+        <h3 style="margin-bottom:4px">令牌明文</h3>
+        <p class="muted" style="margin-bottom:12px;font-size:12px">请妥善保管，勿泄露给他人。</p>
+        <div class="result-box">
+          <pre id="ak-plain">${escapeHtml(r.plaintext_token)}</pre>
+          <div class="copy-row">
+            <span class="muted" style="font-size:11px">点击复制到剪贴板</span>
+            <button class="btn primary xs" id="ak-copy">复制令牌</button>
+          </div>
+        </div>
+      `);
+      $("#ak-copy").onclick = () => {
+        const t = $("#ak-plain").textContent;
+        navigator.clipboard?.writeText(t);
+        $("#ak-copy").textContent = "已复制";
+      };
+    } catch (e) {
+      alert("查看失败：" + (e.message || e));
+    }
+  }
+
+  async function revokeApiKey(id) {
+    if (!confirm("确认吊销该令牌？吊销后使用该令牌的脚本将无法调用 API。")) return;
+    try {
+      await api(`/tokens/${id}`, { method: "DELETE" });
+      loadApiKeys();
+    } catch (e) {
+      alert("吊销失败：" + (e.message || e));
+    }
   }
 
   // ---- 模态 / 抽屉 ----
@@ -1196,44 +1368,48 @@
   function eventToChat(ev) {
     const type = ev.type || ev.event_type || "event";
     const p = ev.payload || {};
+    // 事件时间戳：优先用后端持久化字段 created_at；其次兼容 timestamp / at；最终由 appendChat 兜底为前端当前时间
+    const ts = ev.created_at || ev.timestamp || ev.at;
+    // 统一给气泡对象追加 created_at，避免每个分支手工塞字段
+    const withTs = (o) => (o ? { ...o, created_at: o.created_at || ts } : o);
     if (type === "thought")
-      return { role: "ai", kind: "thought", text: p.text || p.content || JSON.stringify(p) };
+      return withTs({ role: "ai", kind: "thought", text: p.text || p.content || JSON.stringify(p) });
     if (type === "tool_call_start")
-      return { role: "ai", kind: "tool", text: `工具调用 · ${p.name || ""}` + (p.args ? "\n" + JSON.stringify(p.args) : "") };
+      return withTs({ role: "ai", kind: "tool", text: `工具调用 · ${p.name || ""}` + (p.args ? "\n" + JSON.stringify(p.args) : "") });
     if (type === "tool_call_end")
-      return { role: "ai", kind: "tool", text: `工具返回 · ${p.name || ""}` + (p.result ? "\n" + JSON.stringify(p.result).slice(0, 400) : "") };
+      return withTs({ role: "ai", kind: "tool", text: `工具返回 · ${p.name || ""}` + (p.result ? "\n" + JSON.stringify(p.result).slice(0, 400) : "") });
     if (type === "confidence")
-      return { role: "ai", kind: "status", text: `置信度 ${p.value ?? p.confidence ?? ""}` };
+      return withTs({ role: "ai", kind: "status", text: `置信度 ${p.value ?? p.confidence ?? ""}` });
     if (type === "task_status_changed")
-      return { role: "ai", kind: "status", text: `状态变更 → ${p.new_status || ""}` };
+      return withTs({ role: "ai", kind: "status", text: `状态变更 → ${p.new_status || ""}` });
     if (type === "validation")
-      return { role: "ai", kind: "validation", text: p.message || p.detail || "验证结果" };
+      return withTs({ role: "ai", kind: "validation", text: p.message || p.detail || "验证结果" });
     if (type === "result")
-      return { role: "ai", kind: "result", text: p.content || p.summary || "阶段性结果" };
+      return withTs({ role: "ai", kind: "result", text: p.content || p.summary || "阶段性结果" });
     if (type === "report_task_event")
-      return { role: "ai", kind: "report", text: p.content || p.summary || "报告生成" };
+      return withTs({ role: "ai", kind: "report", title: p.title || "安全评估报告", text: p.content || p.summary || "报告生成" });
     if (type === "agent_start")
-      return { role: "ai", kind: "status", text: `智能体启动 · ${p.agent_name || ""}` };
+      return withTs({ role: "ai", kind: "status", text: `智能体启动 · ${p.agent_name || ""}` });
     if (type === "agent_end")
-      return { role: "ai", kind: "status", text: `智能体完成 · ${p.agent_name || ""}` };
+      return withTs({ role: "ai", kind: "status", text: `智能体完成 · ${p.agent_name || ""}` });
     if (type === "phase_changed")
-      return { role: "ai", kind: "phase", text: `阶段流转 → ${p.new_phase || ""}` };
+      return withTs({ role: "ai", kind: "phase", text: `阶段流转 → ${p.new_phase || ""}` });
     // ── LLM 可观测性：迭代 / 输入 / 响应（Worker 终端有但前端缺失的关键信息）──
     if (type === "llm_iteration")
-      return { role: "ai", kind: "llm-iter", text: `Iteration ${p.iteration ?? "?"} · ${p.message_count ?? 0} messages`, agentName: p.agent_name || "" };
+      return withTs({ role: "ai", kind: "llm-iter", text: `Iteration ${p.iteration ?? "?"} · ${p.message_count ?? 0} messages`, agentName: p.agent_name || "" });
     if (type === "llm_input") {
       const label = p.role === "tool"
         ? `LLM Input · Tool Result (${p.tool_name || "?"})`
         : `LLM Input · ${p.role || "user"}`;
-      return { role: "ai", kind: "llm-in", text: label, detail: p.content || "", agentName: p.agent_name || "" };
+      return withTs({ role: "ai", kind: "llm-in", text: label, detail: p.content || "", agentName: p.agent_name || "" });
     }
     if (type === "llm_response") {
       let body = p.response_text || "";
       if (p.thinking_text) body = `[Thinking]\n${p.thinking_text}\n\n[Response]\n${body}`;
-      return { role: "ai", kind: "llm-out", text: "LLM Response", detail: body, agentName: p.agent_name || "" };
+      return withTs({ role: "ai", kind: "llm-out", text: "LLM Response", detail: body, agentName: p.agent_name || "" });
     }
     if (type === "log") return null;
-    return { role: "ai", kind: "raw", text: `${type} ${JSON.stringify(p).slice(0, 300)}` };
+    return withTs({ role: "ai", kind: "raw", text: `${type} ${JSON.stringify(p).slice(0, 300)}` });
   }
 
   function appendChat(item) {
@@ -1268,11 +1444,20 @@
     const detailHtml = item.detail
       ? `<details class="bubble-detail"><summary>展开详情</summary><pre>${esc(item.detail)}</pre></details>`
       : "";
+    // 报告/结果类消息：正文较大，用可折叠面板包裹，默认折叠避免刷屏
+    const isLong = item.kind === "report" || item.kind === "result";
+    const bodyHtml = isLong
+      ? `<details class="bubble-detail bubble-report"${
+          item.kind === "report" ? " open" : ""
+        }><summary>${esc(item.title || (item.kind === "report" ? "安全评估报告" : "阶段性结果"))}</summary><pre>${esc(
+          item.text || ""
+        )}</pre></details>`
+      : `${esc(item.text || "")}${item.err ? '<span class="bubble-err"> ⚠</span>' : ""}${detailHtml}`;
     el.innerHTML = `
-      <div class="bubble-meta">${esc(meta)}</div>
-      <div class="bubble-body">${esc(item.text || "")}${
-        item.err ? '<span class="bubble-err"> ⚠</span>' : ""
-      }${detailHtml}</div>`;
+      <div class="bubble-meta"><span class="bubble-meta-label">${esc(meta)}</span><span class="bubble-time" title="${esc(
+        item.created_at || ""
+      )}">${esc(fmtClock(item.created_at || item.ts || item.time || item.at))}</span></div>
+      <div class="bubble-body">${bodyHtml}</div>`;
     box.appendChild(el);
     box.scrollTop = box.scrollHeight;
   }
@@ -1491,18 +1676,42 @@
         <span class="plan-seq"></span>
         <span class="plan-title"></span>
         <span class="plan-state"></span>`;
-      planList.appendChild(row);
+      // 按 seq 插入到正确位置，避免实时事件乱序追加导致步骤错排
+      const seq = typeof p.seq === "number" ? p.seq : null;
+      if (seq === null || seq < 0) {
+        planList.appendChild(row);
+      } else {
+        const rows = planList.querySelectorAll(".plan-step");
+        let inserted = false;
+        for (const r of rows) {
+          const rseq = Number(r.dataset.seq);
+          if (!isNaN(rseq) && rseq > seq) {
+            planList.insertBefore(row, r);
+            inserted = true;
+            break;
+          }
+        }
+        if (!inserted) planList.appendChild(row);
+      }
     }
+    // 记录序号，供后续插位排序使用
+    if (typeof p.seq === "number") row.dataset.seq = p.seq;
     row.className = `plan-step st-${p.status}`;
+    if (typeof p.seq === "number" && p.seq >= 0) {
+      row.querySelector(".plan-seq").textContent = p.seq + 1;
+    }
     if (p.title) row.querySelector(".plan-title").textContent = p.title;
     row.querySelector(".plan-state").textContent = planStateLabel(p.status);
-    // 刷新进度
-    refreshPlanProgress(planList);
+    // 刷新进度（以事件携带的总/完成数为准，避免新增行污染计数）
+    refreshPlanProgress(planList, p.total, p.completed);
   }
-  function refreshPlanProgress(planList) {
+  function refreshPlanProgress(planList, totalHint, completedHint) {
     const rows = planList.querySelectorAll(".plan-step");
-    const total = rows.length;
-    const completed = planList.querySelectorAll(".plan-step.st-completed").length;
+    const completedRows = planList.querySelectorAll(".plan-step.st-completed").length;
+    let total = totalHint != null ? totalHint : rows.length;
+    let completed = completedHint != null ? completedHint : completedRows;
+    // 运行时若实际完成行更多，以实际为准
+    if (completedRows > completed) completed = completedRows;
     const prog = $("#plan-progress");
     if (prog) prog.textContent = `${completed}/${total}`;
     const bar = $("#plan-bar-fill");
@@ -1699,6 +1908,216 @@
     } catch (err) {
       toast(err.message, true);
     }
+  }
+
+  // ---- 健康检查视图 ----
+  const HEALTH_CHECKS = ["worker", "kali", "llm", "probe"];
+  const healthState = { worker: null, kali: null, llm: null, probe: null };
+
+  function setBadge(cardEl, state, text) {
+    const badge = cardEl.querySelector("[data-badge]");
+    if (!badge) return;
+    badge.dataset.state = state; // ok | warn | err | idle
+    badge.textContent = text;
+  }
+  function setDetail(cardEl, html) {
+    const d = cardEl.querySelector("[data-detail]");
+    if (d) d.innerHTML = html;
+  }
+  function getCard(key) {
+    return $(`.health-card[data-check="${key}"]`);
+  }
+
+  function renderCheck(key, ok, detailHtml, badgeText) {
+    const card = getCard(key);
+    if (!card) return;
+    const state = ok === null ? "idle" : ok ? "ok" : "err";
+    setBadge(card, state, badgeText || (ok === null ? "检测中" : ok ? "正常" : "异常"));
+    if (detailHtml != null) setDetail(card, detailHtml);
+    healthState[key] = ok;
+    renderOverview();
+  }
+
+  function renderOverview() {
+    const ov = $("#health-overview");
+    const txt = $("#health-overview-text");
+    if (!ov || !txt) return;
+    // probe 段为「未探测」时不计入失败判定
+    const active = HEALTH_CHECKS.filter((k) => healthState[k] !== null);
+    const allOk = active.length > 0 && active.every((k) => healthState[k] === true);
+    const anyErr = active.some((k) => healthState[k] === false);
+    let state, label;
+    if (active.length === 0) {
+      state = "unknown";
+      label = "检测中…";
+    } else if (anyErr) {
+      state = "err";
+      label = "链路异常，存在不通的环节";
+    } else if (allOk) {
+      state = "ok";
+      label = "整体链路健康";
+    } else {
+      state = "warn";
+      label = "部分环节未检测";
+    }
+    ov.dataset.state = state;
+    txt.textContent = label;
+  }
+
+  async function loadHealth() {
+    // 重置三段实时状态为检测中；probe 段保留「未探测」初始文案
+    ["worker", "kali", "llm"].forEach((k) => {
+      healthState[k] = null;
+      const card = getCard(k);
+      if (card) { setBadge(card, "idle", "检测中"); setDetail(card, "—"); }
+    });
+    renderOverview();
+    // 并行拉取三段状态
+    Promise.allSettled([
+      api("/system/worker-status").then((d) => {
+        const ok = d.available && d.online;
+        const det = `在线：${d.online ? "是" : "否"}<br>队列积压：${d.queue_depth ?? "—"}` +
+          (d.detail ? `<br><span class="health-mono">${esc(d.detail).slice(0, 120)}</span>` : "");
+        renderCheck("worker", ok, det, ok ? "在线" : "离线");
+      }),
+      api("/system/kali-status").then((d) => {
+        const ok = d.available && d.healthy;
+        const det = `容器：${d.container_id ?? "—"}<br>退出码：${d.exit_code ?? "—"}` +
+          (d.stdout ? `<br><span class="health-mono">${esc(d.stdout).slice(0, 120)}</span>` : "") +
+          (d.error ? `<br><span class="health-err">${esc(d.error)}</span>` : "");
+        renderCheck("kali", ok, det, ok ? "健康" : "异常");
+      }),
+      api("/system/llm-status").then((d) => {
+        const ok = d.available && d.healthy;
+        const det = `模型：${d.model ?? "—"}<br>延迟：${d.latency_ms ?? "—"} ms<br>回复：${esc(d.reply ?? "—")}` +
+          (d.error ? `<br><span class="health-err">${esc(d.error)}</span>` : "");
+        renderCheck("llm", ok, det, ok ? "连通" : "异常");
+      }),
+    ]).catch(() => {});
+    // probe 段历史
+    loadLastProbe();
+  }
+
+  async function loadLastProbe() {
+    const card = $("#last-probe-card");
+    if (!card) return;
+    try {
+      const tasks = await api("/tasks?limit=50");
+      const probe = (tasks || []).filter((t) => t.kind === "probe").sort(
+        (a, b) => new Date(b.created_at) - new Date(a.created_at)
+      )[0];
+      if (!probe) {
+        card.innerHTML = `<div class="empty">尚未进行过探测</div>`;
+        const t = $("#last-probe-time");
+        if (t) t.textContent = "";
+        return;
+      }
+      renderLastProbeCard(probe);
+    } catch (err) {
+      card.innerHTML = `<div class="empty">加载失败：${esc(err.message)}</div>`;
+    }
+  }
+
+  async function renderLastProbeCard(probe) {
+    const card = $("#last-probe-card");
+    const timeEl = $("#last-probe-time");
+    // 若仍在进行中，补充一次轮询
+    let task = probe;
+    if (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
+      try {
+        task = await api(`/tasks/${task.id}`);
+      } catch (_) {}
+    }
+    const ok = task.status === "completed";
+    const st = ok ? "ok" : task.status === "failed" ? "err" : "warn";
+    if (timeEl) timeEl.textContent = "时间：" + fmtDate(task.created_at);
+    card.innerHTML = `
+      <div class="last-probe-row">
+        <span class="health-badge" data-state="${st}">${ok ? "成功" : task.status === "failed" ? "失败" : "进行中"}</span>
+        <span class="last-probe-name">${esc(task.name)}</span>
+      </div>
+      <div class="last-probe-result">
+        ${task.result ? esc(task.result) : (task.error ? `<span class="health-err">${esc(task.error)}</span>` : "（无结论）")}
+      </div>
+      <div class="last-probe-meta">任务 ID：${esc(task.id)}</div>`;
+  }
+
+  function openProbeModal(targets) {
+    const opts = targets.map((t) => `<option value="${t.id}">${esc(t.name)} — ${esc(t.url)}</option>`).join("");
+    const body = `
+      <h3>发起健康探测</h3>
+      <p class="modal-sub">选择已授权目标，Worker 将在共享 Kali 沙箱中对目标做一次连通性验证（curl 访问），并由模型给出结论。</p>
+      <form id="probe-form" class="auth-form">
+        <label>目标
+          <select name="target_id" required ${targets.length ? "" : "disabled"}>
+            ${targets.length ? opts : '<option>无可用目标</option>'}
+          </select>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" data-action="cancel-modal">取消</button>
+          <button type="submit" class="btn primary" ${targets.length ? "" : "disabled"}>发起探测</button>
+        </div>
+      </form>`;
+    openModal(body);
+    const form = $("#probe-form");
+    if (!form) return;
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const targetId = fd.get("target_id");
+      if (!targetId) return;
+      closeModal();
+      try {
+        const resp = await api("/system/probe", { method: "POST", body: { target_id: targetId } });
+        toast("探测任务已派发，正在执行…");
+        // 标记 probe 段为进行中
+        renderCheck("probe", null, "探测任务执行中…", "进行中");
+        pollProbeResult(resp.task_id);
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  }
+
+  async function runProbe() {
+    try {
+      const targets = await api("/targets");
+      if (!targets || !targets.length) {
+        toast("请先在「授权目标」中创建目标后再探测", true);
+        return;
+      }
+      openProbeModal(targets);
+    } catch (err) {
+      toast(err.message, true);
+    }
+  }
+
+  async function pollProbeResult(taskId) {
+    const card = getCard("probe");
+    const deadline = Date.now() + 110000; // 略大于后端 90s 硬超时
+    const tick = async () => {
+      try {
+        const t = await api(`/tasks/${taskId}`);
+        if (t.status === "completed" || t.status === "failed" || t.status === "cancelled") {
+          const ok = t.status === "completed";
+          const detail = ok
+            ? `<span class="health-ok">${esc(t.result || "目标可达")}</span>`
+            : `<span class="health-err">${esc(t.error || t.result || "探测失败")}</span>`;
+          renderCheck("probe", ok, detail, ok ? "通过" : "失败");
+          loadLastProbe();
+          return;
+        }
+        if (card) setDetail(card, "探测任务执行中…（" + t.status + "）");
+      } catch (err) {
+        if (card) setDetail(card, `<span class="health-err">${esc(err.message)}</span>`);
+      }
+      if (Date.now() > deadline) {
+        renderCheck("probe", false, "探测超时（>110s），请检查 Worker 状态", "超时");
+        return;
+      }
+      setTimeout(tick, 2000);
+    };
+    tick();
   }
 
   // ---- 初始化 ----

@@ -10,10 +10,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from uuid import UUID
 
-from pobi_v2.core.deps import get_current_user
+from pobi_v2.core.deps import get_current_user, require_scope
 from pobi_v2.core.exceptions import NotFoundError
-from pobi_v2.db.models import Task, TaskEvent, TaskStatus, User
+from pobi_v2.db.models import Task, TaskEvent, TaskStatus, Target, User
 from pobi_v2.db.session import get_session
 from pobi_v2.db.persistence import record_audit
 from pobi_v2.schemas.task import (
@@ -26,23 +27,23 @@ from pobi_v2.schemas.task import (
     PlanSummary,
     AgentRuntime,
     TaskLiveState,
+    EventReplay,
+    TaskEventRead,
 )
 from pobi_v2.engine.queue import enqueue_task
 from pobi_v2.engine.guardrails import check_scope
 from pobi_v2.engine.cancel_state import request_cancel
 
-router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"], dependencies=[Depends(get_current_user)])
+router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 
 
 @router.post("", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
 async def create_task(
     data: TaskCreate,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("tasks:write")),
 ) -> Task:
     # 校验 target 存在且属于当前租户
-    from pobi_v2.db.models import Target
-
     target = await session.get(Target, data.target_id)
     if target is None or target.tenant_id != user.tenant_id:
         raise NotFoundError("关联的目标不存在")
@@ -73,9 +74,9 @@ async def create_task(
 
 @router.post("/{task_id}/enqueue", response_model=TaskRead)
 async def re_enqueue_task(
-    task_id: str,
+    task_id: UUID,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("tasks:write")),
 ) -> Task:
     """将 pending 任务重新入队（队列曾不可用或手动触发）。"""
     task = await session.get(Task, task_id)
@@ -96,8 +97,8 @@ async def re_enqueue_task(
 @router.get("", response_model=list[TaskRead])
 async def list_tasks(
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
-    target_id: str | None = Query(default=None),
+    user: User = Depends(require_scope("tasks:read")),
+    target_id: UUID | None = Query(default=None),
     status_filter: TaskStatus | None = Query(default=None, alias="status"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -115,7 +116,7 @@ async def list_tasks(
 @router.get("/usage/summary", response_model=UsageSummary)
 async def usage_summary(
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("tasks:read")),
 ) -> UsageSummary:
     """全部任务的 token 用量汇总（发送 / 接收 / 总计，以及已完成任务拆分）。"""
     rows = await session.execute(
@@ -151,9 +152,9 @@ async def usage_summary(
 
 @router.get("/{task_id}", response_model=TaskRead)
 async def get_task(
-    task_id: str,
+    task_id: UUID,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("tasks:read")),
 ) -> Task:
     task = await session.get(Task, task_id)
     if task is None or task.tenant_id != user.tenant_id:
@@ -163,9 +164,9 @@ async def get_task(
 
 @router.get("/{task_id}/usage", response_model=TaskUsage)
 async def task_usage(
-    task_id: str,
+    task_id: UUID,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("tasks:read")),
 ) -> TaskUsage:
     """单次任务的 token 用量明细（发送 / 接收 / 总计）。"""
     task = await session.get(Task, task_id)
@@ -184,10 +185,10 @@ async def task_usage(
 
 @router.patch("/{task_id}", response_model=TaskRead)
 async def update_task(
-    task_id: str,
+    task_id: UUID,
     data: TaskUpdate,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("tasks:write")),
 ) -> Task:
     task = await session.get(Task, task_id)
     if task is None or task.tenant_id != user.tenant_id:
@@ -201,9 +202,9 @@ async def update_task(
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(
-    task_id: str,
+    task_id: UUID,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("tasks:write")),
 ) -> None:
     task = await session.get(Task, task_id)
     if task is None or task.tenant_id != user.tenant_id:
@@ -214,9 +215,9 @@ async def delete_task(
 
 @router.post("/{task_id}/cancel", response_model=TaskRead)
 async def cancel_task(
-    task_id: str,
+    task_id: UUID,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("tasks:write")),
 ) -> Task:
     """请求取消正在运行的任务（协作式取消，Worker 检测到后进入 cancelled）。"""
     task = await session.get(Task, task_id)
@@ -233,6 +234,26 @@ async def cancel_task(
         # 尚未开始运行，直接标记 cancelled
         task.status = TaskStatus.cancelled
         task.finished_at = _utcnow()
+
+    # 若任务正在 ARQ 队列/执行中，尝试从队列移除该 job：
+    # 1) 立即使 worker-status 的 queue_depth 回落（报告 C 的陈旧统计问题）；
+    # 2) 为 task-reconcile 对账提供「队列中已不存在」依据，及时回收幽灵任务。
+    # abort_job 仅移除调度项，已运行的协程由 executor 的子超时 + is_cancelled 兜底终止。
+    if task.status == TaskStatus.running:
+        try:
+            from pobi_v2.engine.queue import get_redis
+
+            redis = await get_redis()
+            try:
+                # ARQ 的 abort_job 通过 job_id（本服务以 task_id 对齐）标记中止，
+                # 并从 arq:queue / arq:in_progress 移除，使队列深度即时下降。
+                await redis.zrem("arq:queue", str(task.id))
+                await redis.zrem("arq:in_progress", str(task.id))
+            finally:
+                await redis.aclose()
+        except Exception:  # noqa: BLE001 — 队列清理失败不影响取消请求的记录
+            pass
+
     await record_audit(
         session, action="task.cancel_requested", outcome="success",
         task_id=task.id, target_id=task.target_id, tenant_id=user.tenant_id,
@@ -247,7 +268,7 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-async def _load_or_404(session: AsyncSession, task_id: str, tenant_id) -> Task:
+async def _load_or_404(session: AsyncSession, task_id: UUID, tenant_id) -> Task:
     task = await session.get(Task, task_id)
     if task is None or task.tenant_id != tenant_id:
         raise NotFoundError("任务不存在")
@@ -256,9 +277,9 @@ async def _load_or_404(session: AsyncSession, task_id: str, tenant_id) -> Task:
 
 @router.get("/{task_id}/plan", response_model=PlanSummary)
 async def get_task_plan(
-    task_id: str,
+    task_id: UUID,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("tasks:read")),
 ):
     """结构化执行计划：聚合 persisted plan_step 事件，按 seq 还原步骤顺序与状态。"""
     task = await session.get(Task, task_id)
@@ -301,22 +322,33 @@ async def get_task_plan(
 
 @router.get("/{task_id}/live", response_model=TaskLiveState)
 async def get_task_live(
-    task_id: str,
+    task_id: UUID,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("tasks:read")),
 ):
     """任务实时状态聚合：供控制台中栏顶部与运行视图即时渲染。"""
     task = await session.get(Task, task_id, options=[selectinload(Task.target)])
     if task is None or task.tenant_id != user.tenant_id:
         raise NotFoundError("任务不存在")
 
+    # 混合事件窗口：按类型分组各保留最近 N 条，再合并取全局最近 60 条，
+    # 避免高频骨架/明细事件把关键事件挤出固定 30 条窗口（报告 D 暴露的缺口）。
     ev_rows = await session.execute(
         select(TaskEvent)
         .where(TaskEvent.task_id == task_id)
         .order_by(TaskEvent.seq.desc())
-        .limit(30)
+        .limit(400)
     )
-    ev_objs = list(reversed(ev_rows.scalars().all()))
+    all_ev = list(reversed(ev_rows.scalars().all()))
+    _PER_TYPE = 12
+    _MIXED_CAP = 60
+    buckets: dict[str, list] = {}
+    for ev in all_ev:
+        buckets.setdefault(ev.event_type, []).append(ev)
+    mixed: list = []
+    for evs in buckets.values():
+        mixed.extend(evs[-_PER_TYPE:])
+    mixed.sort(key=lambda e: e.seq)
     recent_events = [
         {
             "seq": ev.seq,
@@ -324,13 +356,14 @@ async def get_task_live(
             "payload": ev.payload,
             "created_at": ev.created_at.isoformat() if ev.created_at else None,
         }
-        for ev in ev_objs
+        for ev in mixed[-_MIXED_CAP:]
     ]
+    last_event_at = all_ev[-1].created_at.isoformat() if all_ev else None
 
     current_phase = None
     current_agent = None
-    # 运行视图：从 recent 窗口取当前阶段（phase_changed 低频，不会被淹没）
-    for ev in ev_objs:
+    # 运行视图：从全量窗口取当前阶段（phase_changed 低频，不会被淹没）
+    for ev in all_ev:
         p = ev.payload or {}
         if ev.event_type == "phase_changed" and p.get("new_phase"):
             current_phase = p["new_phase"]
@@ -400,6 +433,30 @@ async def get_task_live(
     pending = await peek_instructions(str(task_id))
     target_url = getattr(task.target, "url", None) if getattr(task, "target", None) else None
 
+    # 运行视图：聚合每个 agent 正在/最近执行的工具调用（"在做什么"）
+    tool_rows = await session.execute(
+        select(TaskEvent)
+        .where(
+            TaskEvent.task_id == task_id,
+            TaskEvent.event_type.in_(["tool_call_start", "tool_call_end"]),
+        )
+        .order_by(TaskEvent.created_at.desc())
+        .limit(200)
+    )
+    agent_work: dict[str, list[dict]] = {}
+    for ev in reversed(tool_rows.scalars().all()):
+        p = ev.payload or {}
+        agent_name = p.get("agent_name") or "unknown"
+        entry: dict = {"tool": p.get("tool_name", "?"), "ts": ev.created_at.isoformat() if ev.created_at else None}
+        if ev.event_type == "tool_call_start":
+            entry["args"] = (p.get("args") or "")[:2000]
+        else:
+            entry["success"] = bool(p.get("success"))
+            if p.get("error"):
+                entry["error"] = str(p.get("error"))[:2000]
+            entry["result"] = (p.get("result") or "")[:2000]
+        agent_work.setdefault(agent_name, []).append(entry)
+
     return TaskLiveState(
         status=task.status.value if hasattr(task.status, "value") else str(task.status),
         current_phase=current_phase,
@@ -411,4 +468,48 @@ async def get_task_live(
         plan=plan,
         pending_instructions=len(pending),
         recent_events=recent_events,
+        agent_work=agent_work,
+        last_event_at=last_event_at,
     )
+
+
+@router.get("/{task_id}/events", response_model=EventReplay)
+async def get_task_events(
+    task_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_scope("tasks:read")),
+    type_filter: str | None = Query(default=None, alias="type"),
+    after_seq: int | None = Query(default=None, alias="after_seq"),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """事件回放：从 TaskEvent 表读取历史全量（弥补 SSE 断连即丢的缺陷）。
+
+    支持按事件类型过滤、按 seq 游标分页，供控制台时间线回看 agent 思考/工具/错误全过程。
+    """
+    task = await session.get(Task, task_id)
+    if task is None or task.tenant_id != user.tenant_id:
+        raise NotFoundError("任务不存在")
+
+    total_stmt = select(func.count(TaskEvent.id)).where(TaskEvent.task_id == task_id)
+    if type_filter:
+        total_stmt = total_stmt.where(TaskEvent.event_type == type_filter)
+    total = (await session.execute(total_stmt)).scalar() or 0
+
+    page_stmt = select(TaskEvent).where(TaskEvent.task_id == task_id)
+    if type_filter:
+        page_stmt = page_stmt.where(TaskEvent.event_type == type_filter)
+    if after_seq is not None:
+        page_stmt = page_stmt.where(TaskEvent.seq > after_seq)
+    page_stmt = page_stmt.order_by(TaskEvent.seq.asc()).limit(limit)
+    rows = (await session.execute(page_stmt)).scalars().all()
+    events = [
+        TaskEventRead(
+            seq=ev.seq,
+            type=ev.event_type,
+            payload=ev.payload,
+            created_at=ev.created_at.isoformat() if ev.created_at else None,
+        )
+        for ev in rows
+    ]
+    next_after = events[-1].seq if len(events) == limit and events else None
+    return EventReplay(events=events, total=int(total), next_after_seq=next_after)

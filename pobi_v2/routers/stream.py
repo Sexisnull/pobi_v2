@@ -10,28 +10,30 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
+from uuid import UUID
 
-from pobi_v2.core.deps import get_current_user_from_query
+from pobi_v2.core.deps import get_current_user_from_query, require_scope_from_query
 from pobi_v2.db.session import AsyncSessionLocal
 from pobi_v2.db.models import Task, User
 from pobi_v2.engine.event_bus import bus
 
-router = APIRouter(tags=["stream"], dependencies=[Depends(get_current_user_from_query)])
+router = APIRouter(tags=["stream"])
 
 
 @router.get("/api/v1/tasks/{task_id}/stream")
 async def task_stream(
-    task_id: str,
+    task_id: UUID,
     request: Request,
-    user: User = Depends(get_current_user_from_query),
+    user: User = Depends(require_scope_from_query("tasks:read")),
 ):
+    task_id_str = str(task_id)
     async with AsyncSessionLocal() as session:
         task = await session.get(Task, task_id)
         if task is None or task.tenant_id != user.tenant_id:
             raise HTTPException(status_code=404, detail="任务不存在")
 
     async def event_generator():
-        queue = await bus.subscribe(task_id)
+        queue = await bus.subscribe(task_id_str)
         try:
             # 先发送当前任务快照
             yield {
@@ -61,6 +63,6 @@ async def task_stream(
                 ):
                     break
         finally:
-            await bus.unsubscribe(task_id, queue)
+            await bus.unsubscribe(task_id_str, queue)
 
     return EventSourceResponse(event_generator())

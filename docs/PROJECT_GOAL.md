@@ -48,6 +48,21 @@
 - **任务实时态聚合（M8+ 新增）**：`GET /api/v1/tasks/{id}/live` 返回 `TaskLiveState`（当前阶段/智能体/执行计划 `PlanSummary`/待生效指令数/最近事件），供控制台中栏展示。
 - **统一 LLM 入口（M8+ 收敂）**：`pobi_v2/llm/` 为平台唯一 LLM 解析与调用入口（`get_model_spec` 产出内核 `ModelSpec`，`complete/complete_json/chat` 供平台自包含调用复用）。凭证统一前缀 `POBI_V2_LLM_API_KEY`/`POBI_V2_LLM_API_BASE` 优先，缺失按 provider 回退裸供应商变量（兼容既有 `.env`）。所有执行路径（M8 主路径、M7 降级、默认 agent）均经此入口，不再各自拼写环境变量映射。
 
+### 2.2.1 链路验证与稳定性修复（2026-08-15，端到端验证闭环）
+
+> 本节记录一次端到端链路验证中发现并修复的问题，作为后续 agent 排障参考。
+
+- **端到端链路验证（probe 快路径，新增能力）**：`POST /api/v1/system/probe` 在共享 Kali 沙箱对授权目标做轻量连通性探测（`curl` 访问 + 单次 LLM 结论），由新增 `engine/probe_runner.py` 的 `run_probe_agent` 直接驱动。特性与边界：
+  - **probe 自身绕过 avfs / DeadEndAgent**：仅 probe 走轻量快路径，避免 dev 环境 avfs 未挂载导致多智能体初始化卡死；探测直接在共享 Kali 沙箱执行（`sandbox_manager.get_or_create_shared_kali()`）。注意这是**链路验证专用的窄路径**——正常渗透任务（`task.kind` 非 probe）仍由 `executor` 驱动 M8 `DeadEndAgent` 完整多智能体链路（规划+利用+ValidationGate+报告），二者互不替代。
+  - **硬超时 90s** 由 `asyncio.wait_for(..., PROBE_HARD_TIMEOUT)` 在 `executor._run_probe_branch` 内保证（arq 0.28 不支持作业级 `job_timeout` 透传，故超时置于 executor 层）。
+  - `executor._run_task_body` 按 `task.kind == "probe"` 分流到 probe 分支，与 M8 主路径 / M7 降级并列。
+  - 结果异步返回：`/probe` 立即返回 `task_id`，结论经 `GET /tasks/{id}` 或 SSE 拉取；实测一次探测约 4 秒返回（HTTP 302，0.07s）。
+  - 前端新增「健康检查」页：聚合 Worker / Kali / 模型三段实时状态（`/system/worker-status`、`/system/kali-status`、`/system/llm-status`），「发起健康探测」按钮触发 probe 并轮询结果，同时展示上一次探测结论。
+- **Worker 卡死修复**：`docker-compose.override.yml` 的 worker command 原含 `--watch /app`，文件变动触发 SIGUSR1 重启后会卡在初始化、不再刷新 health-check 键（TTL 变负），表现为「假活离线」。已移除 `--watch`，改为改源码后手动 `docker compose restart worker` 生效。
+- **取消检查死锁 bug 修复（关键）**：原 `executor.py` 在 Worker 协程内调用 `cancel_state.is_cancelled_sync`，其 Redis 后端用 `run_coroutine_threadsafe` + `future.result(timeout=2)`，在事件循环协程内调用导致死锁超时，进而**所有任务执行失败**。已改为异步 `await is_cancelled(task_id)`（导入由 `is_cancelled_sync` 改 `is_cancelled`），异常分支同步改为异步。
+- **僵尸任务治理**：Worker 重启 / 卡死期间遗留的 `running` / `queued` 任务不会自动终态化。治理方式：经 `POST /api/v1/system/task-reconcile` 对账收敛，或运维直接将遗留任务置 `failed` 终态并备注来源，避免干扰任务列表查询。
+- **进程入口收敛**：`docker-compose.yml` 统一服务命名（`pobi_v2-api-1` / `pobi_v2-worker-1` / `pobi_v2-web-1`）；前端静态由 `web`(nginx) 经 bind mount `./web` 实时托管于 80 端口，访问入口为 `http://<host>/`（非 8000 api 端口的镜像内旧静态）。
+
 ### 2.3 已知约束 / 待补能力（待办路线）
 
 按优先级（非阻塞）：
@@ -55,7 +70,7 @@
 | 编号 | 任务 | 优先级 | 说明 |
 |------|------|--------|------|
 | C1 | 引入 XBOW 等评测子集，跑通基准 + 输出报告 | P0 | 当前无量化 benchmark，无法客观评估能力 |
-| C3 | 组件健康监控面板 | P1 | 对齐 deadend-cli `showComponentStatus` |
+| C3 | ~~组件健康监控面板~~ | ✅已解决 | 已由前端「健康检查」页落地：聚合 Worker / Kali / 模型三段实时状态 + 一键端到端链路探测（probe 快路径），对齐 deadend-cli `showComponentStatus` |
 | C4 | Plan Mode（规划预审） | P1 | 对齐 `/plan`，执行前人工确认攻击计划 |
 | C5 | 白盒分析启用（`codebase_path`） | P1 | 依赖 Playwright / Embedder / RAG，当前默认关闭，缺失时降级黑盒 |
 | C6 | 攻击链复用（Task 模板） | P2 | 对齐 workflow replay |
@@ -184,6 +199,7 @@ FastAPI routers/tasks  ──► [Redis 队列] push "run_task"
 - `make_approval_callback` 把 Web 平台的多租户人工审批注入内核高危调用（yolo 模式免审批）；
 - 委托 `deadend_runner.run_deadend_agent`（适配层，不重写内核）：把 pobi_v2 的 `Target/Task` 翻译成 pobi_agent 输入——写 `scope.yaml`（复用 ScopePolicy）、写 `validation.yaml`（复用 ValidationGate）、解析 `ModelSpec`（多 LLM）、按 Docker 可用性决定开不开 `shell/python_interpreter`；
 - 主路径 `DeadEndAgent` 沙箱不可用时，自动降级到不依赖沙箱的 `ScanWorkflow`；
+- **仅 `task.kind == "probe"` 走轻量快路径**：`_run_probe_branch` 直接调用 `probe_runner.run_probe_agent`（共享 Kali 沙箱内 `curl` 连通性探测 + 单次 LLM 结论），probe 自身绕过 avfs / DeadEndAgent 多智能体链路，由 `asyncio.wait_for(..., PROBE_HARD_TIMEOUT=90s)` 兜底；正常渗透任务仍走 M8 `DeadEndAgent`（见上一条）。结果同样经 `_persist_outcome` 落 PG，结论写入 `Task.result`；
 - 内核跑完后 `_persist_outcome` 把结果/findings/轨迹落 PG。
 真正的多智能体协作在 `DeadEndAgent` 内部：Phase 1 侦查（`threat_model`）与 Phase 2 利用（`run_exploitation`）**均经 `execute_supervisor` 驱动同一套 `SupervisorAgent` + 6 子 Agent 引擎**，仅传入的 `goal prompt` 不同（侦查收集端点/技术栈/认证/攻击面，利用做 ADaPT 递归求解）；其余 Docker 沙箱验证、ADaPT、ValidationGate、ReporterAgent 亦归 pobi_agent 内核，engine 不管。
 
@@ -206,9 +222,9 @@ pobi_v2/
 ├── routers/                # auth / targets / tasks / stream / persistence / approval / report
 │                           # + instruction（运行指令）/ system（Worker 状态 + 任务对账）
 ├── llm/                    # 统一 LLM 解析与调用入口（get_model_spec + complete/complete_json/chat，复用内核 ModelSpec）
-└── engine/                 # executor / deadend_runner / scan_workflow / scan_tools
-                             # agent_adapter / event_bus / guardrails / approval
-                             # queue / worker / cancel_state / report
+└── engine/                 # executor（含 probe 分流）/ deadend_runner / probe_runner（链路验证快路径）
+                             # scan_workflow / scan_tools / agent_adapter / event_bus
+                             # guardrails / approval / queue / worker / cancel_state / report
                              # instruction_channel（运行指令通道，与 cancel_state 同构）
 pobi_agent/                 # 内嵌 AI 引擎（源自 deadend-cli，位于仓库根目录，非 pobi_v2/ 子包）
 web/                        # M6 前端 SPA（index.html + static/）

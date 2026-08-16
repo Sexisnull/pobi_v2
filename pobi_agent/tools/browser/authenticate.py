@@ -67,6 +67,45 @@ _BROWSER_FLOWS = {
     AuthFlow.CALLBACK,
 }
 
+# ---------------------------------------------------------------------------
+# 认证连续失败熔断：避免框架能力缺陷（如无法处理带 CSRF token 的表单登录）
+# 导致 agent 无限重试、耗尽 token（报告 A/B：DVWA 登录死循环 33 分钟）。
+# 按 target+profile 维度在进程内累计失败次数，达上限即拒绝再试并返回 aborted。
+# ---------------------------------------------------------------------------
+
+_AUTH_FAIL_LIMIT = 3
+_auth_fail_counter: dict[str, int] = {}
+
+
+def _auth_fail_key(target: str, profile: str) -> str:
+    return f"{target}:{profile}"
+
+
+def _auth_record_failure(target: str, profile: str) -> bool:
+    """记录一次失败并尝试熔断。返回 True 表示已达上限需要 aborted。"""
+    key = _auth_fail_key(target, profile)
+    _auth_fail_counter[key] = _auth_fail_counter.get(key, 0) + 1
+    return _auth_fail_counter[key] >= _AUTH_FAIL_LIMIT
+
+
+def _auth_record_success(target: str, profile: str) -> None:
+    """认证成功则清零失败计数。"""
+    _auth_fail_counter.pop(_auth_fail_key(target, profile), None)
+
+
+def _auth_update_counter(target: str, profile: str, result: dict[str, Any]) -> None:
+    """根据认证结果更新熔断计数。
+
+    复用 breaker 的失败计数以决定是否在下次调用直接拒绝（aborted）。
+    aborted 本身不应再累加（已是熔断后的结果），避免计数无限膨胀。
+    """
+    if result.get("aborted"):
+        return
+    if result.get("success"):
+        _auth_record_success(target, profile)
+    else:
+        _auth_record_failure(target, profile)
+
 
 def _enum_value(value: Any) -> str | None:
     if value is None:
@@ -364,6 +403,8 @@ async def _authenticate_via_browser(
             "popup_callback_observed": popup_callback_observed,
             "popup_closed": popup_closed,
             "success_matched": auth_success.get("matched", []),
+            # 不再默认 validated=True；只有 wait_for_auth_success 真正验证通过才算 validated。
+            "validated": bool(auth_success.get("success")),
         },
     )
     return _persist_and_summarise(
@@ -371,7 +412,10 @@ async def _authenticate_via_browser(
         auth_context,
         profile,
         target,
-        extra_summary={"success_matched": auth_success.get("matched", [])},
+        extra_summary={
+            "success_matched": auth_success.get("matched", []),
+            "validated": bool(auth_success.get("success")),
+        },
     )
 
 
@@ -561,7 +605,11 @@ async def _authenticate_via_json(
         auth_context,
         profile,
         target,
-        extra_summary={"success_matched": matched, "response_status": status},
+        extra_summary={
+            "success_matched": matched,
+            "response_status": status,
+            "validated": True,
+        },
     )
 
 
@@ -680,7 +728,11 @@ async def _authenticate_via_http_basic(
         auth_context,
         profile,
         target,
-        extra_summary={"success_matched": matched, "response_status": status},
+        extra_summary={
+            "success_matched": matched,
+            "response_status": status,
+            "validated": True,
+        },
     )
 
 
@@ -730,6 +782,24 @@ async def authenticate_service(
     capture_cookies: bool = True,
 ) -> dict[str, Any]:
     """Internal dispatcher: pick a flow based on ``auth_flow`` and persist the result."""
+    # 熔断检查：同一 target+profile 连续失败达上限时，不再把球踢回 LLM 重试，
+    # 直接返回 aborted，避免框架能力缺陷导致无限重试（报告 A/B）。
+    if _auth_fail_counter.get(_auth_fail_key(target, profile), 0) >= _AUTH_FAIL_LIMIT:
+        logger.warning(
+            "认证熔断生效：target=%s profile=%s 已连续失败 %d 次，拒绝重试",
+            target, profile, _auth_fail_counter[_auth_fail_key(target, profile)],
+        )
+        return {
+            "success": False,
+            "aborted": True,
+            "error": (
+                f"认证连续失败达上限（{_AUTH_FAIL_LIMIT} 次），"
+                f"疑似框架不支持该登录形态（如无法处理动态 CSRF token），停止重试"
+            ),
+            "target": target,
+            "profile": profile,
+        }
+
     handler = AuthContextHandler(target=target, agent_id=agent_id, session_id=session_id)
     creds = handler.resolve_credentials(profile)
     flow = _coerce_auth_flow(auth_flow)
@@ -737,7 +807,7 @@ async def authenticate_service(
 
     # JSON / API flow
     if flow is AuthFlow.JSON:
-        return await _authenticate_via_json(
+        result = await _authenticate_via_json(
             handler=handler,
             target=target,
             agent_id=agent_id,
@@ -761,10 +831,12 @@ async def authenticate_service(
             proxy_url=proxy_url,
             navigation_timeout_ms=navigation_timeout_ms,
         )
+        _auth_update_counter(target, profile, result)
+        return result
 
     # HTTP Basic flow
     if flow is AuthFlow.HTTP_LOGIN:
-        return await _authenticate_via_http_basic(
+        result = await _authenticate_via_http_basic(
             handler=handler,
             target=target,
             agent_id=agent_id,
@@ -781,10 +853,12 @@ async def authenticate_service(
             proxy_url=proxy_url,
             navigation_timeout_ms=navigation_timeout_ms,
         )
+        _auth_update_counter(target, profile, result)
+        return result
 
     # Browser flow (default).
     if not effective_auth_url:
-        return _failure(
+        result = _failure(
             target=target,
             target_slug=handler.target_slug,
             agent_id=agent_id,
@@ -794,7 +868,9 @@ async def authenticate_service(
             auth_flow=auth_flow,
             auth_type=auth_type,
         )
-    return await _authenticate_via_browser(
+        _auth_update_counter(target, profile, result)
+        return result
+    result = await _authenticate_via_browser(
         handler=handler,
         target=target,
         agent_id=agent_id,
@@ -824,6 +900,8 @@ async def authenticate_service(
         navigation_timeout_ms=navigation_timeout_ms,
         action_timeout_ms=action_timeout_ms,
     )
+    _auth_update_counter(target, profile, result)
+    return result
 
 
 @with_tool_events("authenticate")

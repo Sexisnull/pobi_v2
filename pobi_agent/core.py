@@ -31,7 +31,7 @@ def init_rag_session_manager(
 
     Args:
         storage_root: Root directory for agent session databases.
-            Defaults to ``~/.pobi/agents``.
+            Defaults to ``<POBI_HOME>/agents`` (see ``pobi_agent.constants``).
     """
     root = Path(storage_root) if storage_root else DEADEND_AGENTS_PATH
     root.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,7 @@
 """Authorization scope gate for the POBI autonomous pentest agent.
 
 The scope policy is a small YAML document persisted at
-``~/.cache/pobi/scope.yaml`` (the exact location the web console writes to).
+``<POBI_CACHE_HOME>/scope.yaml`` (the exact location the web console writes to).
 The web console is the operator's UI for editing it; the agent reads the same
 file and enforces it at its single network egress (``pw_requester``).
 
@@ -26,7 +26,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-DEFAULT_PATH = Path.home() / ".cache" / "pobi" / "scope.yaml"
+from pobi_agent.constants import CACHE_DEADEND_PATH
+
+DEFAULT_PATH = CACHE_DEADEND_PATH / "scope.yaml"
 
 # Directory holding per-session scope files (`scope.{session_id}.yaml`).
 # Exported so consumers (e.g. the network egress gate) can resolve the

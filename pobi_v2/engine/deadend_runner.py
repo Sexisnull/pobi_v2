@@ -169,16 +169,20 @@ def _build_available_agents(
 ) -> dict[str, str]:
     """构造 ``DeadEndAgent`` 的 ``available_agents`` 能力字典。
 
-    与原 pobi Web Console 的 ``_build_available_agents`` 保持一致：
-    - 无 Docker 沙箱时移除 ``shell`` / ``python_interpreter``（沙箱验证不可用）。
+    共享 Kali 沙箱为**强依赖**（侦查与验证阶段均使用，执行 shell 与 python），
+    必须随 compose 常驻启动。本函数复用全局共享 Kali 单例；若容器缺失则明确
+    抛错，不再静默降级（避免能力被无声关闭而隐藏沙箱故障）。
+    - ``shell`` / ``python_interpreter`` 始终提供（沙箱为核心能力）。
     - ``webapp_analyzer`` 仅在启用浏览器分析时提供。
     """
-    sandbox_ok = False
-    try:
-        sb = sandbox_manager.create_sandbox()
-        sandbox_ok = sb is not None
-    except Exception:
-        sandbox_ok = False
+    # 共享 Kali 为强依赖：解析常驻单例，缺失即抛错，绝不调用 create_sandbox
+    # 新建临时容器（每次运行泄漏孤儿沙箱）。
+    sandbox = sandbox_manager.get_or_create_shared_kali()
+    if sandbox is None:
+        raise RuntimeError(
+            "Docker 沙箱不可用，无法暴露 shell / python_interpreter 能力"
+            "（共享 Kali 为强依赖，须随 compose 常驻启动）"
+        )
 
     available_agents: dict[str, str] = {
         "requester": "Performs HTTP requests; returns http data and response metadata",
@@ -186,15 +190,13 @@ def _build_available_agents(
             "attempts to gain access to a web application by performing "
             "authentication (login, session fixation, credential stuffing)"
         ),
-    }
-
-    if sandbox_ok:
-        available_agents["shell"] = (
+        "shell": (
             "executes bash commands in a sandbox and returns the output"
-        )
-        available_agents["python_interpreter"] = (
+        ),
+        "python_interpreter": (
             "executes python code in a sandbox and returns the output"
-        )
+        ),
+    }
 
     if getattr(settings, "enable_webapp_analyzer", False):
         available_agents["webapp_analyzer"] = (
@@ -219,17 +221,16 @@ def _prepare_env_dependencies(
 
     与原 pobi 一致：
     - ``embedder_client``：``EmbedderClient``（向量检索依赖，外部 LLM API）。
-    - ``sandbox``：真实 Docker 沙箱（每个任务独立容器，核心必需）。
+    - ``sandbox``：真实 Docker 沙箱（全面容器化后复用 compose 常驻的全局
+      共享 Kali 容器，shell 命令与 Python 验证共用同一容器，而非每任务独立容器）。
 
     RAG 连接器（``SqliteRagConnector``）此处不准备：它按 ``(agent_id,
     session_id, target)`` 隔离，需要 ``DeadEndAgent`` 实例化后才能拿到
     ``agent.agent_id``，故在 ``run_deadend_agent`` 内、agent 实例化之后获取。
     """
     try:
-        sandbox_id = sandbox_manager.create_sandbox()
-        sandbox = sandbox_manager.get_sandbox(sandbox_id)
-        if sandbox is None:
-            raise RuntimeError(f"沙箱创建后无法获取实例：{sandbox_id}")
+        # 复用全局共享 Kali 容器（单实例），缺失时按统一网络创建。
+        sandbox = sandbox_manager.get_or_create_shared_kali()
     except Exception as exc:  # 沙箱是核心依赖，缺失时明确报错
         raise RuntimeError(
             "Docker 沙箱不可用，无法运行原 pobi DeadEndAgent（沙箱执行验证是核心能力）"
@@ -241,11 +242,15 @@ def _prepare_env_dependencies(
     embedder_client = None
     try:
         _embed_spec = get_model_spec()
+        # 注意：vector_dim 不在此硬编码，交由 EmbedderClient 按模型默认维度处理
+        # （registry.py 默认 1536）。维度须与实际 embedding 模型一致，否则
+        # similarity_search_code_chunk 会因维度过滤剔除全部 chunk 而检索恒空。
+        # 若后续正式启用向量检索，应从 EmbeddingSpec.vec_dim 动态读取并显式传入。
         embedder_client = EmbedderClient(
             model_name=to_litellm_model(_embed_spec),
             api_key=_embed_spec.api_key,
             base_url=_embed_spec.base_url,
-            vector_dim=1024,
+            vector_dim=None,
         )
     except Exception as exc:  # noqa: BLE001
         logging.warning("EmbedderClient 初始化失败，降级为 None：%s", exc)
@@ -374,6 +379,18 @@ async def run_deadend_agent(
     stop_result = getattr(agent, "stop_result", None)
     if stop_result is not None and getattr(stop_result, "reporter_output", None):
         report = stop_result.reporter_output
+
+    # 实时推送安全评估报告到前端聊天流（前端已具备 report_task_event 渲染分支，
+    # 此前后端漏发该事件，导致报告仅落库、UI 不展示）。
+    if report:
+        hooks.emit_report(task_id=str(task.id), summary=report)
+    else:
+        hooks.emit_log_message(
+            session_id=str(task.id),
+            message="未生成安全评估报告正文（ReporterAgent 无输出），请通过「查看报告」查阅结构化产物。",
+            level="warn",
+            source="reporting",
+        )
 
     # 11) 归一化为 executor 兼容的产出
     return _normalize_outcome(

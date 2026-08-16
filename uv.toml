@@ -1,0 +1,7 @@
+# UV 依赖解析源配置（顶层字段格式）
+# 主源：清华镜像（国内加速）；extra 源：官方 PyPI（规避清华源偶发 403 限流）
+index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+[[index]]
+name = "official"
+url = "https://pypi.org/simple"

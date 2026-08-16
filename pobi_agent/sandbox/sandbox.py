@@ -30,6 +30,7 @@ Note:
 from enum import Enum
 from datetime import datetime
 
+import asyncio
 import shlex
 import threading
 import time
@@ -41,6 +42,8 @@ import docker.errors
 from pydantic import BaseModel, ConfigDict, Field
 
 from pobi_agent.logging import logger
+
+from pobi_v2.core.config import settings
 
 
 class CommandTimeoutError(Exception):
@@ -123,13 +126,15 @@ class Sandbox(BaseModel):
         """
         super().__init__(**data)
         self._docker_client = docker_client
+        # 全局共享容器并发保护：多任务并行 exec 同一容器时防止 stdout/stderr 交错。
+        self._exec_lock = threading.Lock()
 
     def start(
         self,
         container_image: str,
         volume_path: str | None = None, 
         start_process: str = "/bin/bash",
-        network_name: str = "host"
+        network_name: str | None = None
     ):
         """Start the sandbox container with specified image and configuration.
         
@@ -157,6 +162,10 @@ class Sandbox(BaseModel):
             - Container status is automatically updated on success/failure
         """
         self.fs_volume = volume_path
+        # 默认接入统一网络 pobi_net（全面容器化后不再使用 host 网络）。
+        # 显式传入 "host" 时仍走宿主机网络（兼容本地非容器化调试）。
+        if network_name is None:
+            network_name = settings.sandbox_network
         try:
             self.status = SandboxStatus.RUNNING
             image = self._docker_client.images.get(container_image)
@@ -206,6 +215,28 @@ class Sandbox(BaseModel):
             logger.error("Error starting container: %s", exc)
             raise exc
         
+    def attach_existing(self, container_name: str, container_image: str = ""):
+        """连接一个已存在的容器（用于全局共享 Kali 单例）。
+
+        全面容器化后，Kali 作为 docker-compose 常驻 service 由宿主机 daemon 创建。
+        API/Worker 经 DooD 复用同一容器：按容器名解析并复用，不再自行创建。
+
+        Args:
+            container_name: 全局共享容器名（如 pobi_kali）。
+            container_image: 镜像名（仅用于状态记录，不创建容器）。
+
+        Returns:
+            docker.models.containers.Container: 已存在的容器对象。
+
+        Raises:
+            NotFound: 若指定容器不存在。
+        """
+        container = self._docker_client.containers.get(container_name)
+        self.container_id = container.id
+        self.docker_image = container_image or (container.image.tags[0] if container.image.tags else "")
+        self.status = SandboxStatus.RUNNING
+        return container
+
     def execute_command(
         self,
         command: str,
@@ -254,128 +285,123 @@ class Sandbox(BaseModel):
             ...     print(chunk.decode())
         """
         start_time = time.time()
-        
-        if not self.container_id:
-            raise ValueError("Container not started")
-        if self.status != SandboxStatus.RUNNING:
-            raise ValueError(f"Container not running (status: {self.status})")
 
-        container = self._docker_client.containers.get(self.container_id)
-        self.last_command = command
-        
-        # Debug: Check container state and responsiveness
-        try:
-            container_status = container.status
-            # print("Container status: %s", container_status)
+        # 全局共享容器并发保护：串行化同一容器上的 exec，避免 stdout/stderr 交错。
+        with self._exec_lock:
+            if not self.container_id:
+                raise ValueError("Container not started")
+            if self.status != SandboxStatus.RUNNING:
+                raise ValueError(f"Container not running (status: {self.status})")
 
-            # Test basic container responsiveness with a simple command
-            health_check = container.exec_run(["/bin/bash", "-c", "echo 'health_check'"])
-            # print("Health check exit code: %s", health_check.exit_code)
-        except Exception as health_exc:
-            print("Container health check failed: %s", health_exc)
-
-        # Prepare command for execution
-        if shell_execution:
-            # Use shell execution with proper escaping for complex commands
-            # Wrap in bash -c to handle shell features like pipes, redirects, quotes
-            shell_command = ["/bin/bash", "-c", command]
-        else:
-            # Use shlex for proper argument parsing without shell interpretation
-            shell_command = shlex.split(command)
-
-        try:
-            # Debug: Log the exact command being executed
-            # print("Executing command: %s", ' '.join(shell_command))
-            # print("Stream mode: %s, Timeout: %s", stream, timeout_seconds)
+            container = self._docker_client.containers.get(self.container_id)
+            self.last_command = command
             
-            if timeout_seconds:
-                # Use threading for timeout implementation
-                result = self._execute_with_timeout(
-                    container, shell_command, stream, timeout_seconds
-                )
-            elif stream:
-                command_result = container.exec_run(
-                    cmd=shell_command,
-                    detach=False,
-                    tty=False,  # Changed from True to False
-                    socket=True,
-                    stream=True,
-                )
-                print("Streaming execution completed")
-                result = {
-                    "command": command,
-                    "streaming": True,
-                    "stream": command_result.output,
-                    "timed_out": False,
-                    "execution_time": time.time() - start_time
-                }
+            # Debug: Check container state and responsiveness
+            try:
+                container_status = container.status
+                # print("Container status: %s", container_status)
+    
+                # Test basic container responsiveness with a simple command
+                health_check = container.exec_run(["/bin/bash", "-c", "echo 'health_check'"])
+                # print("Health check exit code: %s", health_check.exit_code)
+            except Exception as health_exc:
+                print("Container health check failed: %s", health_exc)
+    
+            # Prepare command for execution
+            if shell_execution:
+                # Use shell execution with proper escaping for complex commands
+                # Wrap in bash -c to handle shell features like pipes, redirects, quotes
+                shell_command = ["/bin/bash", "-c", command]
             else:
-                command_result = container.exec_run(
-                    cmd=shell_command,
-                    detach=False,
-                    tty=False,  # Changed from True to False
-                    demux=True
-                )
-                # print("Command executed, exit code: %s", command_result.exit_code)
-                (stdout, stderr) = command_result.output
-                # print("Raw stdout length: %d, stderr: %d", len(stdout) if stdout else 0, len(stderr) if stderr else 0)
-                result = {
+                # Use shlex for proper argument parsing without shell interpretation
+                shell_command = shlex.split(command)
+    
+            try:
+                # Debug: Log the exact command being executed
+                # print("Executing command: %s", ' '.join(shell_command))
+                # print("Stream mode: %s, Timeout: %s", stream, timeout_seconds)
+
+                # Enforce a minimum timeout on every path. Without it, an
+                # unterminated stream (e.g. a long-running scanner) hangs the
+                # supervisor forever with no events emitted to the frontend.
+                # settings.SANDBOX_COMMAND_TIMEOUT_SECONDS is the configurable
+                # ceiling; fall back to 300s so no path can block indefinitely.
+                effective_timeout = timeout_seconds or getattr(
+                    settings, "SANDBOX_COMMAND_TIMEOUT_SECONDS", None
+                ) or 300
+
+                if effective_timeout:
+                    # Use threading for timeout implementation
+                    result = self._execute_with_timeout(
+                        container, shell_command, stream, effective_timeout
+                    )
+                elif stream:
+                    command_result = container.exec_run(
+                        cmd=shell_command,
+                        detach=False,
+                        tty=False,  # Changed from True to False
+                        demux=True
+                    )
+                    # print("Command executed, exit code: %s", command_result.exit_code)
+                    (stdout, stderr) = command_result.output
+                    # print("Raw stdout length: %d, stderr: %d", len(stdout) if stdout else 0, len(stderr) if stderr else 0)
+                    result = {
+                        "command": command,
+                        "exit_code": command_result.exit_code,
+                        "streaming": False,
+                        "stdout": stdout.decode('utf-8', errors='replace') if stdout else "",
+                        "stderr": stderr.decode('utf-8', errors='replace') if stderr else "",
+                        "timed_out": False,
+                        "execution_time": time.time() - start_time
+                    }
+                    # print("Decoded stdout length: %d, stderr: %d", len(result['stdout']), len(result['stderr']))
+    
+                return result
+    
+            except CommandTimeoutError:
+                return {
                     "command": command,
-                    "exit_code": command_result.exit_code,
+                    "exit_code": -1,
+                    "stdout": "",
+                    "stderr": f"Command timed out after {effective_timeout} seconds",
                     "streaming": False,
-                    "stdout": stdout.decode('utf-8') if stdout else "",
-                    "stderr": stderr.decode('utf-8') if stderr else "",
-                    "timed_out": False,
+                    "timed_out": True,
                     "execution_time": time.time() - start_time
                 }
-                # print("Decoded stdout length: %d, stderr: %d", len(result['stdout']), len(result['stderr']))
-
-            return result
-
-        except CommandTimeoutError:
-            return {
-                "command": command,
-                "exit_code": -1,
-                "stdout": "",
-                "stderr": f"Command timed out after {timeout_seconds} seconds",
-                "streaming": False,
-                "timed_out": True,
-                "execution_time": time.time() - start_time
-            }
-        except (FileNotFoundError, PermissionError, RuntimeError) as exc:
-            return {
-                "exit_code": -1,
-                "stdout": "",
-                "stderr": f"Execution error: {str(exc)}",
-                "command": command,
-                "timed_out": False,
-                "streaming": False,
-                "execution_time": time.time() - start_time
-            }
-        except (docker.errors.ContainerError, docker.errors.APIError, OSError) as exc:
-            # Log docker and system errors but don't raise to maintain stability
-            logger.error("Docker/System error: %s", exc, exc_info=True)
-            return {
-                "exit_code": -1,
-                "stdout": "",
-                "stderr": f"System error: {str(exc)}",
-                "command": command,
-                "timed_out": False,
-                "streaming": False,
-                "execution_time": time.time() - start_time
-            }
-        except Exception as exc:
-            # Catch-all for any unexpected errors
-            logger.error("Unexpected error: %s", exc, exc_info=True)
-            return {
-                "exit_code": -1,
-                "stdout": "",
-                "stderr": f"Unexpected error: {str(exc)}",
-                "command": command,
-                "timed_out": False,
-                "streaming": False,
-                "execution_time": time.time() - start_time
-            }
+            except (FileNotFoundError, PermissionError, RuntimeError) as exc:
+                return {
+                    "exit_code": -1,
+                    "stdout": "",
+                    "stderr": f"Execution error: {str(exc)}",
+                    "command": command,
+                    "timed_out": False,
+                    "streaming": False,
+                    "execution_time": time.time() - start_time
+                }
+            except (docker.errors.ContainerError, docker.errors.APIError, OSError) as exc:
+                # Log docker and system errors but don't raise to maintain stability
+                logger.error("Docker/System error: %s", exc, exc_info=True)
+                return {
+                    "exit_code": -1,
+                    "stdout": "",
+                    "stderr": f"System error: {str(exc)}",
+                    "command": command,
+                    "timed_out": False,
+                    "streaming": False,
+                    "execution_time": time.time() - start_time
+                }
+            except Exception as exc:
+                # Catch-all for any unexpected errors
+                logger.error("Unexpected error: %s", exc, exc_info=True)
+                return {
+                    "exit_code": -1,
+                    "stdout": "",
+                    "stderr": f"Unexpected error: {str(exc)}",
+                    "command": command,
+                    "timed_out": False,
+                    "streaming": False,
+                    "execution_time": time.time() - start_time
+                }
 
     def _execute_with_timeout(
         self,
@@ -423,8 +449,8 @@ class Sandbox(BaseModel):
                         "command": self.last_command,
                         "exit_code": command_result.exit_code,
                         "streaming": False,
-                        "stdout": stdout.decode('utf-8') if stdout else "",
-                        "stderr": stderr.decode('utf-8') if stderr else "",
+                        "stdout": stdout.decode('utf-8', errors='replace') if stdout else "",
+                        "stderr": stderr.decode('utf-8', errors='replace') if stderr else "",
                         "timed_out": False,
                         "execution_time": time.time() - start_time
                     }

@@ -110,6 +110,9 @@ class SupervisorDeps:
     memory_context: str = ""
     auth_session_key: str = ""
     context: ContextEngine | None = None  # Context engine for storing agent outputs
+    # AVFS 命名空间：memory workspace 由父 DeadEndAgent 以 agent_id 挂载，
+    # 子 agent 必须以相同 session_id 访问，否则报 "AVFS workspace 'memory' is not mounted"。
+    memory_session_id: str | None = None
 
 class AgentExecutor:
     """Executor component that executes tasks using appropriate agents.
@@ -131,6 +134,7 @@ class AgentExecutor:
         session_id: str | None = None,
         validation_gate: ValidationGate | None = None,
         reporter: ReporterAgent | None = None,
+        memory_session_id: str | None = None,
     ) -> None:
         """Initialize the AgentExecutor.
         
@@ -149,6 +153,8 @@ class AgentExecutor:
         self.session_id = session_id
         self.validation_gate = validation_gate
         self.reporter = reporter
+        # memory workspace 以 agent_id 命名空间挂载；子 agent 访问须用同一命名空间。
+        self.memory_session_id = memory_session_id or session_id
         self.memory_context = ""
         self.auth_session_key = ""
 
@@ -314,7 +320,7 @@ class AgentExecutor:
             deps_type=MemoryWorkspaceDeps,
         )
         memory_deps = MemoryWorkspaceDeps(
-            session_id=self.session_id,
+            session_id=self.memory_session_id,
             memory_workspace_root=memory_workspace_root,
         )
         result = await memory_agent.run(
@@ -420,7 +426,7 @@ class AgentExecutor:
 
             )
             memory_deps = MemoryWorkspaceDeps(
-                session_id=self.session_id or "",
+                session_id=self.memory_session_id or "",
                 memory_workspace_root=(
                     self.requester_deps.memory_workspace_root
                     if self.requester_deps is not None
@@ -523,11 +529,19 @@ class AgentExecutor:
                 )
 
             def _persist_agent_summary(agent_name: str, task: str, output: AgentOutput) -> None:
-                """Persist a deterministic summary into the memory workspace."""
+                """Persist a deterministic summary into the memory workspace.
+
+                MUST use ``self.memory_session_id`` (= agent_id) as the AVFS
+                namespace: the memory workspace is mounted under agent_id, not
+                task_id. Using session_id (task_id) raises
+                ``RuntimeError: AVFS workspace 'memory' is not mounted`` and the
+                summary never lands on disk (broke the summary chain 131 times
+                historically).
+                """
                 write_text(
                     f"summaries/{agent_name}.md",
                     _build_memory_summary(agent_name, task, output),
-                    session_id=self.session_id,
+                    session_id=self.memory_session_id,
                     workspace="memory",
                     append=True,
                 )
@@ -614,7 +628,10 @@ class AgentExecutor:
                         agent_name="authenticator",
                         output=result.output,
                     )
-                    _persist_agent_summary("authenticator", prompt, result.output)
+                    try:
+                        _persist_agent_summary("authenticator", prompt, result.output)
+                    except Exception as _sum_exc:
+                        emit(f"[memory] persist authenticator summary failed: {_sum_exc}")
                     _register_auth_facts_in_context(
                         task=task_node.task,
                         context=ctx.deps.context,
@@ -648,7 +665,10 @@ class AgentExecutor:
                         agent_name="requester",
                         output=result.output
                     )
-                    _persist_agent_summary("requester", prompt, result.output)
+                    try:
+                        _persist_agent_summary("requester", prompt, result.output)
+                    except Exception as _sum_exc:
+                        emit(f"[memory] persist requester summary failed: {_sum_exc}")
                     result_str = _format_tool_result_for_supervisor("requester", result.output)
                 else:
                     result_output = result.output if hasattr(result, "output") else result
@@ -677,7 +697,10 @@ class AgentExecutor:
                         agent_name="shell",
                         output=result.output
                     )
-                    _persist_agent_summary("shell", prompt, result.output)
+                    try:
+                        _persist_agent_summary("shell", prompt, result.output)
+                    except Exception as _sum_exc:
+                        emit(f"[memory] persist shell summary failed: {_sum_exc}")
                     result_str = _format_tool_result_for_supervisor("shell", result.output)
                 else:
                     result_output = result.output if hasattr(result, "output") else result
@@ -722,7 +745,10 @@ class AgentExecutor:
                         agent_name="python_interpreter",
                         output=result.output
                     )
-                    _persist_agent_summary("python_interpreter", prompt, result.output)
+                    try:
+                        _persist_agent_summary("python_interpreter", prompt, result.output)
+                    except Exception as _sum_exc:
+                        emit(f"[memory] persist python_interpreter summary failed: {_sum_exc}")
                     result_str = _format_tool_result_for_supervisor("python_interpreter", result.output)
                 else:
                     result_output = result.output if hasattr(result, "output") else result

@@ -4,7 +4,7 @@ from pydoll.exceptions import ArgumentAlreadyExistsInOptions
 import asyncio
 import json
 import math
-from collections.abc import Mapping, Sequence, Callable
+from collections.abc import Mapping, MutableMapping, Sequence, Callable
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal
@@ -162,7 +162,22 @@ class PressStep:
     key: str = "Enter"
 
 
-InteractionStep = FillStep | SelectStep | CheckStep | ClickStep | PressStep
+@dataclass(frozen=True)
+class ExtractStep:
+    """Extract a value from a page element into ``context[context_key]``.
+
+    Enables dynamic-form flows the static fill/select/check steps cannot handle, e.g.
+    reading a per-request CSRF token (DVWA ``user_token``) before submitting the login
+    form. CSS selectors like ``input[name='user_token']`` work even when the HTML quotes
+    the attribute name with single quotes.
+    """
+
+    selector: str
+    context_key: str
+    attribute: Literal["value", "text", "html", "checked"] = "value"
+
+
+InteractionStep = FillStep | SelectStep | CheckStep | ClickStep | PressStep | ExtractStep
 
 
 class BrowserSession:
@@ -616,7 +631,13 @@ class BrowserSession:
             success_storage_keys,
         ])
         if not checks_configured:
-            return {"success": True, "matched": ["no_explicit_success_condition"]}
+            # 无显式成功信号时，不再兜底 success=true（曾造成『认证成功』假象）。
+            # 改为显式失败，交由调用方（authenticate_service）判定为未验证而非已通过。
+            return {
+                "success": False,
+                "matched": [],
+                "error": "No explicit auth success condition configured; cannot verify auth.",
+            }
 
         timeout_s = _timeout_seconds(timeout_ms, default_ms=30_000)
         end = asyncio.get_event_loop().time() + timeout_s
@@ -723,6 +744,36 @@ class BrowserSession:
         tab = await self._active_tab(page)
         await tab.keyboard.press(_resolve_keyboard_key(key))
 
+    async def extract(
+        self,
+        selector: str,
+        *,
+        attribute: Literal["value", "text", "html", "checked"] = "value",
+        timeout_ms: float | None = None,
+        page: Tab | None = None,
+    ) -> Any:
+        """Read a value from a page element via in-page script.
+
+        ``attribute`` controls what is returned:
+        - ``value``  → element.value
+        - ``text``   → element.textContent
+        - ``html``   → element.innerHTML
+        - ``checked`` → element.checked (bool)
+        """
+        el = await self.wait_for_selector(selector, timeout_ms=timeout_ms, page=page)
+        tab = await self._active_tab(page)
+        js = {
+            "value": "return el.value;",
+            "text": "return el.textContent;",
+            "html": "return el.innerHTML;",
+            "checked": "return el.checked;",
+        }[attribute]
+        result = await tab.execute_script(
+            "const el = arguments[0]; " + js,
+            el,
+        )
+        return result
+
     # ------------------------------------------------------------------
     # Context-driven steps (backward-compatible helpers)
     # ------------------------------------------------------------------
@@ -787,10 +838,41 @@ class BrowserSession:
             return
         await self.check(selector, checked=bool(value), timeout_ms=timeout_ms, page=page)
 
+    async def extract_into_context(
+        self,
+        selector: str,
+        context_key: str,
+        context: MutableMapping[str, Any],
+        *,
+        attribute: Literal["value", "text", "html", "checked"] = "value",
+        optional: bool = False,
+        timeout_ms: float | None = None,
+        page: Tab | None = None,
+    ) -> Any:
+        """Extract a value from ``selector`` and store it under ``context[context_key]``.
+
+        Unlike fill/select/check (which read context), this writes back into it so a
+        later fill step can reference the dynamic value (e.g. a rotated CSRF token).
+        """
+        if optional:
+            try:
+                value = await self.extract(
+                    selector, attribute=attribute, timeout_ms=timeout_ms, page=page
+                )
+            except Exception:
+                return None
+            context[context_key] = value
+            return value
+        value = await self.extract(
+            selector, attribute=attribute, timeout_ms=timeout_ms, page=page
+        )
+        context[context_key] = value
+        return value
+
     async def run_steps(
         self,
         steps: Sequence[InteractionStep],
-        context: Mapping[str, Any],
+        context: MutableMapping[str, Any],
         *,
         optional_keys: bool = False,
         timeout_ms: float | None = None,
@@ -830,6 +912,16 @@ class BrowserSession:
                 await self.click(step.selector, timeout_ms=timeout_ms, page=page)
             elif isinstance(step, PressStep):
                 await self.press(step.selector, step.key, timeout_ms=timeout_ms, page=page)
+            elif isinstance(step, ExtractStep):
+                await self.extract_into_context(
+                    step.selector,
+                    step.context_key,
+                    context,
+                    attribute=step.attribute,
+                    optional=optional_keys,
+                    timeout_ms=timeout_ms,
+                    page=page,
+                )
             else:
                 raise TypeError(f"Unsupported step type: {type(step)!r}")
 

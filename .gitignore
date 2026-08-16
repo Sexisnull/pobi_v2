@@ -19,6 +19,7 @@ env/
 # 环境变量与敏感凭证（AGENTS.md 规范）
 .env
 .env.*
+!.env.example
 server.txt
 
 # 本地数据 / 运行时产物

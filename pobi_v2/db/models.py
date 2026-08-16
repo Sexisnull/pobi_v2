@@ -90,6 +90,45 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     tenant: Mapped[Tenant] = relationship(back_populates="users")
+    api_tokens: Mapped[list["ApiToken"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class ApiToken(Base):
+    """个人访问令牌（PAT），用于脚本 / 第三方直接调用项目 API。
+
+    与登录 JWT 解耦：可设过期时间或长期有效，适合自动化调用。
+    - token_hash：明文令牌的 SHA-256，仅用于校验，不可逆。
+    - encrypted_secret：用环境变量 POBI_TOKEN_KEY（Fernet）加密后的明文，
+      支持前端「点击查看」时按需解密返回，避免以明文落库。
+    - prefix：明文令牌的前缀（如 pk_live_），便于列表中识别与展示。
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    prefix: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    encrypted_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    user: Mapped[User] = relationship(back_populates="api_tokens")
 
 
 class Target(Base):
@@ -151,6 +190,8 @@ class Task(Base):
     max_turns: Mapped[int] = mapped_column(default=50)
     # 自主策略模式：hacker=谨慎需人工审批（默认），yolo=自动批准高危工具调用
     agent_mode: Mapped[str] = mapped_column(String(32), default="hacker", nullable=False)
+    # 任务种类：task=正式渗透任务，probe=链路连通性探针（仅做授权目标连通验证）
+    kind: Mapped[str] = mapped_column(String(32), default="task", nullable=False, index=True)
     # 结果（M3 结构化落库，result 存最终摘要/报告引用）
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

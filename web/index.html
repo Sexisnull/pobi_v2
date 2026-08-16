@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Pobi v2 · AI 渗透测试平台</title>
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260812a" />
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260815c" />
 </head>
 <body>
   <!-- 登录视图 -->
@@ -51,6 +51,8 @@
         <button class="nav-item" data-view="approvals">审批</button>
         <button class="nav-item" data-view="audit">审计</button>
         <button class="nav-item" data-view="tokens">Token 用量</button>
+        <button class="nav-item" data-view="apikeys">API 令牌</button>
+        <button class="nav-item" data-view="health">健康检查</button>
       </nav>
       <div class="sidebar-footer">
         <div id="user-info" class="user-info"></div>
@@ -284,6 +286,110 @@
           <div id="token-empty" class="empty hidden">暂无任务用量数据</div>
         </section>
       </section>
+
+      <!-- API 令牌视图（PAT 管理：生成 / 列表 / 点击查看 / 吊销） -->
+      <section id="view-apikeys" class="view hidden" data-od-id="view-apikeys">
+        <header class="view-head">
+          <div>
+            <h2>API 令牌</h2>
+            <p class="dashboard-subtitle">生成长期令牌，供脚本 / 第三方直接调用项目 API（与登录会话解耦）</p>
+          </div>
+          <div class="header-actions">
+            <button class="btn ghost small" data-action="refresh-apikeys">刷新</button>
+            <button class="btn primary" data-action="new-apikey">+ 新建令牌</button>
+          </div>
+        </header>
+
+        <div class="apikey-hint card-note">
+          <strong>用途：</strong> 生成的令牌以 <code>pk_</code> 开头，可作为 <code>Authorization: Bearer &lt;token&gt;</code> 直接调用
+          <code>/api/v1/tasks</code>、<code>/api/v1/targets</code> 等接口，适合自动化与基准测评脚本。
+          明文仅在创建时显示一次，配置了加密密钥后可点击「查看」随时 reveal。
+        </div>
+
+        <div class="table-wrap">
+          <table id="apikey-table">
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>前缀</th>
+                <th>权限范围</th>
+                <th>过期时间</th>
+                <th>最近使用</th>
+                <th>状态</th>
+                <th class="col-action">操作</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div id="apikey-empty" class="empty hidden">尚未创建任何 API 令牌</div>
+      </section>
+
+      <!-- 健康检查视图 -->
+      <section id="view-health" class="view hidden" data-od-id="view-health">
+        <header class="view-head">
+          <div>
+            <h2>链路健康检查</h2>
+            <p class="dashboard-subtitle">聚合 Worker、沙箱、模型与端到端链路状态，可手动发起一次授权目标连通性探测</p>
+          </div>
+          <div class="header-actions">
+            <button class="btn ghost small" data-action="refresh-health">刷新</button>
+            <button class="btn primary" data-action="run-probe" data-od-id="cta-run-probe">发起健康探测</button>
+          </div>
+        </header>
+
+        <!-- 整体健康概览 -->
+        <div id="health-overview" class="health-overview" data-state="unknown">
+          <span class="health-overview-dot"></span>
+          <span id="health-overview-text">检测中…</span>
+        </div>
+
+        <!-- 四段链路卡片 -->
+        <div class="health-grid">
+          <article class="health-card" data-check="worker">
+            <div class="health-card-head">
+              <span class="health-card-title">任务 Worker</span>
+              <span class="health-badge" data-badge>检测中</span>
+            </div>
+            <div class="health-card-body" data-detail>—</div>
+          </article>
+          <article class="health-card" data-check="kali">
+            <div class="health-card-head">
+              <span class="health-card-title">Kali 沙箱</span>
+              <span class="health-badge" data-badge>检测中</span>
+            </div>
+            <div class="health-card-body" data-detail>—</div>
+          </article>
+          <article class="health-card" data-check="llm">
+            <div class="health-card-head">
+              <span class="health-card-title">模型服务</span>
+              <span class="health-badge" data-badge>检测中</span>
+            </div>
+            <div class="health-card-body" data-detail>—</div>
+          </article>
+          <article class="health-card" data-check="probe">
+            <div class="health-card-head">
+              <span class="health-card-title">端到端链路</span>
+              <span class="health-badge" data-badge>未探测</span>
+            </div>
+            <div class="health-card-body" data-detail>点击「发起健康探测」验证</div>
+          </article>
+        </div>
+
+        <!-- 上一次探测结果 -->
+        <section class="dashboard-section">
+          <div class="section-head">
+            <div class="section-title">
+              <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+              <h3>上一次健康探测</h3>
+            </div>
+            <span class="section-sub" id="last-probe-time"></span>
+          </div>
+          <div id="last-probe-card" class="last-probe-card">
+            <div class="empty">尚未进行过探测</div>
+          </div>
+        </section>
+      </section>
     </main>
   </div>
 
@@ -306,6 +412,6 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <script src="/static/js/app.js?v=20260817"></script>
+  <script src="/static/js/app.js?v=20260818"></script>
 </body>
 </html>

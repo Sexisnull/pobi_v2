@@ -28,6 +28,23 @@ async def _on_startup(_ctx: dict) -> None:
     install_event_hooks()
 
 
+async def _auto_reconcile(_ctx: dict) -> None:
+    """周期性任务对账：回收『幽灵任务』与取消残留。
+
+    报告 C 暴露的核心问题——任务被 cancel 后 DB 仍 running、Worker 真实状态已脱节，
+    最终只能手动调 ``POST /api/v1/system/task-reconcile`` 才终止。本 cron 每 5 分钟
+    自动执行同样的对账逻辑，使取消请求在分钟级内自动生效，无需人工触发。
+
+    ``task_reconcile`` 是 FastAPI 端点函数，但其函数体不依赖 request/user，可直接调用。
+    """
+    try:
+        from pobi_v2.routers.system import task_reconcile
+
+        await task_reconcile()
+    except Exception:  # noqa: BLE001 — 对账失败不应影响 Worker 正常消费
+        pass
+
+
 class WorkerSettings:
     functions = [run_task]
     redis_settings = REDIS_SETTINGS
@@ -39,6 +56,10 @@ class WorkerSettings:
     max_tries = 2
     # 健康检查保留
     keep_result = 3600
+    # 周期性任务对账：每 5 分钟回收幽灵任务 / 取消残留（报告 C）
+    cron_jobs = [
+        cron(_auto_reconcile, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
+    ]
 
 
 def main() -> None:

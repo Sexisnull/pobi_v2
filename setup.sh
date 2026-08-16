@@ -4,11 +4,9 @@
 # 本平台复刻 deadend-cli 的自主渗透测试能力，内核强依赖以下组件，缺失即不可用：
 #   1. Python >= 3.11          —— 项目运行基础
 #   2. uv                      —— 依赖与虚拟环境管理（pyproject 已含全部内核依赖）
-#   3. Docker + docker compose —— 主路径沙箱（无则自动降级 ScanWorkflow，能力大幅削弱）
+#   3. Docker + docker compose —— 主路径沙箱（无则无法运行，全局共享 Kali 容器由 compose 管理）
 #   4. Playwright + 浏览器     —— 文章核心工具：Playwright 发畸形 HTTP 请求
-#   5. Python 沙箱 worker      —— Deno/Pyodide stdio worker（python_sandbox_client 底层二进制，
-#                                setup 时按当前平台从 GitHub release 下载）
-#   6. PostgreSQL + Redis      —— Web 平台存储与 arq 任务队列
+#   5. PostgreSQL + Redis      —— Web 平台存储与 arq 任务队列
 #
 # 脚本行为：逐项校验，缺失即报错退出（set -euo pipefail），不静默降级。
 # 支持 macOS(arm64) / Linux(x86_64 glibc)；不支持其他平台。
@@ -27,7 +25,7 @@ ok()   { printf '\033[1;32m[ ok ]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*" >&2; }
 
-# 平台标签（与 python_sandbox_client/pool.py 的 _platform_tag 保持一致）
+# 平台标签（用于日志与潜在平台相关提示）
 detect_platform() {
   local sys mach
   sys="$(uname -s)"; mach="$(uname -m)"
@@ -114,46 +112,7 @@ python3 -m playwright install --with-deps chromium \
 ok "Playwright chromium 已就绪"
 
 # ---------------------------------------------------------------------------
-# 4. Python 沙箱 worker 二进制（Deno/Pyodide stdio worker）
-# ---------------------------------------------------------------------------
-# 设计原则：项目需分发给未知平台部署，故 worker 二进制在 setup 时按当前平台
-# 从 GitHub release 下载到 python_sandbox_client/bin/<platform>/（对齐原版
-# pool._download_worker 机制）。离线环境可用 PYTHON_SANDBOX_WORKER_BIN 指定本地二进制。
-log "下载 Python 沙箱 worker（Deno/Pyodide，按平台动态拉取）..."
-
-WORKER_NAME="python-sandbox-worker"          # 不带平台后缀，由 pool 按目录区分
-WORKER_BIN="${PYTHON_SANDBOX_WORKER_BIN:-}"
-BIN_DIR="$ROOT/python_sandbox_client/bin/$PLATFORM"
-BUNDLED_BIN="$BIN_DIR/$WORKER_NAME"
-
-if [ -n "$WORKER_BIN" ] && [ -x "$WORKER_BIN" ]; then
-  ok "使用 PYTHON_SANDBOX_WORKER_BIN 指定的 worker：$WORKER_BIN"
-elif [ -x "$BUNDLED_BIN" ]; then
-  ok "项目内已存在 worker（跳过下载）：$BUNDLED_BIN"
-else
-  # release tag 取 python-sandbox-client 包版本（对齐 pool._release_tag）
-  PKG_VER="$(python3 -c "import importlib.metadata as m;print(m.version('python-sandbox-client'))" 2>/dev/null || echo "0.1.0")"
-  RELEASE_TAG="v$PKG_VER"
-  BASE_URL="${PYTHON_SANDBOX_WORKER_RELEASE_BASE_URL:-https://github.com/xoxruns/simple-python-interpreter-sandbox/releases/download}"
-  URL="$BASE_URL/$RELEASE_TAG/$WORKER_NAME"
-
-  log "未找到本地 worker，按平台下载：$URL"
-  mkdir -p "$BIN_DIR"
-  if curl -fSL "$URL" -o "$BUNDLED_BIN"; then
-    chmod +x "$BUNDLED_BIN"
-    ok "worker 已下载至：$BUNDLED_BIN"
-  else
-    rm -f "$BUNDLED_BIN"
-    err "下载 Python 沙箱 worker 失败：$URL"
-    echo "  可能原因：无外网 / 版本($RELEASE_TAG)无对应 release。" >&2
-    echo "  离线部署请手动下载 $WORKER_NAME 并放置为：$BUNDLED_BIN" >&2
-    echo "  或设置 PYTHON_SANDBOX_WORKER_BIN 指向本地已有二进制后重跑。" >&2
-    exit 1
-  fi
-fi
-
-# ---------------------------------------------------------------------------
-# 5. 基础设施：PostgreSQL + Redis
+# 4. 基础设施：PostgreSQL + Redis
 # ---------------------------------------------------------------------------
 # 方式一：本机已有运行中的 PG/Redis（跳过）
 # 方式二：用 docker compose 拉起（项目自带 docker-compose.yml）
@@ -175,11 +134,12 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5.5 Shell 沙箱镜像（原版 deadend init 的核心步骤）
+# 5.5 全局共享 Kali 沙箱镜像（全面容器化核心）
 # ---------------------------------------------------------------------------
-# 原版 `deadend init` 强制拉取 xoxruns/sandboxed_kali，shell 工具强依赖此镜像。
-# 镜像内含预置渗透工具链与 Python 环境，沙箱运行时由 sandbox_manager 按需实例化。
-log "拉取 Shell 沙箱镜像 xoxruns/sandboxed_kali（原版 init 核心步骤）..."
+# 全面容器化后，Kali 作为 docker-compose 常驻 service（容器名 pobi_kali）由
+# 宿主机 daemon 创建，所有 shell 命令与 Python 验证共用同一容器。
+# 此处确保镜像已就绪（运行时若缺失会再次尝试拉取）。
+log "拉取全局共享 Kali 沙箱镜像 xoxruns/sandboxed_kali（compose 常驻 pobi_kali）..."
 if docker images --format '{{.Repository}}:{{.Tag}}' | grep -q "^xoxruns/sandboxed_kali"; then
   ok "xoxruns/sandboxed_kali 已存在，跳过"
 else
@@ -218,9 +178,17 @@ JWT_SECRET=请修改为随机长字符串
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 
-# ---- Python 沙箱 worker（可选；留空则自动下载/使用 bin/ 预置）----
-# PYTHON_SANDBOX_WORKER_BIN=
-# PYTHON_SANDBOX_WORKER_RELEASE_BASE_URL=https://github.com/xoxruns/simple-python-interpreter-sandbox/releases/download
+# ---- API 令牌（PAT）加密密钥 ----
+# 用于持久化加密个人访问令牌明文，支撑前端「点击查看」。
+# 留空时令牌仍可创建与校验，但创建后无法再次查看明文（仅创建时一次性可见）。
+# 建议填入一段随机长字符串；可用 `openssl rand -hex 32` 生成。
+POBI_V2_TOKEN_ENCRYPTION_KEY=
+
+# ---- 全面容器化：Kali 沙箱（compose 常驻 pobi_kali，DooD 复用宿主机 daemon）----
+# 镜像与网络一般无需修改；仅自定义镜像源时调整
+# KALI_IMAGE=xoxruns/sandboxed_kali:latest
+# POBI_V2_SANDBOX_NETWORK=pobi_net
+# POBI_V2_KALI_CONTAINER_NAME=pobi_kali
 EOF
   warn ".env 已生成，请编辑并填入 LLM API Key 与 JWT_SECRET"
 else
@@ -245,7 +213,6 @@ checks = {
     "docker": "docker",
     "litellm": "litellm",
     "instructor": "instructor",
-    "python_sandbox_client": "python_sandbox_client",
 }
 missing = [k for k, m in checks.items() if importlib.util.find_spec(m) is None]
 if missing:
@@ -263,8 +230,7 @@ echo "  Worker: uv run arq pobi_v2.engine.worker.WorkerSettings"
 echo "  （或生产）：./start-prod.sh"
 echo "-------------------------------------------------------------------"
 echo "强制依赖速查："
-echo "  Docker            —— 主路径沙箱（不可省，否则降级 ScanWorkflow）"
+echo "  Docker            —— 全局共享 Kali 沙箱（compose 常驻 pobi_kali，DooD 复用）"
 echo "  Playwright chromium —— pw_requester 畸形请求"
-echo "  Python 沙箱 worker  —— Deno/Pyodide，setup 时按平台从 GitHub release 下载"
 echo "  PostgreSQL+Redis  —— Web 存储与任务队列"
 echo "==================================================================="

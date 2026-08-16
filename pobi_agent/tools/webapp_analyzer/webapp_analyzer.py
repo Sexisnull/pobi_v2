@@ -38,13 +38,23 @@ async def webapp_analyzer(
     if len(context.deps.target) > 1:
         search_query += '\n The target supplied is: ' + context.deps.target
 
-    embedding = await context.deps.embedder_client.batch_embed(
-        input_texts=[search_query],
-    )
+    try:
+        embedding = await context.deps.embedder_client.batch_embed(
+            input_texts=[search_query],
+        )
+    except Exception as exc:
+        return (
+            f"[webapp_analyzer] Embedding service unavailable ({exc}). "
+            "Semantic code search skipped. "
+            "Consider using shell tools (curl, grep, etc.) for direct target analysis."
+        )
 
-    assert len(embedding) == 1, (
-        f'Expected 1 embedding, got {len(embedding)}, doc query: {search_query!r}'
-    )
+    if not embedding:
+        return (
+            "[webapp_analyzer] No embedding results returned. "
+            "Semantic code search skipped."
+        )
+
     embedding = embedding[0]['embedding']
 
     # With SQLite-per-session, the connector is already scoped to the

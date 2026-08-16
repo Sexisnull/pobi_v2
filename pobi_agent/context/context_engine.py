@@ -8,7 +8,7 @@ This module provides context management functionality for security research
 workflows, including task tracking, workflow state management, and agent
 routing based on current context and progress.
 """
-from pobi_agent.constants import DEADEND_AGENTS_PATH
+from pobi_agent.constants import DEADEND_AGENTS_PATH, CACHE_DEADEND_PATH
 import json
 import uuid
 import time
@@ -1647,21 +1647,21 @@ class ContextEngine:
             Path to the session directory, or None if it cannot be determined.
         """
         if session_key:
-            return Path.home() / ".cache" / "pobi" / "memory" / "sessions" / session_key
+            return CACHE_DEADEND_PATH / "memory" / "sessions" / session_key
         elif self.target:
             # Try to extract host and port from target
             try:
                 from pobi_agent.tools.browser_automation.http_parser import extract_host_port
                 host, port = extract_host_port(target_host=self.target)
                 session_key = f"{host}_{port}"
-                return Path.home() / ".cache" / "pobi" / "memory" / "sessions" / session_key
+                return CACHE_DEADEND_PATH / "memory" / "sessions" / session_key
             except Exception:
                 # Fallback to using session_id if target parsing fails
                 if self.session_id:
-                    return Path.home() / ".cache" / "pobi" / "memory" / "sessions" / str(self.session_id)
+                    return CACHE_DEADEND_PATH / "memory" / "sessions" / str(self.session_id)
                 else:
                     return None
         elif self.session_id:
-            return Path.home() / ".cache" / "pobi" / "memory" / "sessions" / str(self.session_id)
+            return CACHE_DEADEND_PATH / "memory" / "sessions" / str(self.session_id)
         else:
             return None

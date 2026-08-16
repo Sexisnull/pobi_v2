@@ -30,13 +30,21 @@ from pobi_v2.db.persistence import (
 )
 from pobi_v2.db.session import AsyncSessionLocal
 from pobi_v2.engine.approval import make_approval_callback
-from pobi_v2.engine.cancel_state import clear_cancel, is_cancelled_sync
+from pobi_v2.engine.cancel_state import clear_cancel, is_cancelled
 from pobi_v2.engine.deadend_runner import run_deadend_agent
 from pobi_v2.engine.event_bus import get_session_usage, reset_session_usage
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# 子超时：单个 agent 驱动调用（run_deadend_agent / ScanWorkflow）的墙钟上限。
+# 协作式取消只在 agent 调用返回后的检查点生效；若 agent 陷入 LLM 死循环（报告 C：
+# DVWA 登录卡死 33 分钟），调用永不返回，cancel 请求永远到不了检查点。用 wait_for
+# 给单次调用一个上限，超时即取消内层协程、释放 Worker 槽位，再据 is_cancelled 判定
+# 是「被取消」还是「真卡死」。值远大于正常单次 agent 运行（分钟级），仅作兜底熔断。
+_AGENT_SUB_TIMEOUT = float(getattr(settings, "agent_sub_timeout_seconds", 30 * 60))
 
 
 async def _load_task(session: AsyncSessionLocal, task_id: UUID) -> tuple[Task, Target]:
@@ -97,10 +105,11 @@ async def _publish_status_change(task_id: UUID, new_status: TaskStatus) -> None:
         pass
 
 
-async def run_task(ctx, task_id: str) -> dict:
+async def run_task(ctx, task_id: str, **kwargs: object) -> dict:
     """ARQ 任务入口：执行一次渗透测试任务。
 
     arq 调用约定为 ``function(ctx, *args)``，故首个参数为任务上下文（未使用）。
+    ``**kwargs`` 用于吸收 arq 可能透传的作业选项（如 job_timeout），避免签名报错。
 
     健壮性：用 ``try/finally`` + ``except BaseException`` 兜底，确保任何退出路径
     （含 ARQ 在 ``job_timeout`` 撞墙时抛出的 ``CancelledError``、普通异常）都能把
@@ -117,7 +126,7 @@ async def run_task(ctx, task_id: str) -> dict:
             _status = TaskStatus.failed
             _err = "任务被强制中断（可能超过 job_timeout 或 Worker 重启）"
         elif isinstance(exc, Exception):
-            _status = TaskStatus.cancelled if is_cancelled_sync(tid) else TaskStatus.failed
+            _status = TaskStatus.cancelled if (await is_cancelled(tid)) else TaskStatus.failed
             _err = str(exc)
         else:
             _status = TaskStatus.failed
@@ -153,6 +162,44 @@ async def run_task(ctx, task_id: str) -> dict:
         if isinstance(exc, asyncio.CancelledError):
             raise
         return {"task_id": str(tid), "status": _status.value, "error": _err}
+
+
+async def _run_probe_branch(tid, task, target, hooks, session) -> dict:
+    """链路连通性探针分支：轻量、快、全程走共享 Kali，不经过 avfs / 多智能体。
+
+    用 ``asyncio.wait_for`` 套硬超时（probe_runner.PROBE_HARD_TIMEOUT），
+    保证即使目标无响应也不会挂死 Worker（此前因重型 DeadEndAgent + avfs 卡死）。
+    """
+    from pobi_v2.engine import probe_runner
+
+    await record_audit(
+        session, action="task.probe_start", outcome="info",
+        detail="链路探针：在共享 Kali 中 curl 授权目标并由 LLM 解读",
+        task_id=tid, target_id=target.id, tenant_id=task.tenant_id,
+    )
+    if hooks is not None:
+        try:
+            hooks.emit_phase_changed(tid, "probe", detail="在共享 Kali 中探测目标连通性")
+        except Exception:
+            pass
+
+    outcome = await asyncio.wait_for(
+        probe_runner.run_probe_agent(
+            task=task,
+            target=target,
+            task_id=tid,
+            auto_approve=True,
+        ),
+        timeout=probe_runner.PROBE_HARD_TIMEOUT,
+    )
+
+    reachable = bool((outcome.get("structured_report") or {}).get("target_reachable"))
+    await record_audit(
+        session, action="task.probe_done", outcome="success" if reachable else "info",
+        detail=f"目标连通性：{'可达' if reachable else '不可达'}",
+        task_id=tid, target_id=target.id, tenant_id=task.tenant_id,
+    )
+    return outcome
 
 
 async def _run_task_body(tid: UUID) -> dict:
@@ -196,46 +243,88 @@ async def _run_task_body(tid: UUID) -> dict:
             auto_approve=(task.agent_mode == "yolo"),
         )
 
-        # 主路径：直接驱动原 pobi_agent.DeadEndAgent（完整 AI 自主渗透系统，
-        # 含 Docker 沙箱执行验证、多智能体协作、ADaPT 规划、ValidationGate、
-        # ReporterAgent）。沙箱为必需依赖；若不可用时回退到轻量 ScanWorkflow。
-        outcome = None
-        engine_kind = "deadend"
-        try:
-            outcome = await run_deadend_agent(
-                task=task,
-                target=target,
-                task_id=tid,
-                max_turns=task.max_turns or 50,
-                auto_approve=(task.agent_mode == "yolo"),
-            )
-        except RuntimeError as exc:
-            if "沙箱" in str(exc) or "Docker" in str(exc):
-                # 无 Docker 沙箱：回退到不依赖沙箱的轻量实现，保证可运行
-                from pobi_v2.engine.scan_workflow import ScanWorkflow
-
-                await record_audit(
-                    session, action="task.engine_fallback", outcome="info",
-                    detail="Docker 沙箱不可用，回退到 ScanWorkflow（不含沙箱验证）",
-                    task_id=tid, target_id=target.id,
-                tenant_id=task.tenant_id,
+        # 分支：链路连通性探针走轻量快路径，不加载重型多智能体 / avfs / RAG。
+        if task.kind == "probe":
+            outcome = await _run_probe_branch(tid, task, target, hooks, session)
+        else:
+            # 主路径：直接驱动原 pobi_agent.DeadEndAgent（完整 AI 自主渗透系统，
+            # 含 Docker 沙箱执行验证、多智能体协作、ADaPT 规划、ValidationGate、
+            # ReporterAgent）。沙箱为必需依赖；若不可用时回退到轻量 ScanWorkflow。
+            outcome = None
+            engine_kind = "deadend"
+            try:
+                outcome = await asyncio.wait_for(
+                    run_deadend_agent(
+                        task=task,
+                        target=target,
+                        task_id=tid,
+                        max_turns=task.max_turns or 50,
+                        auto_approve=(task.agent_mode == "yolo"),
+                    ),
+                    timeout=_AGENT_SUB_TIMEOUT,
                 )
-                workflow = ScanWorkflow(
-                    target=target,
-                    task=task,
-                    hooks=hooks,
-                    approval_callback=approval_cb,
-                    model=task.model or settings.model,
-                    max_turns=task.max_turns or 50,
-                    allow_shell=getattr(settings, "allow_shell_exec", False),
-                )
-                outcome = await workflow.run()
-                engine_kind = "scan_workflow"
-            else:
+            except asyncio.TimeoutError:
+                # 单次 agent 调用超过子超时：判定是被取消还是真卡死。
+                # cancel 标志优先生效（协作式取消在调用返回前已被请求）。
+                if await is_cancelled(tid):
+                    task.status = TaskStatus.cancelled
+                    task.finished_at = _utcnow()
+                    task.error = "任务在子超时内被取消"
+                    await record_audit(
+                        session, action="task.cancelled", outcome="success",
+                        task_id=tid, target_id=target.id,
+                    tenant_id=task.tenant_id,
+                    )
+                    await session.commit()
+                    await _publish_status_change(tid, TaskStatus.cancelled)
+                    return {"task_id": task_id, "status": "cancelled"}
+                # 无取消请求却超时：视为真卡死，交给 run_task 兜底标记 failed。
                 raise
+            except RuntimeError as exc:
+                if "沙箱" in str(exc) or "Docker" in str(exc):
+                    # 无 Docker 沙箱：回退到不依赖沙箱的轻量实现，保证可运行
+                    from pobi_v2.engine.scan_workflow import ScanWorkflow
 
-        # 取消检查：若运行期间被请求取消
-        if is_cancelled_sync(tid):
+                    await record_audit(
+                        session, action="task.engine_fallback", outcome="info",
+                        detail="Docker 沙箱不可用，回退到 ScanWorkflow（不含沙箱验证）",
+                        task_id=tid, target_id=target.id,
+                    tenant_id=task.tenant_id,
+                    )
+                    try:
+                        workflow = ScanWorkflow(
+                            target=target,
+                            task=task,
+                            hooks=hooks,
+                            approval_callback=approval_cb,
+                            model=task.model or settings.model,
+                            max_turns=task.max_turns or 50,
+                            allow_shell=getattr(settings, "allow_shell_exec", False),
+                        )
+                        outcome = await asyncio.wait_for(
+                            workflow.run(), timeout=_AGENT_SUB_TIMEOUT
+                        )
+                    except asyncio.TimeoutError:
+                        if await is_cancelled(tid):
+                            task.status = TaskStatus.cancelled
+                            task.finished_at = _utcnow()
+                            task.error = "任务在子超时内被取消"
+                            await record_audit(
+                                session, action="task.cancelled", outcome="success",
+                                task_id=tid, target_id=target.id,
+                            tenant_id=task.tenant_id,
+                            )
+                            await session.commit()
+                            await _publish_status_change(tid, TaskStatus.cancelled)
+                            return {"task_id": task_id, "status": "cancelled"}
+                        raise
+                    engine_kind = "scan_workflow"
+                else:
+                    raise
+
+        # 取消检查：若运行期间被请求取消（用异步接口，避免 redis 后端下
+        # is_cancelled_sync 在事件循环协程内 run_coroutine_threadsafe 死锁超时）
+        if await is_cancelled(tid):
             task.status = TaskStatus.cancelled
             task.finished_at = _utcnow()
             await record_audit(

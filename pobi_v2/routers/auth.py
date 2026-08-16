@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from pobi_v2.core.config import settings
-from pobi_v2.core.deps import get_current_user
+from pobi_v2.core.deps import get_current_user, require_scope
 from pobi_v2.core.exceptions import AppError, ConflictError, NotFoundError
 from pobi_v2.core.security import create_access_token, hash_password, verify_password
 from pobi_v2.db.models import Tenant, User
@@ -91,7 +91,9 @@ async def me(user: User = Depends(get_current_user)) -> User:
 
 @router.post("/tenants", response_model=TenantRead, status_code=status.HTTP_201_CREATED)
 async def create_tenant(
-    body: TenantCreate, session: AsyncSession = Depends(get_session)
+    body: TenantCreate,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_scope("tenants:write")),
 ) -> Tenant:
     slug = body.slug or _slugify(body.name)
     exists = (

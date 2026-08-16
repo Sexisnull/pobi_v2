@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
-from pobi_v2.core.deps import get_current_user
+from pobi_v2.core.deps import get_current_user, require_scope
 from pobi_v2.core.exceptions import NotFoundError
 from pobi_v2.db.models import Artifact, Finding, Task, TaskEvent, User
 from pobi_v2.db.session import get_session
@@ -19,9 +19,9 @@ router = APIRouter(prefix="/api/v1/tasks", tags=["report"])
 
 @router.get("/{task_id}/report", response_model=None)
 async def get_report(
-    task_id: str,
+    task_id: UUID,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("tasks:read")),
 ):
     """返回结构化报告数据（JSON）。"""
     return await _build(task_id, session, user)
@@ -29,9 +29,9 @@ async def get_report(
 
 @router.get("/{task_id}/report/markdown", response_class=PlainTextResponse)
 async def get_report_markdown(
-    task_id: str,
+    task_id: UUID,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("tasks:read")),
 ) -> str:
     """导出 Markdown 报告。"""
     report = await _build(task_id, session, user)
@@ -40,16 +40,16 @@ async def get_report_markdown(
 
 @router.get("/{task_id}/report/json", response_class=PlainTextResponse)
 async def get_report_json(
-    task_id: str,
+    task_id: UUID,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("tasks:read")),
 ) -> str:
     """导出 JSON 报告。"""
     report = await _build(task_id, session, user)
     return render_json(report)
 
 
-async def _build(task_id: str, session: AsyncSession, user: User) -> dict:
+async def _build(task_id: UUID, session: AsyncSession, user: User) -> dict:
     task = await session.get(Task, task_id)
     if task is None or task.tenant_id != user.tenant_id:
         raise NotFoundError("任务不存在")

@@ -174,6 +174,15 @@ class EventHooks(Protocol):
         """Called to emit a log message."""
         ...
 
+    def emit_report(
+        self,
+        session_id: str,
+        summary: str,
+        title: Optional[str] = None,
+    ) -> None:
+        """Called to emit the final security assessment report (frontend chat)."""
+        ...
+
     def emit_plan_step(
         self,
         session_id: str,
@@ -274,6 +283,9 @@ class NullEventHooks:
         pass
 
     def emit_log_message(self, *args, **kwargs) -> None:
+        pass
+
+    def emit_report(self, *args, **kwargs) -> None:
         pass
 
     def emit_plan_step(self, *args, **kwargs) -> None:

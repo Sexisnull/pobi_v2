@@ -17,6 +17,7 @@ class TaskCreate(BaseModel):
     max_turns: int = 50
     agent_mode: str = Field(default="hacker", pattern="^(hacker|yolo)$")
     operator: str = "web-operator"
+    kind: str = "task"
 
 
 class TaskUpdate(BaseModel):
@@ -40,6 +41,7 @@ class TaskRead(BaseModel):
     result: str | None
     error: str | None
     operator: str
+    kind: str = "task"
     created_at: datetime
     updated_at: datetime
     started_at: datetime | None
@@ -119,10 +121,51 @@ class TaskLiveState(BaseModel):
     plan: PlanSummary = PlanSummary()
     pending_instructions: int = 0
     recent_events: list[dict] = []
+    agent_work: dict[str, list[dict]] = Field(default_factory=dict)
+    # 派生字段：最近一条事件的时间，前端据此显示『最后活跃 Xs 前』，
+    # 避免长时间任务 updated_at 因节流更新而看似静止。
+    last_event_at: str | None = None
+
+
+class TaskEventRead(BaseModel):
+    """单条持久化任务事件（供 /events 回放接口）。"""
+
+    seq: int
+    type: str
+    payload: dict
+    created_at: str | None = None
+
+
+class EventReplay(BaseModel):
+    """事件回放分页结果（供控制台时间线回看，弥补 SSE 断连即丢的缺陷）。"""
+
+    events: list[TaskEventRead] = []
+    total: int = 0
+    next_after_seq: int | None = None
 
 
 class TaskInstructionIn(BaseModel):
     """用户向主控 Agent 追加的指令。"""
 
     instruction: str = Field(..., min_length=1, max_length=2000)
+
+
+class ProbeRequest(BaseModel):
+    """端到端链路探针请求：派发一个轻量 agent 任务，在共享 Kali 沙箱访问已授权目标。
+
+    仅做连通性验证（如用 curl 访问目标首页并报告 HTTP 状态码），不深入利用。
+    """
+
+    target_id: UUID
+    prompt: str | None = None
+    max_turns: int = 8
+
+
+class ProbeResponse(BaseModel):
+    """端到端链路探针响应：返回被派发的探针任务 id，供后续用任务查询 / SSE 观测完整链路。"""
+
+    task_id: UUID
+    target_id: UUID
+    status: str
+    message: str
 

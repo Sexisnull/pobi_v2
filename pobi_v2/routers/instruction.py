@@ -10,23 +10,24 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from uuid import UUID
 
-from pobi_v2.core.deps import get_current_user
+from pobi_v2.core.deps import get_current_user, require_scope
 from pobi_v2.core.exceptions import NotFoundError
 from pobi_v2.db.models import Task, TaskStatus, User
 from pobi_v2.db.session import get_session
 from pobi_v2.schemas.task import TaskInstructionIn
 from pobi_v2.engine.instruction_channel import queue_instruction
 
-router = APIRouter(prefix="/api/v1/tasks", tags=["instructions"], dependencies=[Depends(get_current_user)])
+router = APIRouter(prefix="/api/v1/tasks", tags=["instructions"])
 
 
 @router.post("/{task_id}/instructions", status_code=status.HTTP_202_ACCEPTED)
 async def post_instruction(
-    task_id: str,
+    task_id: UUID,
     data: TaskInstructionIn,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("tasks:write")),
 ):
     task = await session.get(Task, task_id)
     if task is None or task.tenant_id != user.tenant_id:
