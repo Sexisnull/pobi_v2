@@ -362,6 +362,12 @@ class CoreAgent:
         while iteration < max_iterations:
             iteration += 1
 
+            # ── 协作式取消检查点：用户主动取消时立即抛出 CancelledError，
+            #    由 executor 据 is_cancelled 标记任务为 cancelled（而非 failed）。
+            #    is_interrupted 为同步接口，内部按 backend 直查取消标志，异常兜底 False。──
+            if hooks.is_interrupted(session_id):
+                raise asyncio.CancelledError("任务已被用户主动取消")
+
             # ── 可观测性：推送迭代开始事件（前端渲染为『Iteration N』标题）──
             hooks.emit_llm_iteration(
                 session_id=session_id,

@@ -31,9 +31,9 @@
   --text-muted: var(--color-muted-foreground);
 
   /* action aliases */
-  --primary: var(--color-primary);
-  --primary-h: color-mix(in srgb, var(--color-primary) 86%, #ffffff);
-  --primary-a: color-mix(in srgb, var(--color-primary) 80%, #000000);
+  --primary: var(--color-brand-500);
+  --primary-h: color-mix(in srgb, var(--primary) 86%, #ffffff);
+  --primary-a: color-mix(in srgb, var(--primary) 80%, #000000);
   --accent-on: var(--color-primary-foreground);
   --focus-ring: 0 0 0 4px color-mix(in srgb, var(--color-ring) 45%, transparent);
 
@@ -69,6 +69,11 @@
   --type-font-mono: var(--font-mono);
 
   font-synthesis: none;
+}
+
+/* dark mode action aliases to keep --primary non-circular and valid */
+.dark {
+  --primary: var(--color-brand-400);
 }
 
 
@@ -257,6 +262,12 @@ textarea:focus-visible,
   color: var(--primary); padding-top: 8px; margin-top: 4px;
   border-top: 1px solid var(--border-soft);
 }
+.checkbox-row {
+  display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text);
+  cursor: pointer; user-select: none;
+}
+.checkbox-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--primary); cursor: pointer; }
+.req { color: var(--warn); margin-left: 2px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 .tag-input { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip {

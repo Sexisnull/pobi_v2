@@ -43,7 +43,9 @@
 - `Task` 新增 `flag_regex` / `validation_format` / `confidence_threshold` / `max_tree_depth`（可空，回退目标级/默认），迁移 `0012_task_validation`（`docs/VALIDATION_REAL_TARGET_ISSUE.md` 已落地）。
 - 当前 `validation_type` 仍由 `_write_validation_config` 按「flag 有无」推导（`"flag"` / `"security assessment"`）。
 
-**待办（方案 B）**：任务级新增 `preset`（如 `vuln`），把 `validation_type` 决策迁移到任务级；补 `judge.instructions.jinja2` 的 `vuln` 分支与 `_JudgeOutput.confirmed_vulns`，实现「真实漏洞确认」语义。
+**待办（方案 B，部分已落地）**：
+- ~~验证语义由 `flag_regex` 非空隐式推断 → 改为显式 `is_range` 开关（靶场必填 flag 正则，真实目标 judge-only）。已落地：迁移 `0013_task_is_range` + `TaskCreate/Update` 条件校验 + 前端勾选框。~~
+- 仍待：`validation_type` 从「flag 有无」改为任务级 `preset`（如 `vuln`）；补 `judge.instructions.jinja2` 的 `vuln` 分支与 `_JudgeOutput.confirmed_vulns`，实现「真实漏洞确认」语义。
 
 ---
 

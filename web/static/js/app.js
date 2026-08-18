@@ -983,13 +983,20 @@
             <option value="yolo">主动验证（yolo，自动批准高危调用）</option>
           </select>
         </label>
-        <div class="form-divider">验证策略（怎样才算找到漏洞，留空则使用默认/继承目标）</div>
-        <label>FLAG 正则
-          <input name="flag_regex" placeholder="例如 FLAG\\{[^}]+\\}，留空则仅用 LLM 判定" />
+        <label class="checkbox-row">
+          <input type="checkbox" name="is_range" />
+          <span>这是靶场（CTF / 夺旗）</span>
         </label>
-        <label>FLAG 格式
-          <input name="validation_format" placeholder="例如 FLAG{}" />
-        </label>
+        <div class="form-divider">验证策略（怎样才算找到漏洞）</div>
+        <div id="range-fields" class="hidden">
+          <label>FLAG 正则<span class="req">*</span>
+            <input name="flag_regex" placeholder="例如 FLAG\\{[^}]+\\}" />
+          </label>
+          <label>FLAG 格式
+            <input name="validation_format" placeholder="例如 FLAG{}" />
+          </label>
+        </div>
+        <p id="real-target-note" class="muted note">真实目标：不配置 FLAG，由任务目标（objective）与 LLM 自行判断完成。</p>
         <label class="has-hint">
           <span class="field-label">
             信心阈值带 (0–1)
@@ -1019,10 +1026,12 @@
       form.model.value = draft.model || "";
       form.max_turns.value = draft.max_turns || 50;
       form.agent_mode.value = draft.agent_mode || "hacker";
+      form.is_range.checked = !!draft.is_range;
       form.flag_regex.value = draft.flag_regex || "";
       form.validation_format.value = draft.validation_format || "";
       form.confidence_threshold.value = draft.confidence_threshold ?? "";
       form.max_tree_depth.value = draft.max_tree_depth ?? "";
+      syncRangeFields();
     }
 
     // 提示图标点击展开/收起说明
@@ -1032,6 +1041,18 @@
         if (box) box.classList.toggle("hidden");
       });
     });
+
+    // 靶场勾选 → 显示/隐藏 FLAG 字段
+    function syncRangeFields() {
+      const isRange = form.is_range.checked;
+      $("#range-fields").classList.toggle("hidden", !isRange);
+      $("#real-target-note").classList.toggle("hidden", isRange);
+      const flagInput = form.flag_regex;
+      if (isRange) flagInput.setAttribute("required", "required");
+      else flagInput.removeAttribute("required");
+    }
+    form.is_range.addEventListener("change", syncRangeFields);
+    syncRangeFields();
 
     // 填充目标下拉
     api("/targets")
@@ -1057,6 +1078,7 @@
           model: form.model.value,
           max_turns: form.max_turns.value,
           agent_mode: form.agent_mode.value,
+          is_range: form.is_range.checked,
           flag_regex: form.flag_regex.value,
           validation_format: form.validation_format.value,
           confidence_threshold: form.confidence_threshold.value,
@@ -1076,10 +1098,17 @@
         objective: f.objective.value.trim(),
         max_turns: +f.max_turns.value,
         agent_mode: f.agent_mode.value,
+        is_range: f.is_range.checked,
       };
       if (f.model.value.trim()) body.model = f.model.value.trim();
-      if (f.flag_regex.value.trim()) body.flag_regex = f.flag_regex.value.trim();
-      if (f.validation_format.value.trim()) body.validation_format = f.validation_format.value.trim();
+      if (f.is_range.checked) {
+        if (!f.flag_regex.value.trim()) {
+          toast("靶场任务必须填写 FLAG 正则", true);
+          return;
+        }
+        body.flag_regex = f.flag_regex.value.trim();
+        if (f.validation_format.value.trim()) body.validation_format = f.validation_format.value.trim();
+      }
       const ct = parseFloat(f.confidence_threshold.value);
       if (Number.isFinite(ct)) body.confidence_threshold = ct;
       const mtd = parseInt(f.max_tree_depth.value, 10);

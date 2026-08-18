@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from pobi_v2.db.models import TaskStatus
 
@@ -18,11 +18,19 @@ class TaskCreate(BaseModel):
     agent_mode: str = Field(default="hacker", pattern="^(hacker|yolo)$")
     operator: str = "web-operator"
     kind: str = "task"
+    # 是否靶场（CTF / 夺旗）：勾选则必须配置 flag_regex 供验证 Agent 验收
+    is_range: bool = False
     # 验证策略（任务级覆盖；None = 继承授权目标配置/使用默认）
     flag_regex: str | None = Field(default=None, max_length=512)
     validation_format: str | None = Field(default=None, max_length=64)
     confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     max_tree_depth: int | None = Field(default=None, ge=1, le=16)
+
+    @model_validator(mode="after")
+    def _check_range_flag(self) -> "TaskCreate":
+        if self.is_range and not self.flag_regex:
+            raise ValueError("靶场（is_range）任务必须配置 flag_regex 供验证 Agent 验收")
+        return self
 
 
 class TaskUpdate(BaseModel):
@@ -32,11 +40,19 @@ class TaskUpdate(BaseModel):
     model: str | None = None
     max_turns: int | None = None
     agent_mode: str | None = Field(default=None, pattern="^(hacker|yolo)$")
+    is_range: bool | None = None
     # 验证策略（任务级覆盖；None 不修改，需清空时显式传空字符串）
     flag_regex: str | None = Field(default=None, max_length=512)
     validation_format: str | None = Field(default=None, max_length=64)
     confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     max_tree_depth: int | None = Field(default=None, ge=1, le=16)
+
+    @model_validator(mode="after")
+    def _check_range_flag_update(self) -> "TaskUpdate":
+        # 显式声明为靶场却未配 flag_regex 时拦截
+        if self.is_range is True and not self.flag_regex:
+            raise ValueError("靶场（is_range）任务必须配置 flag_regex 供验证 Agent 验收")
+        return self
 
 
 class TaskRead(BaseModel):
@@ -52,6 +68,7 @@ class TaskRead(BaseModel):
     error: str | None
     operator: str
     kind: str = "task"
+    is_range: bool = False
     # 验证策略（任务级；None 表示未覆盖，运行时继承授权目标配置/使用默认）
     flag_regex: str | None = None
     validation_format: str | None = None

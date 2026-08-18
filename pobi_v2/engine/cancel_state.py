@@ -13,8 +13,11 @@ memory 后端内部用同步集合，redis 后端用异步客户端。
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from pobi_v2.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class _MemoryCancelStore:
@@ -86,12 +89,22 @@ async def is_cancelled(task_id) -> bool:
 
 
 def is_cancelled_sync(task_id) -> bool:
-    """同步入口，供同步 EventHooks.is_interrupted 调用（memory 后端）。"""
-    store = _get_store()
-    if isinstance(store, _MemoryCancelStore):
-        return store.is_set(task_id)
-    # redis 后端：回退到事件循环桥接
-    future = asyncio.run_coroutine_threadsafe(
-        store.is_set(task_id), asyncio.get_event_loop()
-    )
-    return future.result(timeout=2)
+    """同步入口，供同步 EventHooks.is_interrupted 调用。
+
+    memory 后端直接查进程内集合；redis 后端用**同步** redis 客户端查 SET，
+    绕开 ``run_coroutine_threadsafe`` + ``get_event_loop()`` 在跨线程调用时
+    可能死锁 / 拿到错误 loop 导致超时返回 False 的问题（协作式取消不生效的根因之一）。
+    任何异常一律按「未取消」处理，避免取消检查本身抛错中断 Agent。
+    """
+    try:
+        store = _get_store()
+        if isinstance(store, _MemoryCancelStore):
+            return store.is_set(task_id)
+        # redis 后端：使用 redis 同步客户端直查，避免事件循环桥接死锁
+        import redis as sync_redis
+
+        client = sync_redis.from_url(settings.redis_url, decode_responses=True)
+        return bool(client.sismember("pobi_v2:cancelled", str(task_id)))
+    except Exception:
+        logger.exception("is_cancelled_sync 查询失败，按未取消处理")
+        return False

@@ -4,7 +4,10 @@
 """
 from __future__ import annotations
 
+import logging
+import shutil
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -33,6 +36,7 @@ from pobi_v2.schemas.task import (
 from pobi_v2.engine.queue import enqueue_task
 from pobi_v2.engine.guardrails import check_scope
 from pobi_v2.engine.cancel_state import request_cancel
+from pobi_agent.constants import TASKS_ROOT
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 
@@ -211,6 +215,15 @@ async def delete_task(
         raise NotFoundError("任务不存在")
     await session.delete(task)
     await session.commit()
+
+    # 清理本地缓存目录（TASKS_ROOT/<task_id>/），避免删除任务后残留孤儿目录。
+    # 删除失败不影响 DB 记录已删除的结果，仅记日志。
+    try:
+        cache_dir = TASKS_ROOT / str(task_id)
+        if cache_dir.exists():
+            shutil.rmtree(cache_dir)
+    except Exception:
+        logger.exception("删除任务 %s 时清理本地缓存目录失败", task_id)
 
 
 @router.post("/{task_id}/cancel", response_model=TaskRead)

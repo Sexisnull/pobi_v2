@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from arq import Worker, cron
 
+from pobi_v2.core.config import settings
 from pobi_v2.engine.agent_adapter import install_event_hooks
 from pobi_v2.engine.executor import run_task
 from pobi_v2.engine.queue import REDIS_SETTINGS

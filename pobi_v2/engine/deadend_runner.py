@@ -148,9 +148,17 @@ def _write_validation_config(task: Task, target: Target, task_id: UUID) -> Path:
         task.max_tree_depth if task.max_tree_depth is not None else target.max_tree_depth
     )
 
+    # 验证语义由用户显式意图驱动：靶场(is_range)用 flag 验收，真实目标走 judge-only。
+    # 不再以「flag 正则是否非空」隐式推断，避免误配导致语义错位。
+    is_range = task.is_range
+
     strategies: list[dict[str, Any]] = []
-    if flag_regex:
-        strategies.append({"name": "flag", "pattern": flag_regex})
+    if is_range:
+        # 靶场任务必须提供 flag 正则（schema 已强制），缺失则回退目标级配置
+        if not flag_regex:
+            flag_regex = target.flag_regex
+        if flag_regex:
+            strategies.append({"name": "flag", "pattern": flag_regex})
     # judge 始终启用（LLM 兜底验证），与 deadend-cli 默认一致
     judge_block: dict[str, Any] = {"name": "judge"}
     if validation_format:
@@ -159,7 +167,7 @@ def _write_validation_config(task: Task, target: Target, task_id: UUID) -> Path:
 
     validation_doc: dict[str, Any] = {
         "validation_format": validation_format or "FLAG{}",
-        "validation_type": "flag" if flag_regex else "security assessment",
+        "validation_type": "flag" if is_range and flag_regex else "security assessment",
         "strategies": strategies,
         # 信心阈值带与任务树深度作为注释级元信息写入，供人工审阅；
         # 阈值核心调度走 Task.agent 参数，深度约束走 max_turns 上限。

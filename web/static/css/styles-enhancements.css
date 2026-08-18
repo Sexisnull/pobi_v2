@@ -787,3 +787,114 @@ tbody tr:last-child td { border-bottom: none; }
   .task-url { max-width: 280px; font-size: 15px; }
   .console-grid { padding: 14px 16px 20px; gap: 14px; }
 }
+
+/* ═════════════════════════════════════════════════════════════════════════
+ * 可见性修复：侧边栏、Logo、顶部操作区、统计卡片
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+/* Logo 徽标 */
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  font-size: 18px;
+  font-weight: 700;
+  background: linear-gradient(180deg, var(--primary), var(--primary-a));
+  color: var(--accent-on);
+  border: 1px solid rgba(255,255,255,0.12);
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.2), 0 4px 14px rgba(10,132,255,0.28);
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+.sidebar-brand {
+  gap: 12px;
+  padding: 4px 8px 18px;
+}
+
+/* 侧边栏导航 */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  position: relative;
+  padding: 9px 12px 9px 11px;
+  font-weight: 500;
+  font-size: 13.5px;
+  border-radius: 10px;
+}
+.nav-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  opacity: 0.65;
+  transition: opacity 0.15s, color 0.15s, transform 0.15s;
+}
+.nav-item:hover .nav-icon { opacity: 0.9; }
+.nav-item.active {
+  background: rgba(10,132,255,0.10);
+  color: var(--text);
+}
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 16px;
+  border-radius: 0 2px 2px 0;
+  background: var(--primary);
+}
+.nav-item.active .nav-icon {
+  color: var(--primary);
+  opacity: 1;
+}
+
+/* 侧边栏底部 */
+.sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 14px;
+  margin-top: auto;
+}
+.user-info {
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+.user-info:empty {
+  display: none;
+}
+
+/* 顶部操作区 */
+.header-actions {
+  gap: 10px;
+}
+.worker-pill {
+  padding: 6px 12px;
+}
+
+/* 统计卡片顶部光条可见性 */
+.stat-glow {
+  height: 3px;
+  opacity: 1;
+}
+.stat-card[data-stat="running"] .stat-glow { background: linear-gradient(90deg, var(--low), #5ac8fa); box-shadow: 0 0 12px rgba(100,210,255,0.35); }
+.stat-card[data-stat="queued"]   .stat-glow { background: linear-gradient(90deg, var(--primary), #5e5ce6); box-shadow: 0 0 12px rgba(10,132,255,0.3); }
+.stat-card[data-stat="pending"]  .stat-glow { background: linear-gradient(90deg, var(--warn), #ffd60a); box-shadow: 0 0 12px rgba(255,159,10,0.3); }
+.stat-card[data-stat="completed"] .stat-glow { background: linear-gradient(90deg, var(--ok), #34c759); box-shadow: 0 0 12px rgba(48,209,88,0.3); }
+
+/* 空状态 */
+.empty {
+  color: var(--text-dim);
+  padding: 48px 20px;
+  text-align: center;
+  font-size: 13px;
+}

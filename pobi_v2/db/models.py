@@ -192,6 +192,9 @@ class Task(Base):
     agent_mode: Mapped[str] = mapped_column(String(32), default="hacker", nullable=False)
     # 任务种类：task=正式渗透任务，probe=链路连通性探针（仅做授权目标连通验证）
     kind: Mapped[str] = mapped_column(String(32), default="task", nullable=False, index=True)
+    # 是否靶场（CTF / 夺旗）：勾选则需配置 flag 正则供验证 Agent 验收；
+    # 否则视为真实目标，走 judge-only（任务目标 objective + LLM 自行判断完成）。
+    is_range: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # 验证策略（任务级覆盖；None = 继承授权目标配置/使用默认）：
     # 决定「怎样才算找到漏洞」——flag 正则、验证格式（如 FLAG{}）、信心阈值带、任务树深度。
     flag_regex: Mapped[str | None] = mapped_column(String(512), nullable=True)
