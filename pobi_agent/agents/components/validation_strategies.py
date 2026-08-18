@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from pobi_agent.config.settings import ModelSpec
 from pobi_agent.logging import logger
 from pobi_agent.constants import DEADEND_VALIDATION_CONFIG_PATH
+from pobi_agent.storage_context import get_task_root
 from pobi_prompts import render_agent_instructions
 
 
@@ -149,6 +150,35 @@ def load_validation_config(
         return ValidationConfig()
 
     return ValidationConfig(**raw)
+
+
+def resolve_validation_config() -> ValidationConfig:
+    """Resolve the validation config for the *current* task.
+
+    Resolution order (highest priority first):
+
+    1. ``<task_root>/validation.<task_id>.yaml`` — task-level override written by
+       the validation builder. ``task_root`` comes from
+       :func:`pobi_agent.storage_context.get_task_root` and ``task_id`` is the
+       task directory name (``task_root.name``).
+    2. ``DEADEND_VALIDATION_CONFIG_PATH`` — global/persistent root config.
+    3. Built-in defaults (flag + judge).
+
+    This lets a CTF/scan task ship its own flag format without polluting the
+    global config, and fixes the regression where ``validation.<task_id>.yaml``
+    was written but never read at validation time.
+    """
+    task_root = get_task_root()
+    if task_root is not None:
+        task_id = task_root.name
+        per_task_path = task_root / f"validation.{task_id}.yaml"
+        if per_task_path.is_file():
+            logger.info(
+                "Resolving per-task validation config: %s", per_task_path,
+            )
+            return load_validation_config(per_task_path)
+
+    return load_validation_config(DEADEND_VALIDATION_CONFIG_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -358,18 +388,64 @@ class _JudgeOutput(BaseModel):
 class ValidationGate:
     """Runs a chain of validation strategies and short-circuits on the first stop.
 
+    Two construction styles are supported:
+
+    * **Eager** — pass a concrete ``strategies`` list
+      (``ValidationGate([FlagStrategy(), JudgeAgentStrategy(model)])``).
+    * **Lazy / per-task** — pass ``model`` (and optionally ``config``). The
+      strategy list is built on first :meth:`check` from the resolved config,
+      so the *current task's* ``validation.<task_id>.yaml`` is honored even
+      though the gate was created before the task root was known.
+
     Usage::
 
-        gate = ValidationGate([FlagStrategy(), JudgeAgentStrategy(model)])
+        gate = ValidationGate(model=model_spec)  # resolves per-task config lazily
         verdict = await gate.check(output, root_goal, context)
         if verdict.stop:
             ...  # write report, exit loop
     """
 
-    def __init__(self, strategies: list[ValidationStrategy]):
-        if not strategies:
-            raise ValueError("ValidationGate requires at least one strategy.")
-        self.strategies = strategies
+    def __init__(
+        self,
+        strategies: list[ValidationStrategy] | None = None,
+        *,
+        model: ModelSpec | None = None,
+        config: ValidationConfig | None = None,
+    ):
+        if strategies is not None:
+            if not strategies:
+                raise ValueError("ValidationGate requires at least one strategy.")
+            self._strategies: list[ValidationStrategy] | None = list(strategies)
+            self._model = model
+            self._config_override = config
+        else:
+            # Lazy mode: strategies are built on first check().
+            if model is None:
+                raise ValueError(
+                    "ValidationGate needs either 'strategies' or 'model'."
+                )
+            self._strategies = None
+            self._model = model
+            self._config_override = config
+
+    def _ensure_strategies(self) -> None:
+        """Build the strategy list lazily from the resolved config (once)."""
+        if self._strategies is not None:
+            return
+        cfg = self._config_override or resolve_validation_config()
+        self._strategies = _build_strategy_instances(cfg, self._model)
+        if not self._strategies:
+            raise ValueError("ValidationGate built zero strategies.")
+
+    def validation_metadata(self) -> tuple[str | None, str | None]:
+        """Return ``(validation_type, validation_format)`` of the resolved config.
+
+        Used by the reporter to render flag-format-aware instructions. Building
+        is forced if it has not happened yet.
+        """
+        self._ensure_strategies()
+        cfg = self._config_override or resolve_validation_config()
+        return cfg.validation_type, cfg.validation_format
 
     async def check(
         self,
@@ -378,9 +454,10 @@ class ValidationGate:
         context: str,
     ) -> ValidationVerdict:
         """Iterate strategies in order; return first stop=True verdict."""
+        self._ensure_strategies()
         last_verdict = ValidationVerdict(stop=False, confidence=0.0)
 
-        for strategy in self.strategies:
+        for strategy in self._strategies:
             verdict = await strategy.check(output, root_goal, context)
             if verdict.stop:
                 logger.debug(
@@ -414,26 +491,11 @@ PRESETS: dict[str, list[str]] = {
 }
 
 
-def build_validation_gate(
-    *,
-    config: ValidationConfig | None = None,
-    model: ModelSpec | None = None,
-) -> ValidationGate:
-    """Build a ValidationGate from a ``ValidationConfig``.
-
-    The config is typically loaded from ``validation.yaml`` via
-    ``load_validation_config()``.  If *config* is ``None`` the default
-    config is used (flag + judge).
-
-    Args:
-        config: Parsed YAML config.  ``None`` → default.
-        model: Required when any LLM-based strategy is in the chain.
-
-    Returns:
-        A configured ``ValidationGate`` ready for use.
-    """
-    cfg = config or ValidationConfig()
-
+def _build_strategy_instances(
+    cfg: ValidationConfig,
+    model: ModelSpec | None,
+) -> list[ValidationStrategy]:
+    """Instantiate the ordered strategy list described by *cfg*."""
     instances: list[ValidationStrategy] = []
     for strategy_cfg in cfg.strategies:
         name = strategy_cfg.name
@@ -464,4 +526,30 @@ def build_validation_gate(
                 f"Available: {list(STRATEGY_REGISTRY.keys())}"
             )
 
-    return ValidationGate(instances)
+    return instances
+
+
+def build_validation_gate(
+    *,
+    config: ValidationConfig | None = None,
+    model: ModelSpec | None = None,
+) -> ValidationGate:
+    """Build a ValidationGate from a ``ValidationConfig``.
+
+    The config is typically loaded from ``validation.yaml`` via
+    ``load_validation_config()``.  If *config* is ``None`` the default
+    config is used (flag + judge).
+
+    To resolve the *current task's* ``validation.<task_id>.yaml`` lazily,
+    prefer ``ValidationGate(model=model)`` instead — it re-reads config on
+    the first :meth:`~ValidationGate.check` call.
+
+    Args:
+        config: Parsed YAML config.  ``None`` → default.
+        model: Required when any LLM-based strategy is in the chain.
+
+    Returns:
+        A configured ``ValidationGate`` ready for use.
+    """
+    cfg = config or ValidationConfig()
+    return ValidationGate(_build_strategy_instances(cfg, model))

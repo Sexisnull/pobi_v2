@@ -48,6 +48,19 @@ class Settings(BaseSettings):
     # ---- 任务执行默认上限（M2 使用）----
     task_max_turns: int = 50
 
+    # ---- Worker 并发（方案 A+B：多任务并行消费）----
+    # 单个 ARQ Worker 进程内同时执行的任务协程数（ARQ 参数 max_jobs，默认 10）。
+    # 因共享 Kali 沙箱为单容器，进程内并发过大会互相争抢 shell/python 资源，
+    # 故默认收敛为 2；多任务并行优先靠「多 Worker 副本」(docker-compose replicas)
+    # 而非单进程内大并发实现。设为 1 即进程内严格串行。
+    worker_max_jobs: int = 2
+
+    # ---- LLM 全局并发上限（防止多任务并行触发上游 429 雪崩）----
+    # 多任务并行时 LLM 调用 QPS 线性放大，易触发 RateLimitError。
+    # 进程级 asyncio.Semaphore 统一限流（与 task_id 无关，按全局并发卡口），
+    # 超出则排队等待，避免 tenacity 指数退避雪崩拖慢整体。
+    llm_max_concurrency: int = 8
+
     # ---- 沙箱镜像 ----
     # 渗透验证在 Kali 沙箱中执行（含 sqlmap/nmap 等工具链）。
     # 默认使用本地已下载的 xoxruns/sandboxed_kali，可通过环境变量覆盖。

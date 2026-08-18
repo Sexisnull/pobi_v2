@@ -1,5 +1,4 @@
 """Main DeadEnd agent orchestration module."""
-from pobi_agent.constants import DEADEND_AGENTS_PATH
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Generator
 from uuid import UUID
@@ -26,8 +25,6 @@ from pobi_agent.agents.components.executor import (
 from pobi_agent.agents.components.planner import Planner, TaskNode
 from pobi_agent.agents.components.validation_strategies import (
     ValidationGate,
-    build_validation_gate,
-    load_validation_config,
 )
 from pobi_agent.utils.structures import (
     MemoryWorkspaceDeps,
@@ -108,21 +105,17 @@ class DeadEndAgent:
         self.available_agents = available_agents
         self.proxy_url = proxy_url
 
-        # Load validation config from YAML (falls back to defaults).
-        self.validation_config = load_validation_config(validation_config_path)
-
-        # Build composable validation gate from the loaded config.
-        self.validation_gate = build_validation_gate(
-            config=self.validation_config,
-            model=model,
-        )
+        # NOTE: validation config is *not* loaded eagerly here. The gate
+        # resolves the per-task ``validation.<task_id>.yaml`` lazily on each
+        # check() so that task-level overrides are honored (see
+        # validation_strategies.resolve_validation_config). The root config is
+        # only the fallback.
+        self.validation_gate = ValidationGate(model=model)
 
         # Reporter agent for writing assessment reports on validation stop.
-        self.reporter = ReporterAgent(
-            model=model,
-            validation_type=self.validation_config.validation_type,
-            validation_format=self.validation_config.validation_format,
-        )
+        # Built lazily in _run_validation_and_report so it picks up the
+        # *current task's* validation_type/format (from validation.<task_id>.yaml).
+        self.reporter: ReporterAgent | None = None
 
         self.workspace_root: str | None = None
         self.local_agent_id = local_agent_id or Config.get_local_agent_id()
@@ -130,6 +123,15 @@ class DeadEndAgent:
         self.context = ContextEngine(model=self.model, session_id=self.embedding_session_id, agent_id=self.agent_id)
 
         self.agents_storage_root = agents_storage_root or Config.agents_storage_root
+        if not self.agents_storage_root:
+            # 目录契约：调用方必须显式传入 agents_storage_root（平台层
+            # deadend_runner 注入 task_root/agent），或在 env 通过
+            # POBI_AGENTS_STORAGE_ROOT 指定，否则 PobiAgent 后续创建
+            # run_context/auth_context/memory 等子目录时会落到错误位置。
+            raise RuntimeError(
+                "agents_storage_root 未设置：必须由平台层注入 task_root/agent，"
+                "或在 env POBI_AGENTS_STORAGE_ROOT 指定。"
+            )
         self.memory_workspace_root = self._prepare_memory_workspace()
         self.memory_context = ""
         avfs.mount(
@@ -258,9 +260,12 @@ class DeadEndAgent:
         self.workspace_root = None if mounted_root is None else str(mounted_root)
 
     def _prepare_memory_workspace(self) -> str:
-        """Ensure the persistent memory workspace exists for this local agent."""
+        """Ensure the persistent memory workspace exists for this local agent.
+
+        归口到统一任务根 tasks/<task_id>/agent/<agent_id>/<session_id>/memory。
+        """
         memory_root = (
-            DEADEND_AGENTS_PATH.expanduser().resolve()
+            Path(self.agents_storage_root).expanduser().resolve()
             / str(self.local_agent_id)
             / str(self.embedding_session_id)
             / "memory"
@@ -326,7 +331,8 @@ class DeadEndAgent:
         self.code_indexer = SourceCodeIndexer(
             target=self.target,
             session_id=self.embedding_session_id,
-            agent_id=self.agent_id
+            agent_id=self.agent_id,
+            storage_root=self.agents_storage_root,
         )
 
 

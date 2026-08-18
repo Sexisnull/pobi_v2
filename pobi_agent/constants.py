@@ -17,12 +17,34 @@ persistent root and the cache root live under ``POBI_HOME`` so that *all*
 runtime data stays inside the single host-mounted directory and survives
 container restarts.
 
-Both trees share the same hierarchy:
+任务级产物统一归口到 ``TASKS_ROOT = <POBI_HOME>/tasks``，按
+``tasks/<task_id>/`` 单级组织（``task_id`` 即内核 ``session_id``），
+便于按任务 id 直接查询。内核仅持有 ``task_id``，不感知授权目标 slug，
+因此统一以任务 id 为目录主键，平台层负责把 ``task_root`` 注入
+``pobi_agent.storage_context`` 供内核各写入点复用。
 
-    agents/<agent_id>/<target_slug>/
+单次任务目录结构约定::
 
-``agent_id`` is the resumable session UUID.
-``target_slug`` is the filesystem-safe target identifier (e.g. ``localhost_8080``).
+    tasks/<task_id>/
+        scope.<task_id>.yaml        # 平台层：授权范围
+        validation.<task_id>.yaml   # 平台层：验证策略
+        agent/                      # 内核 agent_storage_root
+            <agent_id>/<session_id>/workspace
+            <agent_id>/<session_id>/memory
+            <agent_id>/<session_id>/run_context
+            <agent_id>/<session_id>/auth_context
+        rag/                        # RAG 索引（白盒分析）
+        logs/
+            python_interpreter.jsonl
+            requester.jsonl
+        metrics/
+            metrics.json
+
+历史旧路径（``agents/<agent_id>/<task_id>/``、``targets/<slug>/<task_id>/``、
+``cache/logs/<task_id>/``、``cache/metrics/<task_id>/``）属早期契约，已弃用；
+新增写入点统一经 ``storage_context.get_task_root()`` 落到 ``tasks/<task_id>/``，
+请勿再使用 ``DEADEND_AGENTS_PATH`` / ``CACHE_DEADEND_LOGS`` / ``CACHE_METRICS_PATH``
+等旧根。
 """
 from __future__ import annotations
 import os
@@ -39,6 +61,9 @@ MODEL_CONFIG_PATH = ROOT_DEADEND_PATH / "config.json"
 SETTINGS_CONFIG_PATH = ROOT_DEADEND_PATH / "settings.json"
 DEADEND_AGENTS_PATH = ROOT_DEADEND_PATH / "agents"
 DEADEND_VALIDATION_CONFIG_PATH = ROOT_DEADEND_PATH / "validation.yaml"
+# 统一任务目录根：tasks/<task_id>/ 聚合单次运行所有产物
+# (scope/validation/agent 工作区/RAG/logs/metrics)，按任务 id 归口，便于查询。
+TASKS_ROOT = ROOT_DEADEND_PATH / "tasks"
 REUSABLE_CREDENTIALS_FILE: Path = ROOT_DEADEND_PATH / "reusable_credentials.json"
 DEADEND_PROMPTS_PATH = ROOT_DEADEND_PATH / "prompts"
 

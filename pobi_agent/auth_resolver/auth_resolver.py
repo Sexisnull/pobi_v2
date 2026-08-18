@@ -11,6 +11,7 @@ tools and sub-agents can reuse the same browser session artefacts.
 
 from __future__ import annotations
 from pobi_agent.constants import REUSABLE_CREDENTIALS_FILE, DEADEND_AGENTS_PATH
+from pobi_agent.storage_context import get_task_root
 from pobi_agent.utils.network import slugify_target
 
 import json
@@ -279,12 +280,24 @@ class AuthContextHandler:
         self.target_slug = slugify_target(target)
         self.agent_id = agent_id
         self.session_id = session_id
-        self._auth_dir = (
-            DEADEND_AGENTS_PATH
-            / str(agent_id)
-            / str(session_id)
-            / "auth_context"
-        )
+        # 优先归口到统一任务根 tasks/<task_id>/agent/<agent_id>/<session_id>/auth_context；
+        # 未注入 task_root 时回退旧 agents/<agent_id>/<session_id>/auth_context 路径。
+        task_root = get_task_root()
+        if task_root is not None:
+            self._auth_dir = (
+                Path(task_root)
+                / "agent"
+                / str(agent_id)
+                / str(session_id)
+                / "auth_context"
+            )
+        else:
+            self._auth_dir = (
+                DEADEND_AGENTS_PATH
+                / str(agent_id)
+                / str(session_id)
+                / "auth_context"
+            )
         self._auth_dir.mkdir(parents=True, exist_ok=True)
         self._index_path = self._auth_dir / "index.json"
         self._index: dict[str, dict[str, Any]] = self._load_index()

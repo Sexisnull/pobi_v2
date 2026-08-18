@@ -214,7 +214,12 @@ class Config:
     # List providers
     providers: ProvidersList = ProvidersList()
     # agents folder
-    agents_storage_root: str | None = _cfg("DEADEND_AGENTS_PATH", str(DEADEND_AGENTS_PATH))
+    # 目录契约：默认 None，由 ``deadend_runner`` 在派发任务时强制注入
+    # ``task_root/agent``，避免内核兜底回退到旧的 ``~/.pobi_v2/agents/`` 散落路径。
+    # 若运行场景是 CLI/单测无平台注入，应显式通过环境变量
+    # ``POBI_AGENTS_STORAGE_ROOT`` 指定根，否则 ``pobi_agent.PobiAgent``
+    # 在需要路径时会抛出 ``RuntimeError``。
+    agents_storage_root: str | None = _cfg("POBI_AGENTS_STORAGE_ROOT", None)
     # Tools
     zap_api_key: str | None = _cfg("ZAP_PROXY_API_KEY")
 

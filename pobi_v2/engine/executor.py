@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 from pobi_agent.hooks import get_event_hooks
 
@@ -123,8 +126,16 @@ async def run_task(ctx, task_id: str, **kwargs: object) -> dict:
         return await _run_task_body(tid)
     except BaseException as exc:  # noqa: BLE001 — 必须覆盖 CancelledError
         if isinstance(exc, asyncio.CancelledError):
-            _status = TaskStatus.failed
-            _err = "任务被强制中断（可能超过 job_timeout 或 Worker 重启）"
+            # CancelledError 来源：用户主动取消（is_cancelled=True）或
+            # job_timeout / Worker 重启撞墙（无主动取消）。前者标 cancelled，
+            # 后者标 failed。配合 worker.retry_jobs=False，CancelledError 不再
+            # 被 ARQ 自动重投，用户已取消的任务不会被静默重启（风险3根解）。
+            if await is_cancelled(tid):
+                _status = TaskStatus.cancelled
+                _err = "任务已被用户取消"
+            else:
+                _status = TaskStatus.failed
+                _err = "任务被强制中断（超过 job_timeout 或 Worker 重启）"
         elif isinstance(exc, Exception):
             _status = TaskStatus.cancelled if (await is_cancelled(tid)) else TaskStatus.failed
             _err = str(exc)
@@ -155,7 +166,9 @@ async def run_task(ctx, task_id: str, **kwargs: object) -> dict:
                     )
                     await s2.commit()
         except Exception:
-            pass
+            # 兜底落库自身失败（如 PG 断连）时记录日志而非静默吞掉，
+            # 否则任务仍停留在 running，需等 5 分钟对账才能收敛为幽灵任务。
+            logger.exception("兜底落库失败，任务 %s 终态可能未写回", tid)
 
         await _publish_status_change(tid, _status)
         # CancelledError 继续向上传播；其余异常已处理，返回结果避免 ARQ 误判重试

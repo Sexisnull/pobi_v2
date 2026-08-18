@@ -5,13 +5,15 @@ import time
 from email.utils import parsedate_to_datetime
 from typing import AsyncGenerator, Dict, Union, Any, List, Optional
 from urllib.parse import urlparse, parse_qs
-from anyio import Path
+from anyio import Path as AsyncPath
 from pathlib import Path as StdPath
 from playwright.async_api import APIRequestContext, Browser, BrowserContext, async_playwright, Playwright, Page
 from playwright._impl._api_structures import OriginState, SetCookieParam
 from .http_parser import analyze_http_request_text
 from pobi_agent.logging import logger
-from pobi_agent.scope import check_scope, ScopeViolation, SCOPE_DIR
+from pobi_agent.scope import check_scope, ScopeViolation
+from pobi_agent.storage_context import get_task_root
+from pobi_agent.utils.network import slugify_target
 
 
 class HTTPRequestParseError(Exception):
@@ -52,6 +54,7 @@ class PlaywrightRequester:
         agent_id: str | None = None,
         auth_storage_state_path: str | None = None,
         auth_profile: str | None = None,
+        target: str | None = None,
     ):
         """
         Initialize the PlaywrightRequester.
@@ -64,6 +67,8 @@ class PlaywrightRequester:
                 a previously authenticated session.
             auth_profile: Optional auth profile label that produced
                 ``auth_storage_state_path`` (used for diagnostics/logging).
+        target: Authorized target URL/host. Used to locate the per-task
+            scope file under ``TASKS_ROOT/<task_id>/scope.{session_id}.yaml``.
         """
         self.verify_ssl = verify_ssl
         self.proxy_url = proxy_url
@@ -76,20 +81,27 @@ class PlaywrightRequester:
         self.session_id = session_id
         self.auth_storage_state_path = auth_storage_state_path
         self.auth_profile = auth_profile
+        # Filesystem-safe target slug（仅用于诊断/日志，scope 读取已统一走 task_root）
+        self.target_slug = slugify_target(target) if target else None
+        # 持久化页面句柄（跨跳转保留 localStorage / 会话态，如 DVWA 多步登录）
+        self._persistent_page: Page | None = None
 
     def _scope_path(self) -> Optional[StdPath]:
-        """Resolve the per-session scope file path.
+        """Resolve the per-task scope file path.
 
-        Each task runs under its own session (= task_id). The platform writes
-        an isolated ``scope.{session_id}.yaml`` so concurrent tasks never read
-        each other's authorization scope. Returns ``None`` for legacy/session-less
-        callers so ``check_scope`` falls back to the global disabled policy.
+        任务级产物统一归口到 ``task_root = TASKS_ROOT/<task_id>/``；平台层在该处
+        写入隔离的 ``scope.{session_id}.yaml``，并发任务互不串读。仅依赖注入的
+        ``task_root``（仅 session_id），不感知授权目标 slug。
+        Returns ``None`` when ``task_root`` is not injected (CLI / 单测 /
+        fallback 路径)，so ``check_scope`` falls back to the global disabled policy
+        (fail-closed，不把 scope 写到无规律位置)。
         """
         if not self.session_id:
             return None
-        return SCOPE_DIR / f"scope.{self.session_id}.yaml"
-        # Fix: Add persistent page for localStorage operations
-        self._persistent_page: Page | None = None
+        task_root = get_task_root()
+        if task_root is None:
+            return None
+        return StdPath(task_root) / f"scope.{self.session_id}.yaml"
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -126,7 +138,7 @@ class PlaywrightRequester:
         # Prefer explicit auth-profile storage state if provided.
         if self.auth_storage_state_path:
             try:
-                explicit = Path(self.auth_storage_state_path)
+                explicit = AsyncPath(self.auth_storage_state_path)
                 if await explicit.exists():
                     storage_path = str(explicit)
                 else:
@@ -140,7 +152,7 @@ class PlaywrightRequester:
             try:
                 storage_path = await self._get_storage_path(self.agent_id, self.session_id)
                 # Check if storage file exists to load cookies
-                storage_file = Path(storage_path)
+                storage_file = AsyncPath(storage_path)
                 if not await storage_file.exists():
                     storage_path = None  # Don't use non-existent file
             except Exception as e:
@@ -185,7 +197,11 @@ class PlaywrightRequester:
         named auth-profile snapshot (``<profile>.playwright.json``). It holds the
         rolling cookies/localStorage Playwright auto-collects during a session.
         """
-        path_storage = DEADEND_AGENTS_PATH / agent_id / session_id / "auth_context"
+        task_root = get_task_root()
+        if task_root is not None:
+            path_storage = StdPath(task_root) / "agent" / agent_id / session_id / "auth_context"
+        else:
+            path_storage = DEADEND_AGENTS_PATH / agent_id / session_id / "auth_context"
         path_storage.mkdir(parents=True, exist_ok=True)
         storage_file = path_storage / "playwright_state.json"
         return str(storage_file)
@@ -986,7 +1002,7 @@ class PlaywrightRequester:
             # When path is provided, storage_state() saves to that path
             await self.context.storage_state(path=storage_path)
             # Verify the file was created/updated
-            storage_file = Path(storage_path)
+            storage_file = AsyncPath(storage_path)
             if await storage_file.exists():
                 # Read back to verify cookies are saved
                 content = await storage_file.read_text(encoding='utf-8')

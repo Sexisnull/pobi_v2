@@ -16,6 +16,7 @@ Metrics are saved to ~/.cache/pobi/agents/{session_id}/metrics/metrics.json
 
 from __future__ import annotations
 from pobi_agent.constants import CACHE_DEADEND_PATH, CACHE_METRICS_PATH
+from pobi_agent.storage_context import get_task_root
 
 import json
 import time
@@ -103,8 +104,12 @@ class SessionMetrics(BaseModel):
         self.update_duration()
 
         # Create session directory
-        # TODO: verify this path too
-        cache_dir = CACHE_METRICS_PATH / self.session_id
+        # 优先归口到统一任务根 tasks/<task_id>/metrics；未注入时回退旧 cache/metrics 路径
+        task_root = get_task_root()
+        if task_root is not None:
+            cache_dir = Path(task_root) / "metrics"
+        else:
+            cache_dir = CACHE_METRICS_PATH / self.session_id
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Write metrics to JSON file
@@ -125,7 +130,11 @@ class SessionMetrics(BaseModel):
         Raises:
             FileNotFoundError: If metrics file doesn't exist
         """
-        cache_dir = CACHE_METRICS_PATH / session_id
+        task_root = get_task_root()
+        if task_root is not None:
+            cache_dir = Path(task_root) / "metrics"
+        else:
+            cache_dir = CACHE_METRICS_PATH / session_id
         metrics_path = cache_dir / "metrics.json"
 
         if not metrics_path.exists():

@@ -32,8 +32,6 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 
 from pobi_agent.agents.components.validation_strategies import (
-    FlagStrategy,
-    JudgeAgentStrategy,
     ValidationGate,
     ValidationInput,
 )
@@ -164,11 +162,11 @@ class ScanWorkflow:
             out_of_scope_raw=list(target.out_of_scope or []),
         )
 
-        # 复用原 ValidationGate（FlagStrategy 确定性 + JudgeAgentStrategy LLM 判定）
+        # 复用原 ValidationGate（FlagStrategy 确定性 + JudgeAgentStrategy LLM 判定）。
+        # 使用 lazy 模式：每次 check() 时按当前 task 的 validation.<task_id>.yaml
+        # 解析策略与 flag 格式（沿用根配置作为回退）。
         model_spec = get_model_spec(self.model)
-        self.validation_gate = ValidationGate(
-            strategies=[FlagStrategy(), JudgeAgentStrategy(model_spec)]
-        )
+        self.validation_gate = ValidationGate(model=model_spec)
         # 复用原 ReporterAgent（依赖 ModelSpec；报告写到 AVFS，pobi_v2 环境回退到结构化汇总）
         self.reporter = ReporterAgent(model_spec)
 
@@ -380,6 +378,21 @@ class ScanWorkflow:
 
     # ---------------- 总入口 ----------------
     async def run(self) -> dict:
+        # 目录契约：沙箱故障 fallback 路径也必须注入 task_root，避免内核散落点
+        # （SessionMetrics / ContextEngine / python_interpreter / 等）回退旧废弃目录。
+        # task_id == session_id 恒等式，统一归口 tasks/<task_id>/。
+        from pobi_agent.constants import TASKS_ROOT
+        from pobi_agent.storage_context import set_task_root, clear_task_root
+
+        task_root = TASKS_ROOT / self.session_id
+        task_root.mkdir(parents=True, exist_ok=True)
+        task_root_token = set_task_root(task_root)
+        try:
+            return await self._run_body()
+        finally:
+            clear_task_root(task_root_token)
+
+    async def _run_body(self) -> dict:
         self.hooks.emit_agent_start(
             session_id=self.session_id,
             agent_name="deadend",

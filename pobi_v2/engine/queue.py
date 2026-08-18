@@ -21,24 +21,22 @@ async def enqueue_task(task_id: str, kind: str | None = None) -> None:
     ``arq:queue`` / ``arq:in_progress`` 永远 miss，误把正在运行的任务判为 failed
     （幽灵任务）。详见 router 层 task_reconcile 的匹配逻辑。
 
-    若同一 task_id 已存在于队列（手动重复入队 / 前端重复点击），ARQ 会因 job_id
-    唯一约束抛异常。此处捕获并幂等忽略——任务已在调度中，无需重复入队。
+    幂等性由 ARQ 原子保证：``enqueue_job`` 内部用 ``watch`` + 事务检查 job_key
+    是否已存在，若重复入队（手动重复 / 前端重复点击）会**静默返回 None**，不会抛异常。
+    故此处直接以返回值是否为 None 判定幂等命中，无需依赖异常文本匹配（旧实现靠
+    ``"job_id" in str(exc)`` 字符串匹配，既脆弱又永不会触发）。
 
-    ``kind``：链路连通性探针（``probe``）使用独立的短超时与 ``max_tries=1``，
-    避免探测失败无谓重试 2 次、或占用 Worker 长达 6h（见 ``worker.py`` 默认配置）。
+    ``kind``：链路连通性探针（``probe``）的"快速结束"由
+    ``executor._run_probe_branch`` 内的 ``asyncio.wait_for(90s)`` 硬超时保证，
+    绝不会挂死 Worker；重试开关统一在 worker.py 的 ``retry_jobs=False`` 控制。
     """
     redis = await get_redis()
-
-    # 说明：arq 0.28 的 enqueue_job 仅支持 _job_id/_queue_name 等保留前缀键，
-    # job_timeout/max_tries 会被透传为任务函数参数导致签名报错，故不在此处设置。
-    # 探针的"快速结束"由 executor._run_probe_branch 内的 asyncio.wait_for(90s)
-    # 硬超时保证，绝不会挂死 Worker。
     try:
-        await redis.enqueue_job("run_task", task_id, _job_id=task_id)
-    except Exception as exc:  # noqa: BLE001 — job_id 重复属预期，幂等忽略
-        if "job_id" in str(exc).lower() or "exists" in str(exc).lower():
+        # enqueue_job 在 job_id 已存在时返回 None（ARQ 原子幂等），不抛异常。
+        job = await redis.enqueue_job("run_task", task_id, _job_id=task_id)
+        if job is None:
+            # 幂等命中：同 task_id 已在队列中，无需重复入队。
             return
-        raise
     finally:
         await redis.close()
 

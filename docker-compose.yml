@@ -51,7 +51,7 @@ services:
   # 常驻容器，所有 shell 攻击命令与 Python 验证脚本共用同一容器。
   # 生命周期随 compose；api/worker 经 DooD 连接 pobi_kali（容器名固定）。
   kali:
-    image: ${KALI_IMAGE:-xoxruns/sandboxed_kali:latest}
+    image: ${KALI_IMAGE:-${ACR_REGISTRY:-}xoxruns/sandboxed_kali:latest}
     container_name: pobi_kali
     command: ["/bin/bash"]
     stdin_open: true
@@ -79,7 +79,7 @@ services:
       POBI_V2_DATABASE_URL: postgresql+psycopg://${POBI_V2_DB_USER:-pobi}:${POBI_V2_DB_PASSWORD:-pobi}@postgres:5432/${POBI_V2_DB_NAME:-pobi_v2}
       POBI_V2_REDIS_URL: redis://redis:6379/0
       POBI_V2_EVENT_BUS_BACKEND: redis
-      POBI_V2_SANDBOX_IMAGE: ${KALI_IMAGE:-xoxruns/sandboxed_kali:latest}
+      POBI_V2_SANDBOX_IMAGE: ${KALI_IMAGE:-${ACR_REGISTRY:-}xoxruns/sandboxed_kali:latest}
       POBI_V2_SANDBOX_NETWORK: pobi_net
       POBI_V2_KALI_CONTAINER_NAME: pobi_kali
       # 持久化根目录：容器内 Path.home()=/root，统一落盘到 /root/.pobi_v2，
@@ -106,6 +106,15 @@ services:
     restart: unless-stopped
 
   # ---- Worker（ARQ 异步任务执行）----
+  # 多任务并行：ARQ 队列在 Redis，天然支持多 Worker 进程从同一队列竞争消费。
+  # 提升并发两种方式（可叠加）：
+  #   1) 进程内并发：worker.py 的 max_jobs（POBI_V2_WORKER_MAX_JOBS，默认 2）。
+  #      因共享 Kali 沙箱为单容器，进程内并发过大会互相争抢 shell/python。
+  #   2) 多 Worker 副本（推荐主路径）：本服务起 N 个副本，每个独立进程事件循环，
+  #      LLM 调度真正并行；共享沙箱仅作验证用（授权已按 task_id 隔离）。
+  #      设置方式二选一：
+  #        a. 设 POBI_V2_WORKER_REPLICAS 后 `docker compose up -d`（deploy.replicas）。
+  #        b. 或 `docker compose up -d --scale worker=N`（无需改 env）。
   worker:
     image: ${POBI_IMAGE:-${ACR_REGISTRY:-pobi_v2}:1.0.0}
     build:
@@ -113,11 +122,15 @@ services:
       dockerfile: Dockerfile.prod
     env_file: .env
     command: ["arq", "pobi_v2.engine.worker.WorkerSettings"]
+    # 多 Worker 副本（方案 B）：默认 1；设为 N 即起 N 个竞争消费进程。
+    # 注意：本服务未设 container_name，满足 --scale 要求。
+    deploy:
+      replicas: ${POBI_V2_WORKER_REPLICAS:-1}
     environment:
       POBI_V2_DATABASE_URL: postgresql+psycopg://${POBI_V2_DB_USER:-pobi}:${POBI_V2_DB_PASSWORD:-pobi}@postgres:5432/${POBI_V2_DB_NAME:-pobi_v2}
       POBI_V2_REDIS_URL: redis://redis:6379/0
       POBI_V2_EVENT_BUS_BACKEND: redis
-      POBI_V2_SANDBOX_IMAGE: ${KALI_IMAGE:-xoxruns/sandboxed_kali:latest}
+      POBI_V2_SANDBOX_IMAGE: ${KALI_IMAGE:-${ACR_REGISTRY:-}xoxruns/sandboxed_kali:latest}
       POBI_V2_SANDBOX_NETWORK: pobi_net
       POBI_V2_KALI_CONTAINER_NAME: pobi_kali
       # 持久化根目录：与 api 一致，统一落盘到 /root/.pobi_v2。

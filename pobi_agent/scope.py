@@ -1,41 +1,35 @@
 """Authorization scope gate for the POBI autonomous pentest agent.
 
-The scope policy is a small YAML document persisted at
-``<POBI_CACHE_HOME>/scope.yaml`` (the exact location the web console writes to).
-The web console is the operator's UI for editing it; the agent reads the same
-file and enforces it at its single network egress (``pw_requester``).
+授权范围策略：一份小 YAML 文件，由平台层 ``deadend_runner`` 按任务隔离落盘
+到 ``tasks/<task_id>/scope.{task_id}.yaml``，由内核 ``pw_requester._scope_path``
+按 session_id 命名约定读取。
 
-Design principles
------------------
-* **Fail safe, opt-in.** When the policy is *disabled* (the default) the gate is
-  a no-op so existing CTF / demo workflows are unaffected. When *enabled* with
-  at least one in-scope entry, every HTTP egress is checked and out-of-scope
-  targets are hard-aborted with :class:`ScopeViolation`. An enabled policy with
-  no in-scope entries fails closed (denies everything).
-* **Explicit exclusions win.** Anything listed in ``out_of_scope`` is denied even
-  if it would otherwise match an in-scope rule — letting operators carve out
-  internal hosts, third-party CDNs, etc.
-* **Single source of truth.** ``DEFAULT_SCOPE`` / ``DEFAULT_PATH`` are imported
-  by the web console so both sides stay in sync.
+设计原则
+--------
+* **Fail safe, opt-in.** 策略 ``enabled=False``（默认）时闸门为 no-op；
+  配合 ``load_scope_dict`` 在 ``path=None`` 时返回 ``DEFAULT_SCOPE`` 的行为，
+  兼容现有 CTF / demo 工作流。``enabled=True`` 且 in-scope 为空时
+  fail-closed（拒绝所有）。
+* **显式排除优先.** ``out_of_scope`` 条目即便命中 in-scope 也直接拒绝。
+* **单源契约.** 旧的 ``DEFAULT_PATH`` / ``SCOPE_DIR`` / ``DEFAULT_SCOPE``
+  全局单例已删除（死代码）：授权范围不再共享全局文件，统一按任务隔离。
+  ``path=None`` 给 ``load_scope_dict`` / ``get_scope_policy`` /
+  ``check_scope`` 时仍返回 ``DEFAULT_SCOPE`` 默认禁用策略，
+  避免运行时路径缺失导致误放行。
 """
 from __future__ import annotations
 
 import ipaddress
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from urllib.parse import urlparse
 
-from pobi_agent.constants import CACHE_DEADEND_PATH
+from pobi_agent.logging import get_module_logger
 
-DEFAULT_PATH = CACHE_DEADEND_PATH / "scope.yaml"
+logger = get_module_logger(__name__)
 
-# Directory holding per-session scope files (`scope.{session_id}.yaml`).
-# Exported so consumers (e.g. the network egress gate) can resolve the
-# session-isolated scope file without re-deriving the cache directory.
-SCOPE_DIR = DEFAULT_PATH.parent
-
-DEFAULT_SCOPE: Dict[str, Any] = {
+DEFAULT_SCOPE: dict[str, Any] = {
     "enabled": False,
     "root_domains": [],   # apex + all subdomains allowed
     "domains": [],        # exact-match only (no subdomains)
@@ -62,7 +56,7 @@ def _normalize_host(value: str) -> str:
     return value
 
 
-def _as_network(value: str) -> Optional[ipaddress._BaseNetwork]:
+def _as_network(value: str) -> ipaddress._BaseNetwork | None:
     """Return an ``ip_network`` (hosts become /32) or ``None`` if not an IP."""
     try:
         return ipaddress.ip_network(str(value).strip(), strict=False)
@@ -78,7 +72,7 @@ def _format_network(net: ipaddress._BaseNetwork) -> str:
 
 
 # Module-level cache so repeated per-request loads don't hit disk every time.
-_cache: Dict[str, Any] = {"mtime": None, "policy": None}
+_cache: dict[str, Any] = {"mtime": None, "policy": None}
 
 
 class ScopeViolation(Exception):
@@ -88,20 +82,20 @@ class ScopeViolation(Exception):
 class ScopePolicy:
     """In-memory representation of an authorization scope policy."""
 
-    def __init__(self, data: Optional[Dict[str, Any]] = None):
+    def __init__(self, data: dict[str, Any] | None = None):
         data = data or {}
         self.enabled: bool = bool(data.get("enabled", DEFAULT_SCOPE["enabled"]))
-        self.root_domains: List[str] = [
+        self.root_domains: list[str] = [
             _normalize_host(d) for d in (data.get("root_domains") or []) if d
         ]
-        self.domains: List[str] = [
+        self.domains: list[str] = [
             _normalize_host(d) for d in (data.get("domains") or []) if d
         ]
-        self.ips: List[ipaddress._BaseNetwork] = [
+        self.ips: list[ipaddress._BaseNetwork] = [
             net for net in (_as_network(i) for i in (data.get("ips") or []) if i) if net
         ]
         # out_of_scope entries are (kind, value) tuples: ("domain", str) | ("ip", network)
-        self.out_of_scope: List[Tuple[str, Any]] = []
+        self.out_of_scope: list[tuple[str, Any]] = []
         for o in data.get("out_of_scope") or []:
             if not o:
                 continue
@@ -130,7 +124,7 @@ class ScopePolicy:
         return any(net.network_address in scope_net for scope_net in self.ips)
 
     @staticmethod
-    def _entry_matches(entry: Tuple[str, Any], host: str) -> bool:
+    def _entry_matches(entry: tuple[str, Any], host: str) -> bool:
         kind, val = entry
         if kind == "ip":
             net = _as_network(host)
@@ -138,7 +132,7 @@ class ScopePolicy:
         return host == val or host.endswith("." + val)
 
     # -- public API ------------------------------------------------------- #
-    def is_allowed(self, url_or_host: str) -> Tuple[bool, str]:
+    def is_allowed(self, url_or_host: str) -> tuple[bool, str]:
         """Return ``(allowed, reason)`` for a URL or bare host."""
         if not self.enabled:
             return True, "scope gate disabled"
@@ -173,16 +167,24 @@ def _coerce_int(value: Any, default: int) -> int:
         return default
 
 
-def load_scope_dict(path: Optional[str] = None) -> Dict[str, Any]:
-    """Read the scope YAML, merging onto :data:`DEFAULT_SCOPE`."""
+def load_scope_dict(path: Path | str | None = None) -> dict[str, Any]:
+    """读取授权范围 YAML，合并到默认禁用策略。
+
+    - ``path`` 缺省时返回 ``DEFAULT_SCOPE``（gate disabled, no-op）：
+      兼容 CLI / 单测场景依赖 ``check_scope(url)`` 路径缺失不报错的旧用法。
+    - 文件不存在或解析失败时返回 ``DEFAULT_SCOPE`` 副本。
+    """
     import yaml
 
-    p = Path(path) if path else DEFAULT_PATH
+    if path is None:
+        return dict(DEFAULT_SCOPE)
+    p = Path(path)
     if not p.exists():
         return dict(DEFAULT_SCOPE)
     try:
         raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-    except Exception:
+    except (OSError, yaml.YAMLError):
+        logger.warning("scope: failed to load %s, falling back to default.", p)
         return dict(DEFAULT_SCOPE)
     merged = dict(DEFAULT_SCOPE)
     for key in DEFAULT_SCOPE:
@@ -191,20 +193,22 @@ def load_scope_dict(path: Optional[str] = None) -> Dict[str, Any]:
     return merged
 
 
-def get_scope_policy(path: Optional[str] = None) -> ScopePolicy:
-    """Load (and cache by mtime) the active scope policy."""
-    p = Path(path) if path else DEFAULT_PATH
+def get_scope_policy(path: Path | str | None = None) -> ScopePolicy:
+    """按 mtime 缓存加载策略。``path=None`` 返回默认禁用策略。"""
+    if path is None:
+        return ScopePolicy({"enabled": False})
+    p = Path(path)
     try:
         mtime = p.stat().st_mtime
     except FileNotFoundError:
         return ScopePolicy({"enabled": False})
-    if _cache["policy"] is not None and _cache["mtime"] == mtime:
-        return _cache["policy"]
+    if _cache.get("policy") is not None and _cache.get("mtime") == mtime:
+        return _cache["policy"]  # type: ignore[return-value]
     policy = ScopePolicy(load_scope_dict(p))
     _cache.update(mtime=mtime, policy=policy)
     return policy
 
 
-def check_scope(url_or_host: str, path: Optional[str] = None) -> bool:
-    """Convenience guard for network egress. Raises on violation."""
+def check_scope(url_or_host: str, path: Path | str | None = None) -> bool:
+    """网络出口便捷闸门。越权抛 :class:`ScopeViolation`；策略 disabled 时 no-op。"""
     return get_scope_policy(path).check(url_or_host)

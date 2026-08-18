@@ -9,6 +9,7 @@ workflows, including task tracking, workflow state management, and agent
 routing based on current context and progress.
 """
 from pobi_agent.constants import DEADEND_AGENTS_PATH, CACHE_DEADEND_PATH
+from pobi_agent.storage_context import get_task_root
 import json
 import uuid
 import time
@@ -859,7 +860,24 @@ class ContextEngine:
         self.structured = StructuredContext()
 
         # Create context directory if it doesn't exist
-        context_dir = DEADEND_AGENTS_PATH / str(self.agent_id) / str(self.session_id) / "run_context"
+        # 优先归口到统一任务根 tasks/<task_id>/agent/<agent_id>/<session_id>/run_context；
+        # 未注入 task_root 时回退旧 agents/<agent_id>/<session_id>/run_context 路径。
+        task_root = get_task_root()
+        if task_root is not None:
+            context_dir = (
+                Path(task_root)
+                / "agent"
+                / str(self.agent_id)
+                / str(self.session_id)
+                / "run_context"
+            )
+        else:
+            context_dir = (
+                DEADEND_AGENTS_PATH
+                / str(self.agent_id)
+                / str(self.session_id)
+                / "run_context"
+            )
         context_dir.mkdir(parents=True, exist_ok=True)
 
         # Set context file path

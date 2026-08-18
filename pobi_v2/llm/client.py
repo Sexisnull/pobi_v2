@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any, Optional, Type, TypeVar
 
@@ -30,6 +31,12 @@ from pobi_v2.llm.types import (
 T = TypeVar("T", bound=BaseModel)
 
 _instructor_client = from_litellm(litellm.acompletion)
+
+# 进程级 LLM 并发信号量：多任务并行时所有 LLM 调用经此统一卡口，
+# 避免 QPS 线性放大触发上游 RateLimitError（429）雪崩。与 task_id 无关——
+# 因为 litellm.acompletion 本身是无状态自包含 HTTP 调用（请求/响应天然隔离），
+# 不存在结果串台，冲突只来自上游限速，故限全局并发而非逐任务绑定。
+_llm_semaphore = asyncio.Semaphore(max(1, settings.llm_max_concurrency))
 
 
 def _to_messages(msgs: list[LLMMessage]) -> list[dict]:
@@ -95,18 +102,20 @@ async def complete(req: LLMRequest) -> LLMResponse:
 async def complete_json(req: LLMRequest, schema: Type[T]) -> T:
     """结构化 JSON 补全（用 instructor 强制 schema）。"""
     t0 = time.time()
-    try:
-        resp = await _instructor_client.chat.completions.create(
-            model=to_litellm_model(req.model),
-            messages=_to_messages(req.messages),
-            response_model=schema,
-            temperature=req.temperature,
-            max_tokens=req.max_tokens,
-            api_key=req.model.api_key,
-            api_base=req.model.base_url,
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise LLMError(f"LLM 结构化调用失败: {exc}", cause=exc) from exc
+    # 全局并发信号量：与 complete 共享同一卡口，统一限流。
+    async with _llm_semaphore:
+        try:
+            resp = await _instructor_client.chat.completions.create(
+                model=to_litellm_model(req.model),
+                messages=_to_messages(req.messages),
+                response_model=schema,
+                temperature=req.temperature,
+                max_tokens=req.max_tokens,
+                api_key=req.model.api_key,
+                api_base=req.model.base_url,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise LLMError(f"LLM 结构化调用失败: {exc}", cause=exc) from exc
     return resp
 
 

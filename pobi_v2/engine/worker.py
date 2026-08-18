@@ -52,10 +52,21 @@ class WorkerSettings:
     on_startup = _on_startup
     # 任务执行超时（秒）
     job_timeout = JOB_TIMEOUT
-    # 失败后重试次数
-    max_tries = 2
+    # 禁止 ARQ 自动重试：Cancel/Worker 重启/job_timeout 撞墙均抛 CancelledError，
+    # 若 retry_jobs=True（默认）会在 max_tries 耗尽前自动重投——导致用户已取消的
+    # 任务被静默重启（幽灵任务根因之一）。关闭后 CancelledError 直接走终态分支，
+    # 由 executor 兜底落库标记 failed/cancelled，不再重投。
+    retry_jobs = False
+    # max_tries 仅作为 ARQ 内部计数上限；本项目无业务性重试（不 raise Retry），
+    # 关闭 retry_jobs 后该值不再触发自动重投，保留 1 即可避免无效重试计数。
+    max_tries = 1
     # 健康检查保留
     keep_result = 3600
+    # 单 Worker 进程内并发执行的任务协程数（ARQ max_jobs）。
+    # 因共享 Kali 沙箱为单容器，进程内并发过大会互相争抢 shell/python 资源，
+    # 多任务并行优先靠「多 Worker 副本」实现（docker-compose replicas），
+    # 故此处默认收敛（见 pobi_v2.core.config.worker_max_jobs）。
+    max_jobs = settings.worker_max_jobs
     # 周期性任务对账：每 5 分钟回收幽灵任务 / 取消残留（报告 C）
     cron_jobs = [
         cron(_auto_reconcile, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),

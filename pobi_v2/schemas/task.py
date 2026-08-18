@@ -18,6 +18,11 @@ class TaskCreate(BaseModel):
     agent_mode: str = Field(default="hacker", pattern="^(hacker|yolo)$")
     operator: str = "web-operator"
     kind: str = "task"
+    # 验证策略（任务级覆盖；None = 继承授权目标配置/使用默认）
+    flag_regex: str | None = Field(default=None, max_length=512)
+    validation_format: str | None = Field(default=None, max_length=64)
+    confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_tree_depth: int | None = Field(default=None, ge=1, le=16)
 
 
 class TaskUpdate(BaseModel):
@@ -27,6 +32,11 @@ class TaskUpdate(BaseModel):
     model: str | None = None
     max_turns: int | None = None
     agent_mode: str | None = Field(default=None, pattern="^(hacker|yolo)$")
+    # 验证策略（任务级覆盖；None 不修改，需清空时显式传空字符串）
+    flag_regex: str | None = Field(default=None, max_length=512)
+    validation_format: str | None = Field(default=None, max_length=64)
+    confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_tree_depth: int | None = Field(default=None, ge=1, le=16)
 
 
 class TaskRead(BaseModel):
@@ -42,6 +52,11 @@ class TaskRead(BaseModel):
     error: str | None
     operator: str
     kind: str = "task"
+    # 验证策略（任务级；None 表示未覆盖，运行时继承授权目标配置/使用默认）
+    flag_regex: str | None = None
+    validation_format: str | None = None
+    confidence_threshold: float | None = None
+    max_tree_depth: int | None = None
     created_at: datetime
     updated_at: datetime
     started_at: datetime | None

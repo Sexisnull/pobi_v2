@@ -28,10 +28,8 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import logging
 import tempfile
-from pathlib import Path
 from typing import Any, Optional
 from uuid import UUID
 
@@ -46,10 +44,11 @@ from pobi_agent.models.registry import EmbedderClient
 from pobi_agent.pobi_agent import DeadEndAgent
 from pobi_agent.rag.sqlite_connector import SqliteRagConnector
 from pobi_agent.sandbox.sandbox_manager import SandboxManager
-from pobi_agent.scope import DEFAULT_PATH as SCOPE_YAML_PATH
 from pobi_agent.agents.components.validation_strategies import (
     DEADEND_VALIDATION_CONFIG_PATH,
 )
+from pobi_agent.constants import TASKS_ROOT
+from pobi_agent.storage_context import set_task_root, clear_task_root
 
 from pobi_v2.core.config import settings
 from pobi_v2.db.models import Task, Target
@@ -75,11 +74,13 @@ def _ensure_local_persist_worker() -> None:
 # 授权范围：把 pobi_v2 的 Target 写入 scope.{task_id}.yaml，复用原 ScopePolicy 闸门
 # ---------------------------------------------------------------------------
 def _write_scope_file(target: Target, task_id: UUID) -> Path:
-    """把 pobi_v2 的 Target 范围写入按任务隔离的 scope.{task_id}.yaml。
+    """把 pobi_v2 的 Target 范围写入按目标聚合的 scope.{task_id}.yaml。
 
-    原 pobi 的授权闸门在 ``pw_requester`` 网络出口处通过 ``check_scope`` 读取
-    该文件。多任务并发时，每个任务写独立文件（不再覆盖全局 scope.yaml），
-    从而消除全局单例被并发覆盖导致的越权扫描。文件缺失时内核回退为安全禁用策略。
+    落盘到统一树 ``TASKS_ROOT/<task_id>/scope.{task_id}.yaml``，
+    与内核 ``pw_requester._scope_path``（按 task_root 解析）对齐。原 pobi 的授权
+    闸门在 ``pw_requester`` 网络出口处通过 ``check_scope`` 读取该文件；多任务
+    并发时每个任务写独立文件（不再覆盖全局 scope.yaml），消除全局单例被并发
+    覆盖导致的越权扫描。文件缺失时内核回退为安全禁用策略。
     """
     import tldextract
 
@@ -114,7 +115,8 @@ def _write_scope_file(target: Target, task_id: UUID) -> Path:
         "max_bytes": getattr(settings, "scope_max_bytes", 5_000_000),
     }
 
-    scope_path = SCOPE_YAML_PATH.parent / f"scope.{task_id}.yaml"
+    task_root = TASKS_ROOT / str(task_id)
+    scope_path = task_root / f"scope.{task_id}.yaml"
     scope_path.parent.mkdir(parents=True, exist_ok=True)
     scope_path.write_text(
         yaml.safe_dump(scope_doc, sort_keys=False, allow_unicode=True),
@@ -124,35 +126,49 @@ def _write_scope_file(target: Target, task_id: UUID) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# 验证策略：把 Target 的 Validation Configuration 写入 validation.{task_id}.yaml
+# 验证策略：把 Task 的 Validation Configuration 写入 validation.{task_id}.yaml
 # ---------------------------------------------------------------------------
-def _write_validation_config(target: Target, task_id: UUID) -> Path:
-    """把授权目标的验证策略写入按任务隔离的 validation.{task_id}.yaml。
+def _write_validation_config(task: Task, target: Target, task_id: UUID) -> Path:
+    """把任务的验证策略写入按任务聚合的 validation.{task_id}.yaml。
 
-    原 pobi 的 ValidationGate(Flag+Judge) 在运行时通过 ``load_validation_config``
-    读取该文件，从而决定「怎样才算找到漏洞」（flag 正则、judge LLM、信心阈值）。
-    多任务并发时每个任务写独立文件，消除全局 validation.yaml 被并发覆盖的缺陷。
+    验证策略配置以**任务级**为准（flag 正则、验证格式、信心阈值带、树深度）；
+    任务未显式配置时回退到授权目标的同名配置，再回退到默认值。该文件按任务
+    隔离落盘到 ``TASKS_ROOT/<task_id>/validation.{task_id}.yaml``，多任务并发
+    互不覆盖。原 pobi 的 ValidationGate(Flag+Judge) 在运行时通过
+    ``load_validation_config`` 读取该文件，决定「怎样才算找到漏洞」。
     """
+    flag_regex = task.flag_regex or target.flag_regex
+    validation_format = task.validation_format or target.validation_format
+    confidence_threshold = (
+        task.confidence_threshold
+        if task.confidence_threshold is not None
+        else target.confidence_threshold
+    )
+    max_tree_depth = (
+        task.max_tree_depth if task.max_tree_depth is not None else target.max_tree_depth
+    )
+
     strategies: list[dict[str, Any]] = []
-    if target.flag_regex:
-        strategies.append({"name": "flag", "pattern": target.flag_regex})
-    # judge 始终启用（LLM  судья 兜底验证），与 deadend-cli 默认一致
+    if flag_regex:
+        strategies.append({"name": "flag", "pattern": flag_regex})
+    # judge 始终启用（LLM 兜底验证），与 deadend-cli 默认一致
     judge_block: dict[str, Any] = {"name": "judge"}
-    if target.validation_format:
-        judge_block["validation_format"] = target.validation_format
+    if validation_format:
+        judge_block["validation_format"] = validation_format
     strategies.append(judge_block)
 
     validation_doc: dict[str, Any] = {
-        "validation_format": target.validation_format or "FLAG{}",
-        "validation_type": "flag" if target.flag_regex else "security assessment",
+        "validation_format": validation_format or "FLAG{}",
+        "validation_type": "flag" if flag_regex else "security assessment",
         "strategies": strategies,
         # 信心阈值带与任务树深度作为注释级元信息写入，供人工审阅；
         # 阈值核心调度走 Task.agent 参数，深度约束走 max_turns 上限。
-        "_confidence_threshold": target.confidence_threshold,
-        "_max_tree_depth": target.max_tree_depth,
+        "_confidence_threshold": confidence_threshold,
+        "_max_tree_depth": max_tree_depth,
     }
 
-    validation_path = DEADEND_VALIDATION_CONFIG_PATH.parent / f"validation.{task_id}.yaml"
+    task_root = TASKS_ROOT / str(task_id)
+    validation_path = task_root / f"validation.{task_id}.yaml"
     validation_path.parent.mkdir(parents=True, exist_ok=True)
     validation_path.write_text(
         yaml.safe_dump(validation_doc, sort_keys=False, allow_unicode=True),
@@ -263,13 +279,15 @@ async def _prepare_rag_connector(
     agent_id: UUID,
     session_id: str,
     target: str,
+    storage_root: Path | None = None,
 ) -> SqliteRagConnector:
     """获取本任务的 RAG 连接器（按 agent/session 隔离的本地 SQLite 向量库）。
 
     RAG 默认开启、零外部依赖（SQLite + numpy 本地检索），不降级为 None：
-    初始化失败即明确报错，避免静默丢失检索能力。
+    初始化失败即明确报错，避免静默丢失检索能力。``storage_root`` 指向
+    ``task_root/rag``，使 RAG 索引归入统一目标/任务目录树。
     """
-    rag_manager = init_rag_session_manager()
+    rag_manager = init_rag_session_manager(storage_root=storage_root)
     connector = await rag_manager.get_connector(
         agent_id=agent_id,
         embedding_session_id=session_id,
@@ -295,16 +313,46 @@ async def run_deadend_agent(
     （``summary`` / ``confidence`` / ``structured_report`` / ``findings``），
     以便 ``executor.py`` 无需修改落库逻辑。
     """
-    # 1) 多 LLM 模型规格（统一入口产出内核 ModelSpec）
-    model_spec = get_model_spec(task.model or settings.model)
-
-    # 2) 授权范围（写入 scope.{task_id}.yaml，按任务隔离，复用原 ScopePolicy 闸门）
-    # 该文件由内核 pw_requester 按 session_id 命名约定读取，无需返回值。
+    # 2) 授权范围（写入 tasks/<task_id>/scope.{task_id}.yaml，按任务隔离，
+    # 复用原 ScopePolicy 闸门）。该文件由内核 pw_requester 按 session_id 命名约定读取。
     _write_scope_file(target, task_id)
 
-    # 2.5) 验证策略（写入 validation.{task_id}.yaml，按任务隔离，复用原 ValidationGate(Flag+Judge)）
-    validation_path = _write_validation_config(target, task_id)
+    # 2.5) 验证策略（写入 tasks/<task_id>/validation.{task_id}.yaml，复用原
+    # ValidationGate(Flag+Judge)）。任务级配置优先，回退授权目标配置。
+    # 同时确立本次运行的统一根目录 task_root。
+    validation_path = _write_validation_config(task, target, task_id)
+    task_root = TASKS_ROOT / str(task_id)
+    task_root.mkdir(parents=True, exist_ok=True)
+    # 把统一任务根注入内核存储上下文（task_root = tasks/<task_id>）：
+    # 内核仅持有 task_id（= session_id），不感知授权目标 slug，
+    # 各写入点统一经 storage_context 归口到 tasks/<task_id>/。
+    # 使用 token + try/finally 复位，避免并发任务之间串覆盖根。
+    task_root_token = set_task_root(task_root)
+    try:
+        return await _run_deadend_agent_body(
+            task=task,
+            target=target,
+            task_id=task_id,
+            task_root=task_root,
+            validation_path=validation_path,
+            max_turns=max_turns,
+            auto_approve=auto_approve,
+        )
+    finally:
+        clear_task_root(task_root_token)
 
+
+async def _run_deadend_agent_body(
+    *,
+    task: Task,
+    target: Target,
+    task_id: UUID,
+    task_root: Path,
+    validation_path: Path,
+    max_turns: int,
+    auto_approve: bool,
+) -> dict:
+    """``run_deadend_agent`` 的实际工作体。由外层负责注入和复位 ``task_root``。"""
     # 3) 沙箱管理器 + 能力集合
     sandbox_manager = sandbox_setup()
     available_agents = _build_available_agents(sandbox_manager)
@@ -320,11 +368,13 @@ async def run_deadend_agent(
     )
 
     # 6) 实例化原 DeadEndAgent（完整多智能体协作系统）
+    # agents_storage_root 指向 task_root/agent：内核在其下建
+    # <agent_id>/<session_id>/workspace，统一归入 tasks/<task_id>/agent。
     agent = DeadEndAgent(
         session_id=task_id,
-        model=model_spec,
+        model=get_model_spec(task.model or settings.model),
         available_agents=available_agents,
-        agents_storage_root=str(_agents_storage_root()),
+        agents_storage_root=str(task_root / "agent"),
         local_agent_id=None,  # 让 Config 自动分配/创建 local_agent_id
         validation_config_path=str(validation_path),
     )
@@ -339,6 +389,7 @@ async def run_deadend_agent(
         agent_id=agent.agent_id,
         session_id=str(task_id),
         target=target.url,
+        storage_root=task_root / "rag",
     )
     agent.prepare_dependencies(
         embedder_client=embedder_client,
@@ -393,12 +444,13 @@ async def run_deadend_agent(
         )
 
     # 11) 归一化为 executor 兼容的产出
-    return _normalize_outcome(
+    outcome = _normalize_outcome(
         recon_report=recon_report,
         plan=plan,
         validation_token=validation_token,
         report=report,
     )
+    return outcome
 
 
 def _normalize_outcome(
@@ -447,14 +499,8 @@ def _normalize_outcome(
 
 
 # ---------------------------------------------------------------------------
-# 辅助：agents 存储根目录 + async session 工厂
+# 辅助：async session 工厂
 # ---------------------------------------------------------------------------
-def _agents_storage_root() -> Path:
-    root = Path(os.path.expanduser("~")) / ".pobi_v2" / "agents"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
 def _async_session_factory():
     """延迟导入 pobi_v2 的 AsyncSessionLocal，避免循环依赖。"""
     from pobi_v2.db.session import AsyncSessionLocal

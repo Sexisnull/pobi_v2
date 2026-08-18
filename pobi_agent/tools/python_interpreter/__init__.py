@@ -9,6 +9,7 @@ sandboxed environments, enabling AI agents to run Python scripts and
 code snippets for security research and analysis tasks.
 """
 from pobi_agent.constants import CACHE_DEADEND_LOGS, DEADEND_AGENTS_PATH
+from pobi_agent.storage_context import get_task_root
 import asyncio
 import io
 import json
@@ -216,8 +217,12 @@ async def _save_result_to_file(session_id: str, result: Any):
         result (Any): Result object to save
     """
     try:
-        # Create the directory path
-        cache_dir = CACHE_DEADEND_LOGS / session_id
+        # 优先归口到统一任务根 tasks/<task_id>/logs；未注入时回退旧 cache/logs 路径
+        task_root = get_task_root()
+        if task_root is not None:
+            cache_dir = Path(task_root) / "logs"
+        else:
+            cache_dir = CACHE_DEADEND_LOGS / session_id
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Create the file path

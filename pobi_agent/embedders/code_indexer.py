@@ -8,8 +8,6 @@ This module provides functionality to index, chunk, and embed source code
 from web applications, enabling semantic search and analysis of codebases
 for security research and vulnerability identification.
 """
-from pobi_agent.constants import DEADEND_AGENTS_PATH
-
 import os
 import re
 import uuid
@@ -42,22 +40,29 @@ class SourceCodeIndexer:
         self,
         target: str,
         session_id: uuid.UUID | None = None,
-        agent_id: uuid.UUID | None = None
+        agent_id: uuid.UUID | None = None,
+        storage_root: str | Path | None = None,
     ) -> None:
         """
         Initializes the SourceCodeIndexer object.
-        
+
         Args:
             target (str): The URL of the web application to index.
-            session_id (str, optional): Session ID for this indexing session. 
+            session_id (str, optional): Session ID for this indexing session.
             If None, generates a new one.
-        
+            storage_root (str | Path, optional): 统一任务根下的 agent 存储根
+                （即 ``tasks/<task_id>/agent``），由平台层
+                ``deadend_runner`` 显式注入。crawl 缓存归口到
+                ``tasks/<task_id>/agent/<agent_id>/<session_id>/webpages``。
+                未提供时构造器立即抛错，不再回退旧 ``agents/`` 路径。
+
         This constructor sets up the cache directory for storing crawled data and
         initializes the webresourceExtractor instance for crawling the target website.
         """
         self.target = target
         self.agent_id = agent_id
         self.session_id = session_id if session_id else uuid4()
+        self.storage_root = Path(storage_root) if storage_root else None
         self._add_session_to_cache()
         self._add_chunk_directory()
         self._load_patterns()
@@ -89,12 +94,27 @@ class SourceCodeIndexer:
         """
         Create cache directory structure for the current session.
         creates a session-specific subdirectory for storing downloaded resources.
-        """
-        self.cache_path = DEADEND_AGENTS_PATH 
-        if not os.path.exists(self.cache_path):
-            Path(self.cache_path).mkdir(parents=True, exist_ok=True)
 
-        self.source_code_path = self.cache_path /str(self.agent_id) / str(self.session_id) / "webpages" 
+        目录契约：必须由调用方（deadend_runner 或平台层）显式传入
+        storage_root=task_root/agent，归口到
+        tasks/<task_id>/agent/<agent_id>/<session_id>/webpages。
+        不再回退旧 agents/<agent_id>/<session_id>/webpages 路径，
+        避免在已迁移删除的旧目录上静默新建散落结构。
+        """
+        if not self.storage_root:
+            raise RuntimeError(
+                "SourceCodeIndexer.storage_root 未设置：必须由平台层注入 "
+                "task_root/agent，禁止回退旧 agents/ 路径。"
+            )
+        self.cache_path = (
+            Path(self.storage_root)
+            / str(self.agent_id)
+            / str(self.session_id)
+        )
+        if not self.cache_path.exists():
+            self.cache_path.mkdir(parents=True, exist_ok=True)
+
+        self.source_code_path = self.cache_path / "webpages"
         Path(self.source_code_path).mkdir(parents=True, exist_ok=True)
         self.manifest_path = self.source_code_path / ".manifest.json"
 

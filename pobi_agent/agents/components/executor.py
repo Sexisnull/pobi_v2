@@ -278,7 +278,7 @@ class AgentExecutor:
         result is checked consistently, regardless of whether the caller is the
         ADaPT planner or a direct top-level workflow entrypoint.
         """
-        if self.validation_gate is None or self.reporter is None:
+        if self.validation_gate is None:
             return None
         if not self.context.final_goal:
             return None
@@ -291,7 +291,19 @@ class AgentExecutor:
         if not verdict.stop:
             return None
 
-        reporter_output = await self.reporter.summarize_and_write(
+        # Build (or reuse) the reporter with the *current task's* validation
+        # metadata so flag-format-aware instructions are honored. Falls back to
+        # a pre-supplied reporter when one was injected.
+        reporter = self.reporter
+        if reporter is None:
+            validation_type, validation_format = self.validation_gate.validation_metadata()
+            reporter = ReporterAgent(
+                model=self.model,
+                validation_type=validation_type or "security assessment",
+                validation_format=validation_format,
+            )
+
+        reporter_output = await reporter.summarize_and_write(
             root_goal=self.context.final_goal,
             verdict=verdict,
             context=report_context,

@@ -3,55 +3,74 @@
  * 画布：Absolute Black；层级：Graphite 阶梯；唯一行动色：Apple Action Blue。
  * 令牌名保持与 app.js 兼容；值对齐 Apple 设计系统（暗色场景语言）。
  * ─────────────────────────────────────────────────────────────────────── */
+@import url("../design-system/colors_and_type.css");
+@import url("../design-system/components.css");
+
+/* ═════════════════════════════════════════════════════════════════════════
+ * Pobi v2 — Apple design system theme layer
+ * Consumes PobiApple design tokens (web/static/design-system/)
+ * Legacy variable names are kept as aliases so existing markup + JS keep working.
+ * ═══════════════════════════════════════════════════════════════════════ */
 :root {
-  /* 画布与层级 —— Apple 暗色中性阶梯 */
-  --bg: #000000;          /* Absolute Black：主画布 */
-  --bg-2: #1d1d1f;        /* Near-Black Ink：卡片 / 面板 */
-  --bg-3: #272729;        /* Graphite Surface A：输入 / 悬浮 / 芯片 */
-  --border: #424245;      /* Utility Dark Gray：分隔与边框 */
-  --border-soft: #2a2a2c; /* 更深的暗分隔，用于密集表格行 */
+  /* surface aliases */
+  --bg: var(--color-background);
+  --bg-2: var(--color-card);
+  --bg-3: var(--color-accent);
+  --surface: var(--color-card);
+  --surface-2: var(--color-muted);
 
-  /* 文本中性阶梯 */
-  --text: #f5f5f7;        /* Pale Apple Gray：主文本 */
-  --text-dim: #86868b;    /* Mid Border Gray：次要文本 */
+  /* border aliases */
+  --border: var(--color-border);
+  --border-soft: color-mix(in srgb, var(--color-border) 65%, transparent);
+  --border-light: var(--border-soft);
 
-  /* 唯一行动色 —— Apple Action Blue */
-  --primary: #0071e3;
-  --primary-h: #0077ed;   /* hover 提亮（Apple 实况按钮行为） */
-  --primary-a: #0066cc;   /* active 压暗（Body Link Blue） */
-  --accent-on: #ffffff;
+  /* text aliases */
+  --text: var(--color-foreground);
+  --text-dim: var(--color-muted-foreground);
+  --text-secondary: var(--color-muted-foreground);
+  --text-muted: var(--color-muted-foreground);
 
-  /* 焦点环 —— 柔和蓝色光晕 */
-  --focus-ring: 0 0 0 4px rgba(0, 113, 227, 0.45);
+  /* action aliases */
+  --primary: var(--color-primary);
+  --primary-h: color-mix(in srgb, var(--color-primary) 86%, #ffffff);
+  --primary-a: color-mix(in srgb, var(--color-primary) 80%, #000000);
+  --accent-on: var(--color-primary-foreground);
+  --focus-ring: 0 0 0 4px color-mix(in srgb, var(--color-ring) 45%, transparent);
 
-  /* 语义 / 严重度 —— 克制饱和，服从暗色对比 */
-  --danger: #ff453a;      /* iOS systemRed（暗） */
-  --danger-h: #ff6961;
-  --ok: #32d74b;          /* iOS systemGreen（暗） */
-  --warn: #ff9f0a;        /* iOS systemOrange（暗） */
-  --crit: #ff453a;
-  --high: #ff9f0a;
-  --med: #ffd60a;         /* iOS systemYellow（暗） */
-  --low: #64d2ff;         /* iOS systemCyan（暗） */
-  --info: #8e8e93;        /* iOS systemGray2（暗） */
+  /* semantic state aliases */
+  --danger: var(--color-destructive);
+  --danger-h: color-mix(in srgb, var(--color-destructive) 82%, #ffffff);
+  --ok: var(--color-success);
+  --warn: var(--color-chart-3);
+  --crit: var(--color-destructive);
+  --high: var(--color-chart-3);
+  --med: #ffd60a;
+  --low: #64d2ff;
+  --info: var(--color-muted-foreground);
 
-  /* 圆角阶梯 —— purposeful radius tiers */
-  --radius: 12px;         /* 卡片 / 面板 */
-  --radius-sm: 8px;       /* 控件 / 字段 */
-  --radius-pill: 980px;   /* 胶囊 / 徽标 */
-
-  /* 阴影 —— 克制，仅靠层级与对比做分离 */
-  --shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
+  /* geometry / effect aliases */
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-pill: 980px;
+  --radius-base: var(--radius);
+  --shadow: var(--shadow-lg);
   --ease: cubic-bezier(0.28, 0, 0.22, 1);
 
+  /* typography */
   --font-display: "SF Pro Display", -apple-system, BlinkMacSystemFont, "SF Pro Icons",
     "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-body: "SF Pro Text", -apple-system, BlinkMacSystemFont, "SF Pro Icons",
     "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
 
+  /* make design system typography use Apple fonts */
+  --type-font-sans: var(--font-display);
+  --type-font-serif: var(--font-body);
+  --type-font-mono: var(--font-mono);
+
   font-synthesis: none;
 }
+
 
 * { box-sizing: border-box; }
 
@@ -980,3 +999,13 @@ tbody tr:hover { background: rgba(255,255,255,.03); }
   word-break: break-word;
 }
 .last-probe-meta { margin-top: 8px; font-size: 12px; color: var(--text-dim); font-family: "SF Mono",Fira Code,monospace; }
+
+/* ── design-system compatibility fixes ── */
+.muted { color: var(--text-dim); }
+
+/* legacy .xs button size used by JS */
+.btn.xs { padding: 4px 10px; font-size: 11px; border-radius: var(--radius-sm); }
+
+/* fix missing descendant selector for completed stat glow */
+.stat-card[data-stat="completed"] .stat-glow { background: linear-gradient(90deg, var(--ok), #34c759); }
+

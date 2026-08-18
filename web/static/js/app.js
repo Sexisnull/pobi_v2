@@ -342,7 +342,7 @@
         const t = Number(tk.total_tokens) || 0;
         const cost = estimateCost(p, c, pricing);
         return `<tr data-task-id="${tk.id}">
-          <td class="col-status"><span class="st ${tk.status}">${tk.status}</span></td>
+          <td class="col-status"><span class="badge st-${tk.status}">${tk.status}</span></td>
           <td class="cell-name" title="${(tk.name || "").replace(/"/g, "&quot;")}">${tk.name || "—"}</td>
           <td class="col-tokens">${fmtNum(p)}</td>
           <td class="col-tokens">${fmtNum(c)}</td>
@@ -411,7 +411,7 @@
         <div class="form-row">
           <label>有效期</label>
           <input id="ak-expire" type="number" min="1" max="3650" placeholder="留空 = 长期有效" />
-          <span style="font-size:12px;color:var(--text-muted)">天</span>
+          <span style="font-size:12px;color:var(--color-muted-foreground)">天</span>
         </div>
         <div class="form-row">
           <label>权限范围</label>
@@ -597,29 +597,6 @@
             <div data-tag-list></div>
           </div>
         </label>
-        <div class="form-divider">验证策略（怎样才算找到漏洞）</div>
-        <label>FLAG 正则
-          <input name="flag_regex" placeholder="例如 FLAG\\{[^}]+\\}，留空则仅用 LLM 判定" />
-        </label>
-        <label>FLAG 格式
-          <input name="validation_format" placeholder="例如 FLAG{}" />
-        </label>
-        <label class="has-hint">
-          <span class="field-label">
-            信心阈值带 (0–1)
-            <span class="info-icon" data-hint-target="hint-confidence" title="查看说明">ⓘ</span>
-          </span>
-          <input name="confidence_threshold" type="number" min="0" max="1" step="0.1" value="0.6" />
-          <span class="hint-box hidden" id="hint-confidence">LLM 判定一个发现是否成立所需的最低置信度。值越高，误报越少，但也可能漏掉边界案例。</span>
-        </label>
-        <label class="has-hint">
-          <span class="field-label">
-            任务树最大深度
-            <span class="info-icon" data-hint-target="hint-max-depth" title="查看说明">ⓘ</span>
-          </span>
-          <input name="max_tree_depth" type="number" min="1" max="16" step="1" value="4" />
-          <span class="hint-box hidden" id="hint-max-depth">任务分解与子任务嵌套的最大层数。深度越大，Agent 探索越深入，但耗时和 Token 消耗也会显著增加。</span>
-        </label>
         <div class="modal-actions">
           <button type="button" class="btn ghost" data-close>取消</button>
           <button type="submit" class="btn primary">创建</button>
@@ -634,19 +611,9 @@
     };
     setTimeout(collect, 0);
 
-    // 提示图标点击展开/收起说明
-    $$(".info-icon", $("#target-form")).forEach((icon) => {
-      icon.addEventListener("click", () => {
-        const box = $(`#${icon.dataset.hintTarget}`);
-        if (box) box.classList.toggle("hidden");
-      });
-    });
-
     $("#target-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const f = e.target;
-      const ct = parseFloat(f.confidence_threshold.value);
-      const mtd = parseInt(f.max_tree_depth.value, 10);
       try {
         const newTarget = await api("/targets", {
           method: "POST",
@@ -656,10 +623,6 @@
             description: f.description.value.trim() || null,
             in_scope: inScope,
             out_of_scope: outScope,
-            flag_regex: f.flag_regex.value.trim() || null,
-            validation_format: f.validation_format.value.trim() || null,
-            confidence_threshold: Number.isFinite(ct) ? ct : 0.6,
-            max_tree_depth: Number.isFinite(mtd) ? mtd : 4,
           },
         });
         closeModal();
@@ -709,15 +672,7 @@
           <h4>排除范围</h4>
           <div>${t.out_of_scope.map((s) => `<span class="chip">${esc(s)}</span>`).join("") || "（空）"}</div>
         </section>
-        <section>
-          <h4>验证策略</h4>
-          <dl class="kv">
-            <dt>FLAG 正则</dt><dd>${esc(t.flag_regex || "—")}</dd>
-            <dt>FLAG 格式</dt><dd>${esc(t.validation_format || "—")}</dd>
-            <dt>信心阈值带</dt><dd>${t.confidence_threshold}</dd>
-            <dt>任务树深度</dt><dd>${t.max_tree_depth}</dd>
-          </dl>
-        </section>
+        <p class="muted note">验证策略在创建任务时按任务配置。</p>
         <div class="modal-actions">
           <button class="btn danger" data-del-target="${t.id}">删除</button>
           <button class="btn ghost" data-close>关闭</button>
@@ -1028,6 +983,29 @@
             <option value="yolo">主动验证（yolo，自动批准高危调用）</option>
           </select>
         </label>
+        <div class="form-divider">验证策略（怎样才算找到漏洞，留空则使用默认/继承目标）</div>
+        <label>FLAG 正则
+          <input name="flag_regex" placeholder="例如 FLAG\\{[^}]+\\}，留空则仅用 LLM 判定" />
+        </label>
+        <label>FLAG 格式
+          <input name="validation_format" placeholder="例如 FLAG{}" />
+        </label>
+        <label class="has-hint">
+          <span class="field-label">
+            信心阈值带 (0–1)
+            <span class="info-icon" data-hint-target="hint-confidence" title="查看说明">ⓘ</span>
+          </span>
+          <input name="confidence_threshold" type="number" min="0" max="1" step="0.1" />
+          <span class="hint-box hidden" id="hint-confidence">LLM 判定一个发现是否成立所需的最低置信度。值越高，误报越少，但也可能漏掉边界案例。留空使用默认 0.6。</span>
+        </label>
+        <label class="has-hint">
+          <span class="field-label">
+            任务树最大深度
+            <span class="info-icon" data-hint-target="hint-max-depth" title="查看说明">ⓘ</span>
+          </span>
+          <input name="max_tree_depth" type="number" min="1" max="16" step="1" />
+          <span class="hint-box hidden" id="hint-max-depth">任务分解与子任务嵌套的最大层数。深度越大，Agent 探索越深入，但耗时和 Token 消耗也会显著增加。留空使用默认 4。</span>
+        </label>
         <div class="modal-actions">
           <button type="button" class="btn ghost" data-close>取消</button>
           <button type="submit" class="btn primary">创建并启动</button>
@@ -1041,7 +1019,19 @@
       form.model.value = draft.model || "";
       form.max_turns.value = draft.max_turns || 50;
       form.agent_mode.value = draft.agent_mode || "hacker";
+      form.flag_regex.value = draft.flag_regex || "";
+      form.validation_format.value = draft.validation_format || "";
+      form.confidence_threshold.value = draft.confidence_threshold ?? "";
+      form.max_tree_depth.value = draft.max_tree_depth ?? "";
     }
+
+    // 提示图标点击展开/收起说明
+    $$(".info-icon", $("#task-form")).forEach((icon) => {
+      icon.addEventListener("click", () => {
+        const box = $(`#${icon.dataset.hintTarget}`);
+        if (box) box.classList.toggle("hidden");
+      });
+    });
 
     // 填充目标下拉
     api("/targets")
@@ -1067,6 +1057,10 @@
           model: form.model.value,
           max_turns: form.max_turns.value,
           agent_mode: form.agent_mode.value,
+          flag_regex: form.flag_regex.value,
+          validation_format: form.validation_format.value,
+          confidence_threshold: form.confidence_threshold.value,
+          max_tree_depth: form.max_tree_depth.value,
         };
         closeModal();
         openTargetModal();
@@ -1084,6 +1078,12 @@
         agent_mode: f.agent_mode.value,
       };
       if (f.model.value.trim()) body.model = f.model.value.trim();
+      if (f.flag_regex.value.trim()) body.flag_regex = f.flag_regex.value.trim();
+      if (f.validation_format.value.trim()) body.validation_format = f.validation_format.value.trim();
+      const ct = parseFloat(f.confidence_threshold.value);
+      if (Number.isFinite(ct)) body.confidence_threshold = ct;
+      const mtd = parseInt(f.max_tree_depth.value, 10);
+      if (Number.isInteger(mtd)) body.max_tree_depth = mtd;
       try {
         const task = await api("/tasks", { method: "POST", body });
         closeModal();
@@ -1147,9 +1147,12 @@
                     : ""
                 }
               </div>
-              <div class="console-sub">主控正在执行 · ${esc(live.current_phase || "初始化")} · 当前智能体 ${esc(
-        live.current_agent || "—"
-      )}</div>
+              <div class="console-sub">
+                <span class="console-sub-dot ${["running", "queued"].includes(detail.status) ? "live" : ""}"></span>
+                <span>${esc(live.current_phase || "初始化")}</span>
+                <span>·</span>
+                <span>当前智能体 ${esc(live.current_agent || "—")}</span>
+              </div>
             </div>
             <div class="console-head-actions">
               ${
@@ -1169,9 +1172,18 @@
           ${
             ut > 0
               ? `<div class="console-tokens">
-                  <div class="ctok ctok-send"><span class="ctok-num">${fmtNum(up)}</span><span class="ctok-lab">发送</span></div>
-                  <div class="ctok ctok-recv"><span class="ctok-num">${fmtNum(uc)}</span><span class="ctok-lab">接收</span></div>
-                  <div class="ctok ctok-total"><span class="ctok-num">${fmtNum(ut)}</span><span class="ctok-lab">总 Token</span></div>
+                  <div class="ctok ctok-send">
+                    <span class="ctok-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg></span>
+                    <div><span class="ctok-num">${fmtNum(up)}</span><div class="ctok-lab">发送 Token</div></div>
+                  </div>
+                  <div class="ctok ctok-recv">
+                    <span class="ctok-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg></span>
+                    <div><span class="ctok-num">${fmtNum(uc)}</span><div class="ctok-lab">接收 Token</div></div>
+                  </div>
+                  <div class="ctok ctok-total">
+                    <span class="ctok-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg></span>
+                    <div><span class="ctok-num">${fmtNum(ut)}</span><div class="ctok-lab">总 Token</div></div>
+                  </div>
                 </div>`
               : ""
           }
@@ -1181,7 +1193,7 @@
             <aside class="console-col col-left">
               <div class="card plan-card">
                 <div class="card-head">
-                  <h4>执行计划</h4>
+                  <h4><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>执行计划</h4>
                   <span class="plan-progress" id="plan-progress">${plan.completed}/${plan.total}</span>
                 </div>
                 <div class="plan-bar"><div class="plan-bar-fill" id="plan-bar-fill" style="width:${
@@ -1207,7 +1219,7 @@
               </div>
 
               <div class="card agent-card">
-                <div class="card-head"><h4>运行视图</h4><span class="agent-count" id="agent-count">${
+                <div class="card-head"><h4><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>运行视图</h4><span class="agent-count" id="agent-count">${
                   live.agents.length
                 }</span></div>
                 <div id="agent-list" class="agent-list">
@@ -1254,7 +1266,7 @@
             <!-- 右栏：攻击范围 / 审批 -->
             <aside class="console-col col-right">
               <div class="card scope-card">
-                <div class="card-head"><h4>攻击范围</h4></div>
+                <div class="card-head"><h4><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>攻击范围</h4></div>
                 <div class="scope-url">${esc(live.target_url || detail.objective || "—")}</div>
                 <div class="scope-tags" id="scope-tags">
                   <span class="chip">${modeLabel}</span>
@@ -1264,7 +1276,7 @@
 
               <div class="card approval-card">
                 <div class="card-head">
-                  <h4>审批</h4>
+                  <h4><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 11l2 2 4-4"/></svg>审批</h4>
                   <button class="btn ghost tiny" data-console-refresh-approval>刷新</button>
                 </div>
                 <div id="approval-list-console" class="approval-list-console">
@@ -1477,7 +1489,7 @@
         <div class="approval-item st-${a.status}">
           <div class="ap-row">
             <span class="ap-tool">${esc(a.tool_name || "")}</span>
-            <span class="ap-risk risk-${a.risk_level}">${esc(a.risk_level || "")}</span>
+            <span class="risk-pill risk-${a.risk_level}">${esc(a.risk_level || "")}</span>
           </div>
           <div class="ap-detail">${esc(a.detail || a.tool_args || "")}</div>
           <div class="ap-foot">

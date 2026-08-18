@@ -53,6 +53,27 @@ async def run_probe_agent(
     返回与 ``run_deadend_agent`` 兼容的产出字典（``summary`` / ``confidence`` /
     ``structured_report`` / ``findings``），使 ``executor.py`` 落库逻辑无需分支。
     """
+    # 目录契约：与 deadend_runner 保持一致，注入 task_root 防止未来扩展触达
+    # SessionMetrics / ContextEngine 等 get_task_root() 散落点时回退旧废弃目录。
+    from pobi_agent.constants import TASKS_ROOT
+    from pobi_agent.storage_context import set_task_root, clear_task_root
+
+    task_root = TASKS_ROOT / str(task_id)
+    task_root.mkdir(parents=True, exist_ok=True)
+    task_root_token = set_task_root(task_root)
+    try:
+        return await _run_probe_body(task=task, target=target, task_id=task_id)
+    finally:
+        clear_task_root(task_root_token)
+
+
+async def _run_probe_body(
+    *,
+    task: Task,
+    target: Target,
+    task_id: UUID,
+) -> dict:
+    """``run_probe_agent`` 的实际工作体。外层负责注入/复位 task_root。"""
     url = target.url
     logger.info("[probe %s] 开始在共享 Kali 中探测目标 %s", task_id, url)
 

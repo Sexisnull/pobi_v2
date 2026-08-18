@@ -1,10 +1,12 @@
 import json
 import hashlib
+from pathlib import Path
 from pydantic_ai import RunContext
 from pobi_agent.utils.structures import RequesterDeps
 from pobi_agent.utils.functions import truncate_string
 from pobi_agent.logging import logger
 from pobi_agent.constants import CACHE_DEADEND_LOGS
+from pobi_agent.storage_context import get_task_root
 
 from .http_parser import is_valid_request_detailed, extract_host_port, autocorrect_http_request
 from .auth_handler import replace_credential_placeholders
@@ -147,6 +149,7 @@ async def pw_send_payload(
         proxy_url=proxy_url,
         auth_storage_state_path=auth_storage_state_path,
         auth_profile=auth_profile,
+        target=str(ctx.deps.target),
     )
     responses = []
     try:
@@ -201,8 +204,12 @@ async def _save_responses_to_file(agent_id: str, session_key: str, responses: li
         responses (list): List of response objects to save
     """
     try:
-        # Create the directory path
-        cache_dir = CACHE_DEADEND_LOGS / agent_id / session_key
+        # 优先归口到统一任务根 tasks/<task_id>/logs；未注入时回退旧 cache/logs 路径
+        task_root = get_task_root()
+        if task_root is not None:
+            cache_dir = Path(task_root) / "logs" / session_key
+        else:
+            cache_dir = CACHE_DEADEND_LOGS / agent_id / session_key
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Create the file path (convert to string for regular open())

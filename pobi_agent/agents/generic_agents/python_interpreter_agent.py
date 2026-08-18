@@ -5,8 +5,8 @@
 """Python interpreter agent for generating and executing security testing scripts.
 
 This module implements an AI agent that generates Python code for security testing,
-vulnerability assessment, and exploit development, then executes the code in a
-sandboxed WebAssembly-based Python interpreter environment.
+vulnerability assessment, and exploit development, then executes the code in the shared Kali Docker sandbox (the same
+container used for shell-based attack operations).
 """
 from typing import Any
 from pydantic_ai import Tool, DeferredToolResults
@@ -30,7 +30,7 @@ class PythonInterpreterAgent(AgentRunner):
     This agent specializes in creating Python code for security research tasks
     such as vulnerability testing, exploit development, and security analysis.
     The agent generates Python scripts based on security testing goals and
-    executes them in a sandboxed WebAssembly environment for safe testing.
+    executes them in the shared Kali Docker sandbox for safe testing.
     
     The agent uses the `run_python_file` tool which combines writing Python code
     to a file and executing it in an isolated sandbox, ensuring safe execution

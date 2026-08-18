@@ -23,6 +23,7 @@ class PlaywrightSessionManager:
         proxy_url: str | None = None,
         auth_storage_state_path: str | None = None,
         auth_profile: str | None = None,
+        target: str | None = None,
     ) -> 'PlaywrightRequester':
         """
         Get or create a PlaywrightRequester session.
@@ -36,6 +37,8 @@ class PlaywrightSessionManager:
             auth_profile: Optional profile label; when set the cache key is
                 segmented per profile so authenticated and unauthenticated
                 sessions do not pollute each other.
+            target: Authorized target URL/host, used to resolve the per-task
+                scope file under ``TASKS_ROOT/<task_id>/scope.{session_id}.yaml``.
 
         Returns:
             PlaywrightRequester: Session instance
@@ -50,6 +53,7 @@ class PlaywrightSessionManager:
                     agent_id=agent_id,
                     auth_storage_state_path=auth_storage_state_path,
                     auth_profile=auth_profile,
+                    target=target,
                 )
                 await cls._instances[cache_key]._initialize()
             return cls._instances[cache_key]

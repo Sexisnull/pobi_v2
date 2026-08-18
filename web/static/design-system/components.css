@@ -1,0 +1,144 @@
+/* ═══════════════════════════════════════════════════════════════
+   components.css — Design System Component Definitions
+   Auto-extracted from preview/component-*.html
+   DO NOT EDIT MANUALLY — regenerate via extract-components-css.mjs
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Button ────────────────────────────────────────────────── */
+/* @anatomy
+   <span class="label">主行动</span><button class="btn btn-md btn-primary">开始扫描</button><button class="btn btn-md btn-primary" disabled>开始扫描</button>
+*/
+/* Component definitions — extracted to components.css by deterministic script */
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid transparent; border-radius: var(--radius-base); font-family: inherit; font-size: 14px; font-weight: 500; line-height: 1; white-space: nowrap; cursor: pointer; transition: background .15s, border-color .15s, filter .15s; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-sm { height: 28px; padding: 0 12px; min-width: 28px; font-size: 12px; }
+    .btn-md { height: 36px; padding: 0 18px; min-width: 36px; }
+    .btn-lg { height: 44px; padding: 0 24px; min-width: 44px; font-size: 15px; }
+    .btn-primary { background: var(--color-primary); color: var(--color-primary-foreground); }
+    .btn-primary:hover:not(:disabled) { filter: brightness(0.92); }
+    .btn-secondary { background: var(--color-secondary); color: var(--color-secondary-foreground); }
+    .btn-secondary:hover:not(:disabled) { filter: brightness(0.97); }
+    .btn-ghost { background: transparent; color: var(--color-primary); border-color: var(--color-border); }
+    .btn-ghost:hover:not(:disabled) { background: var(--color-accent); }
+    .btn-danger { background: var(--color-destructive); color: var(--color-destructive-foreground); }
+    .btn-danger:hover:not(:disabled) { filter: brightness(0.92); }
+
+/* ── Card ──────────────────────────────────────────────────── */
+/* @anatomy
+   <div class="card"> <div class="card-header"><span class="card-title">Web 应用防火墙</span><span class="card-action">查看</span>
+*/
+.card { width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-base); background: var(--color-card); color: var(--color-card-foreground); overflow: hidden; }
+  .card-header { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--spacing-base) * 2); padding: calc(var(--spacing-base) * 3) calc(var(--spacing-base) * 4); border-bottom: 1px solid var(--color-border); }
+  .card-title { font-size: 15px; font-weight: 600; line-height: 1.4; word-break: keep-all; overflow-wrap: break-word; }
+  .card-action { font-size: 13px; color: var(--color-primary); cursor: pointer; transition: filter .15s; white-space: nowrap; }
+  .card-action:hover { filter: brightness(1.1); }
+  .card-body { padding: calc(var(--spacing-base) * 4); font-size: 14px; line-height: 1.5; }
+  .card-row { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--spacing-base) * 2); }
+  .card-footer { display: flex; align-items: center; justify-content: flex-end; gap: calc(var(--spacing-base) * 2); padding: calc(var(--spacing-base) * 3) calc(var(--spacing-base) * 4); border-top: 1px solid var(--color-border); }
+  .card-link { font-size: 13px; color: var(--color-primary); cursor: pointer; transition: filter .15s; white-space: nowrap; }
+  .card-link:hover { filter: brightness(1.1); }
+  .card.outlined { background: transparent; }
+  .card.filled { background: var(--color-secondary); }
+  .card.hoverable { cursor: pointer; transition: border-color .15s, transform .15s; }
+  .card.hoverable:hover { border-color: var(--color-primary); transform: translateY(-2px); }
+
+/* ── Input ─────────────────────────────────────────────────── */
+/* @anatomy
+   <div class="input-wrap" data-evidence-sample="default-md"> <label class="input-label">目标域名</label> <input class="input-field input-md" type="text" placeholder="example.com"> <span class="input-hint">请输入授权评估目标</span>
+*/
+.input-wrap { display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
+  .input-label { font-size: 12px; font-weight: 500; color: var(--color-foreground); line-height: 1.2; }
+  .input-field { width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--color-border); border-radius: var(--radius-base); background: var(--color-background); color: var(--color-foreground); font-family: inherit; font-size: 14px; line-height: 1; outline: 2px solid transparent; outline-offset: 2px; transition: border-color .15s, outline-color .15s; }
+  .input-field::placeholder { color: var(--color-muted-foreground); }
+  .input-field:hover:not(:disabled):not(.disabled) { border-color: var(--color-input); }
+  .input-field:focus { outline-color: var(--color-ring); }
+  .input-field.error { border-color: var(--color-destructive); }
+  .input-field.error:focus { outline-color: var(--color-destructive); }
+  .input-field.success { border-color: var(--color-success); }
+  .input-field.success:focus { outline-color: var(--color-success); }
+  .input-field:disabled, .input-field.disabled { opacity: 0.5; cursor: not-allowed; }
+  .input-sm { height: 30px; padding: 0 10px; font-size: 13px; }
+  .input-md { height: 38px; padding: 0 12px; font-size: 14px; }
+  .input-hint { font-size: 12px; line-height: 1.2; color: var(--color-muted-foreground); }
+  .input-hint.error { color: var(--color-destructive); }
+  .input-hint.success { color: var(--color-success); }
+  .input-affix { position: relative; display: flex; align-items: center; width: 100%; min-width: 200px; }
+  .input-affix .input-field { padding-right: 52px; }
+  .input-action { position: absolute; right: 6px; display: inline-flex; align-items: center; justify-content: center; height: 26px; padding: 0 10px; border: none; border-radius: var(--radius-base); background: var(--color-accent); color: var(--color-accent-foreground); font-size: 12px; cursor: pointer; transition: filter .15s; }
+  .input-action:hover { filter: brightness(1.08); }
+
+/* ── Navigation ────────────────────────────────────────────── */
+/* @anatomy
+   <nav class="nav-sidebar"> <div class="nav-brand"><i data-lucide="shield-check" class="nav-icon"></i>PobiApple
+*/
+/* Component definitions — extracted to components.css by deterministic script */
+    .nav-sidebar { width: 240px; background: var(--color-secondary); border-radius: var(--radius-base); padding: 12px 0; }
+    .nav-brand { display: flex; align-items: center; gap: 8px; padding: 0 16px 12px; font-weight: 700; color: var(--color-foreground); }
+    .nav-list { display: flex; flex-direction: column; padding: 0 8px; gap: 2px; }
+    .nav-item { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-width: 44px; min-height: 44px; padding: 0 12px; border-radius: calc(var(--radius-base) * 0.5); color: var(--color-secondary-foreground); cursor: pointer; transition: background .15s; white-space: nowrap; text-decoration: none; }
+    .nav-item:hover { background: var(--color-accent); }
+    .nav-item.active { background: var(--color-brand-50); color: var(--color-primary); }
+    .nav-item.active:hover { background: var(--color-brand-100); }
+    .nav-icon { flex-shrink: 0; width: 20px; height: 20px; color: currentColor; }
+    .nav-text { font-size: 14px; line-height: 1.4; }
+    .nav-topbar { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 56px; padding: 0 16px; background: var(--color-background); border-bottom: 1px solid var(--color-border); }
+    .nav-topbar .nav-list { flex-direction: row; align-items: center; gap: 4px; padding: 0; }
+    .nav-topbar .nav-item { min-height: 44px; padding: 0 12px; color: var(--color-foreground); }
+    .nav-topbar .nav-item.active { background: transparent; color: var(--color-primary); }
+    .nav-actions { display: flex; align-items: center; gap: 4px; }
+    .tab-list { display: flex; width: 100%; gap: 0; border-bottom: 1px solid var(--color-border); }
+    .tab-item { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 40px; padding: 0 16px; font-size: 14px; color: var(--color-muted-foreground); cursor: pointer; border: none; border-bottom: 2px solid transparent; background: transparent; transition: background .15s, border-color .15s, color .15s; white-space: nowrap; }
+    .tab-item:hover { background: var(--color-accent); }
+    .tab-item.active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
+
+/* ── Stat Card ─────────────────────────────────────────────── */
+/* @anatomy
+   <span class="label">默认</span><div class="stat-card size-md style-default"><div class="body"><div class="icon"><img src="https://cdn.jsdelivr.net/npm/lucide-static@1.8.0/icons/activity.svg" width="24" height="24" alt="activity">
+*/
+/* Component definitions — extracted to components.css by deterministic script */
+  .stat-card { position: relative; background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-base); box-shadow: var(--shadow-sm); overflow: hidden; transition: transform .15s, box-shadow .15s, border-color .15s; cursor: default; }
+  .stat-card::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--color-border); }
+  .stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); border-color: var(--color-input); }
+  .stat-card .body { padding: calc(var(--spacing-base) * 4); padding-top: calc(var(--spacing-base) * 5); display: flex; gap: calc(var(--spacing-base) * 4); align-items: center; }
+  .stat-card .icon { flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: var(--radius-base); background: var(--color-muted); }
+  .stat-card .icon img { width: 24px; height: 24px; }
+  .stat-card .content { min-width: 0; }
+  .stat-card .stat-label { margin: 0 0 calc(var(--spacing-base) * 1) 0; font-size: 13px; font-weight: 500; color: var(--color-muted-foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stat-card .value { margin: 0; font-family: var(--type-font-sans); font-size: 32px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; color: var(--color-card-foreground); white-space: nowrap; }
+  .stat-card .hint { margin: calc(var(--spacing-base) * 1) 0 0; font-size: 12px; color: var(--color-muted-foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stat-card.size-md { width: 240px; }
+  .stat-card.size-sm { width: 180px; }
+  .stat-card.size-sm .body { padding: calc(var(--spacing-base) * 3); padding-top: calc(var(--spacing-base) * 4); gap: calc(var(--spacing-base) * 3); }
+  .stat-card.size-sm .icon { width: 36px; height: 36px; }
+  .stat-card.size-sm .value { font-size: 24px; }
+  .stat-card.size-lg { width: 280px; }
+  .stat-card.size-lg .body { padding: calc(var(--spacing-base) * 5); padding-top: calc(var(--spacing-base) * 6); gap: calc(var(--spacing-base) * 5); }
+  .stat-card.size-lg .icon { width: 52px; height: 52px; }
+  .stat-card.size-lg .value { font-size: 40px; }
+  .stat-card.style-accent::before { background: var(--color-primary); }
+  .stat-card.style-success::before { background: var(--color-success); }
+  .stat-card.style-warning::before { background: var(--color-chart-3); }
+  .stat-card.style-danger::before { background: var(--color-destructive); }
+
+/* ── Table ─────────────────────────────────────────────────── */
+/* @anatomy
+   <span class="label">默认</span>
+*/
+/* Component definitions — extracted to components.css by deterministic script */
+    .table-wrap { width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-base); overflow: hidden; background: var(--color-card); }
+    .table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.5; }
+    .table th { padding: 10px 12px; text-align: left; font-weight: 600; font-size: 12px; color: var(--color-muted-foreground); background: var(--color-muted); white-space: nowrap; }
+    .table td { padding: 12px; text-align: left; border-bottom: 1px solid var(--color-border); color: var(--color-foreground); }
+    .table tr:last-child td { border-bottom: none; }
+    .table tbody tr:hover td { filter: brightness(0.97); }
+    .table .cell-num { text-align: right; font-variant-numeric: tabular-nums; }
+    .table .badge { display: inline-flex; align-items: center; padding: 2px 8px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+    .table .badge-success { background: var(--color-state-success-surface); color: var(--color-state-success); }
+    .table .badge-running { background: var(--color-muted); color: var(--color-muted-foreground); }
+    .table .badge-error { background: var(--color-state-error-surface); color: var(--color-state-error); }
+    .table.striped tbody tr:nth-child(even) td { background: var(--color-muted); }
+    .table.striped tbody tr:hover td { filter: none; }
+    .table.compact th { padding: 6px 10px; }
+    .table.compact td { padding: 8px 10px; }
+    .table.disabled { opacity: 0.5; pointer-events: none; }
+    .table.disabled tbody tr:hover td { filter: none; }

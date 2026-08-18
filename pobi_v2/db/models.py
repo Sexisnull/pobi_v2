@@ -192,6 +192,12 @@ class Task(Base):
     agent_mode: Mapped[str] = mapped_column(String(32), default="hacker", nullable=False)
     # 任务种类：task=正式渗透任务，probe=链路连通性探针（仅做授权目标连通验证）
     kind: Mapped[str] = mapped_column(String(32), default="task", nullable=False, index=True)
+    # 验证策略（任务级覆盖；None = 继承授权目标配置/使用默认）：
+    # 决定「怎样才算找到漏洞」——flag 正则、验证格式（如 FLAG{}）、信心阈值带、任务树深度。
+    flag_regex: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    validation_format: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    confidence_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_tree_depth: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 结果（M3 结构化落库，result 存最终摘要/报告引用）
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
