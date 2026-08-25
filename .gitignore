@@ -53,3 +53,7 @@ pobi_v2/benchmark/benchmark_result.json
 
 # 监控/运行日志
 scripts/monitor_run_*.log
+
+# 文档与脚本目录（非源码，整体不入库，本地保留）
+docs/
+scripts/
