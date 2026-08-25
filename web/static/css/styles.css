@@ -530,14 +530,20 @@ tbody tr:hover { background: rgba(255,255,255,.03); }
 }
 /* 高视口下严格禁止根容器整体滚动：让三栏内部各自自滚，避免整页延展 */
 @media (min-height: 761px) {
-  .console-root { overflow: hidden; }
-  .console-grid { overflow: hidden; min-height: 0; }
+  .console-root { overflow: auto; }
 }
 .console-root.hidden { display: none; }
-.console-shell { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+/* 关键：#console-body 是 .console-root(flex column) 的唯一直接子元素，
+   必须占满视口剩余高度并约束自身，否则 .console-shell 的 height:100% 会解析失败回退为 auto，
+   导致 SSE 持续追加的对话流把整页无限撑长。 */
+/* 详情页全局高度链（从 body → console-root → console-body → console-shell → console-grid）
+   每一层都显式占满父级并确定高度，杜绝任何一层被内容撑开或解析失败导致中栏塌陷。 */
+#console-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.console-shell { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 
 /* 任务头 */
 .console-head {
+  flex: 0 0 auto;
   display: flex; align-items: center; gap: 16px;
   padding: 16px 22px; border-bottom: 1px solid var(--border-soft);
   background: rgba(29,29,31,.72); backdrop-filter: blur(20px);
@@ -565,17 +571,16 @@ tbody tr:hover { background: rgba(255,255,255,.03); }
 
 /* 三栏网格 */
 .console-grid {
-  flex: 1; min-height: 0; display: grid;
+  flex: 1 1 auto; min-height: 0; display: grid;
   grid-template-columns: 290px 1fr 330px;
-  grid-template-rows: minmax(0, 1fr);
+  align-items: start;          /* 各列顶部对齐，随内容自然撑高 */
   gap: 14px; padding: 14px 18px 18px;
-  overflow: auto;            /* 内容溢出时整体可滚 */
-  scrollbar-gutter: stable;  /* 给滚动条预留空间，避免内容偏移 */
+  overflow: auto;             /* 整页可滚动，内容自然展开 */
+  scrollbar-gutter: stable;
 }
 .console-col {
   min-height: 0; min-width: 0;
   display: flex; flex-direction: column; gap: 14px;
-  overflow: hidden;          /* 列内由各 card 单独滚动 */
 }
 /* 回退兜底：若内部 card 未正确配置自滚（如内容超高），列整体可滚，避免信息被截断 */
 .console-col > .card:only-child { overflow-y: auto; }
@@ -584,15 +589,9 @@ tbody tr:hover { background: rgba(255,255,255,.03); }
   background: var(--bg-2);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
-  overflow: hidden;
-  /* 确保中栏作为 flex 列容器正确约束子元素高度，让 chat-stream 能自滚 */
+  /* 中栏作为 flex 列容器，随内容自然撑高，整页滚动 */
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  /* 在 grid item 上显式声明 stretch，避免不同浏览器对 align-items 默认值的不一致处理 */
-  align-self: stretch;
-  /* 中栏在 console-grid 行内必须撑满整行；不让任何子内容把它撑高 */
-  height: 100%;
   box-sizing: border-box;
 }
 /* 中栏的 header 与底部输入框固定不参与高度计算，确保 chat-stream 独占剩余空间 */
@@ -684,15 +683,13 @@ tbody tr:hover { background: rgba(255,255,255,.03); }
 .phase-value { font-size: 14px; font-weight: 600; color: var(--low); }
 .phase-agent { font-size: 12px; color: var(--text-dim); margin-left: auto; }
 .chat-stream {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
+  flex: 0 0 auto;
   padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  /* 高度三件套：强制计算可用高度触发内部滚动（低 viewport 场景关键） */
-  height: 0;
+  max-height: 60vh;
+  overflow-y: auto;
 }
 /* 中栏对话流滚动条：与左栏 plan-list 风格一致 */
 .chat-stream::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -835,6 +832,7 @@ tbody tr:hover { background: rgba(255,255,255,.03); }
 
 /* 任务控制台内 token 卡片 */
 .console-tokens {
+  flex: 0 0 auto;
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
   padding: 12px 22px; background: rgba(0,0,0,.28); border-bottom: 1px solid var(--border-soft);
 }

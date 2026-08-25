@@ -394,10 +394,18 @@
   box-shadow: 0 0 6px var(--ok);
 }
 
-/* 对话流 */
+/* 中栏容器：由 grid stretch 撑满行高，子元素再内部分配 */
+.console-grid > .col-center {
+  min-height: 0;
+}
+
+/* 对话流：有限高度、内部滚动，不无限撑长整页 */
 .chat-stream {
+  flex: 0 0 auto;
+  max-height: 60vh;
   padding: 20px;
   gap: 16px;
+  overflow-y: auto;
 }
 .chat-bubble {
   max-width: 82%;
@@ -560,6 +568,177 @@
 .btn.tiny.approve:hover { background: var(--primary-h); }
 .btn.tiny.danger { background: var(--danger); color: #fff; border: none; }
 .btn.tiny.danger:hover { background: var(--danger-h); }
+
+/* ───────────────────────── 作战室：态势条 ───────────────────────── */
+.console-sitrep {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 12px 26px;
+  background: linear-gradient(180deg, var(--bg-2), var(--bg));
+  border-bottom: 1px solid var(--border-soft);
+}
+.sitrep-block { display: flex; align-items: center; gap: 12px; }
+.sitrep-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.sitrep-last-val { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+.threat-bar { display: flex; gap: 7px; }
+.threat-empty { font-size: 12px; color: var(--text-dim); }
+.threat-chip {
+  min-width: 26px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.threat-chip.sev-critical { color: #ff453a; background: rgba(255,69,58,0.14); box-shadow: 0 0 12px rgba(255,69,58,0.18); }
+.threat-chip.sev-high { color: #ff9f0a; background: rgba(255,159,10,0.14); }
+.threat-chip.sev-medium { color: #ffd60a; background: rgba(255,214,10,0.12); }
+.threat-chip.sev-low { color: #64d2ff; background: rgba(100,210,255,0.12); }
+.threat-chip.sev-info { color: var(--text-dim); background: rgba(142,142,147,0.12); }
+
+.autonomy-meter {
+  position: relative;
+  width: 150px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.autonomy-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, #22d3a8, #38bdf8);
+  border-radius: 999px;
+  transition: width 0.6s var(--ease);
+}
+.autonomy-num {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #04121a;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ───────────────────────── 作战室：Agent 蜂群 ───────────────────────── */
+.swarm-section {
+  padding: 14px 18px 6px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+.swarm-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; flex: 0 0 auto; }
+.swarm-title { font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: -0.01em; }
+.swarm-sub { font-size: 11px; color: var(--low); font-weight: 500; }
+.agent-swarm {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.swarm-card {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 13px 14px 12px;
+  background: linear-gradient(180deg, var(--bg-3), var(--bg-2));
+  overflow: hidden;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+}
+.swarm-card:hover { transform: translateY(-2px); border-color: var(--border-soft); }
+.swarm-ring {
+  position: absolute;
+  top: -40px;
+  right: -40px;
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-soft), transparent 70%);
+  opacity: 0.5;
+  pointer-events: none;
+}
+.swarm-card.st-running { border-color: rgba(100,210,255,0.4); box-shadow: 0 0 0 1px rgba(100,210,255,0.15), 0 8px 24px rgba(0,0,0,0.25); }
+.swarm-card.st-running .swarm-ring { animation: pulse-ring 2.2s ease-in-out infinite; opacity: 0.85; }
+.swarm-card.st-done { opacity: 0.78; }
+.swarm-card.st-error { border-color: rgba(255,69,58,0.5); }
+.swarm-card.waiting-human { border-color: var(--warn); box-shadow: 0 0 0 1px rgba(255,159,10,0.25); }
+.swarm-card.waiting-human .swarm-ring { background: radial-gradient(circle, rgba(255,159,10,0.5), transparent 70%); animation: pulse-ring 1.4s ease-in-out infinite; opacity: 0.9; }
+
+@keyframes pulse-ring {
+  0%, 100% { transform: scale(0.9); opacity: 0.35; }
+  50% { transform: scale(1.25); opacity: 0.9; }
+}
+
+.swarm-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+.swarm-role-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-dim); flex: none; }
+.swarm-name { font-size: 13px; font-weight: 600; color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.swarm-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.swarm-card.st-running .swarm-badge { color: var(--low); border-color: rgba(100,210,255,0.3); }
+.swarm-action {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.45;
+  min-height: 16px;
+  margin-bottom: 8px;
+  word-break: break-word;
+}
+.swarm-card.st-running .swarm-action { color: var(--text); }
+.swarm-card.waiting-human .swarm-action { color: var(--warn); }
+.swarm-acts {
+  list-style: none;
+  margin: 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.swarm-acts li {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 角色色 */
+.swarm-card.role-recon .swarm-role-dot { background: #38bdf8; box-shadow: 0 0 8px rgba(56,189,248,0.6); }
+.swarm-card.role-threat .swarm-role-dot { background: #a855f7; box-shadow: 0 0 8px rgba(168,85,247,0.6); }
+.swarm-card.role-exploit .swarm-role-dot { background: #fb923c; box-shadow: 0 0 8px rgba(251,146,60,0.6); }
+.swarm-card.role-report .swarm-role-dot { background: #22d3a8; box-shadow: 0 0 8px rgba(34,211,168,0.6); }
+.swarm-card.role-planner .swarm-role-dot { background: #3b82f6; box-shadow: 0 0 8px rgba(59,130,246,0.6); }
+.swarm-card.role-generic .swarm-role-dot { background: var(--text-dim); }
+
+/* 审批卡：等待人类态强调 */
+.approval-item.st-pending .ap-agent { color: var(--warn); font-weight: 600; }
+.ap-agent { font-size: 10px; color: var(--text-dim); font-family: var(--font-mono); }
 
 /* ───────────────────────── 子页面通用增强 ───────────────────────── */
 .view-head {

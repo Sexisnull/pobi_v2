@@ -1138,6 +1138,194 @@
     return openTaskConsole(id);
   }
 
+  // ---- 控制台：Agent 蜂群 / 态势条 辅助 ----
+  // 职能配色：按 name/role 关键词推断，复用现有 status/角色 token（侦察=青、威胁建模=紫、利用=橙、报告=绿、规划=蓝）
+  const ROLE_META = {
+    planner:   { label: "规划",  cls: "role-planner" },
+    recon:     { label: "侦察",  cls: "role-recon" },
+    scan:      { label: "扫描",  cls: "role-recon" },
+    threat:    { label: "威胁建模", cls: "role-threat" },
+    exploit:   { label: "利用",  cls: "role-exploit" },
+    report:    { label: "报告",  cls: "role-report" },
+    agent:     { label: "智能体", cls: "role-generic" },
+  };
+
+  function inferAgentRole(name, role) {
+    const hay = (name + " " + (role || "")).toLowerCase();
+    if (/plan|编排|调度|orchestrat|supervis/.test(hay)) return ROLE_META.planner;
+    if (/recon|侦察|枚举|scan|扫描|discover|asset/.test(hay)) return ROLE_META.recon;
+    if (/threat|威胁|model|建模|vuln|漏洞/.test(hay)) return ROLE_META.threat;
+    if (/exploit|利用|攻击|payload|rce|cve|web/.test(hay)) return ROLE_META.exploit;
+    if (/report|报告|summary|汇总|write/.test(hay)) return ROLE_META.report;
+    return ROLE_META.agent;
+  }
+
+  function agentActionText(work) {
+    if (!work || !work.length) return "";
+    const e = work[work.length - 1];
+    const p = e.payload || {};
+    const tool = p.tool || p.tool_name || p.action || p.operation || p.summary || "";
+    const arg = p.args ? (typeof p.args === "string" ? p.args : JSON.stringify(p.args)) : "";
+    const txt = String(tool) + (arg ? " · " + String(arg).slice(0, 64) : "");
+    return txt || e.type || "";
+  }
+
+  function renderAgentSwarm(live) {
+    const root = document.getElementById("agent-swarm");
+    if (!root) return;
+    const agents = live.agents || [];
+    if (!agents.length) {
+      root.innerHTML = '<div class="empty" style="padding:18px">暂无智能体在运行</div>';
+      return;
+    }
+    const work = live.agent_work || {};
+    root.innerHTML = agents
+      .map((a) => {
+        const meta = inferAgentRole(a.name, a.role);
+        const action = agentActionText(work[a.name]);
+        const acts = (work[a.name] || [])
+          .slice(-4)
+          .reverse()
+          .map((e) => {
+            const t = agentActionText([e]);
+            return t
+              ? `<li>${esc(t)}</li>`
+              : "";
+          })
+          .join("");
+        return `
+        <div class="swarm-card st-${esc(a.status)} ${meta.cls}" data-agent="${esc(a.name)}">
+          <div class="swarm-ring"></div>
+          <div class="swarm-card-head">
+            <span class="swarm-role-dot"></span>
+            <span class="swarm-name">${esc(a.name)}</span>
+            <span class="swarm-badge">${agentStateLabel(a.status)}</span>
+          </div>
+          <div class="swarm-action" data-action>${action ? esc(action) : "待命"}</div>
+          <ul class="swarm-acts">${acts}</ul>
+        </div>`;
+      })
+      .join("");
+    const running = agents.filter((a) => a.status === "running").length;
+    const sub = document.getElementById("swarm-sub");
+    if (sub) sub.textContent = running
+      ? `${running} 个 Agent 自主工作中`
+      : "待命中";
+  }
+
+  function patchAgentCard(name, patch) {
+    const card = document.querySelector(`.swarm-card[data-agent="${cssEscape(name)}"]`);
+    if (!card) return;
+    if (patch.status) {
+      card.className = card.className.replace(/st-\w+/, "st-" + patch.status);
+      const badge = card.querySelector(".swarm-badge");
+      if (badge) badge.textContent = agentStateLabel(patch.status);
+    }
+    if (patch.action !== undefined) {
+      const el = card.querySelector("[data-action]");
+      if (el) el.textContent = patch.action || "待命";
+    }
+  }
+
+  function appendAgentActivity(name, text) {
+    const card = document.querySelector(`.swarm-card[data-agent="${cssEscape(name)}"]`);
+    if (!card || !text) return;
+    const ul = card.querySelector(".swarm-acts");
+    if (!ul) return;
+    const li = document.createElement("li");
+    li.textContent = text;
+    li.classList.add("animate-fade-in-up");
+    ul.prepend(li);
+    while (ul.children.length > 5) ul.removeChild(ul.lastChild);
+  }
+
+  function applyAgentEvent(ev) {
+    const p = (ev && ev.payload) || {};
+    const name = p.agent || p.agent_name || p.agentName || "";
+    if (!name) return;
+    switch (ev.type) {
+      case "agent_start":
+        patchAgentCard(name, { status: "running" });
+        break;
+      case "agent_end":
+        patchAgentCard(name, { status: p.status || "done" });
+        break;
+      case "agent_error":
+        patchAgentCard(name, { status: "error" });
+        break;
+      case "tool_call_start":
+      case "agent_activity":
+        patchAgentCard(name, { action: agentActionText([ev]) });
+        appendAgentActivity(name, agentActionText([ev]));
+        break;
+      case "tool_call_end":
+        patchAgentCard(name, { action: p.result ? "完成：" + String(p.result).slice(0, 40) : "动作完成" });
+        break;
+    }
+  }
+
+  async function loadConsoleSitrep(taskId) {
+    try {
+      const threats = await api("/tasks/" + taskId + "/recon/threats");
+      const bar = document.getElementById("threat-bar");
+      if (bar) {
+        if (!threats.length) {
+          bar.innerHTML = '<span class="threat-empty">未发现威胁</span>';
+        } else {
+          const order = ["critical", "high", "medium", "low", "info"];
+          bar.innerHTML = order
+            .map((sev) => {
+              const n = threats.filter((t) => (t.severity || "info") === sev).length;
+              return n
+                ? `<span class="threat-chip sev-${sev}">${n}</span>`
+                : "";
+            })
+            .join("");
+        }
+      }
+      const fill = document.getElementById("autonomy-fill");
+      const num = document.getElementById("autonomy-num");
+      if (fill && num) {
+        // 自主度：以威胁数近似"自动发现的情报量"，70% 起步基线（无审批=高度自动）
+        const approvalsResp = await api("/approvals?task_id=" + taskId);
+        const pending = (approvalsResp || []).filter(
+          (x) => x.status === "pending"
+        ).length;
+        const auto = pending ? Math.max(20, 100 - pending * 8) : 92;
+        fill.style.width = auto + "%";
+        num.textContent = auto + "%";
+      }
+    } catch (e) {
+      /* 旁路：态势条失败不影响主控制台 */
+    }
+  }
+
+  function updateSitrepLastActivity(live) {
+    const el = document.getElementById("sitrep-last");
+    if (!el || !live.last_event_at) {
+      if (el) el.textContent = "—";
+      return;
+    }
+    const secs = Math.max(0, Math.floor((Date.now() - new Date(live.last_event_at).getTime()) / 1000));
+    el.textContent = secs < 5 ? "刚刚" : secs < 60 ? secs + "s 前" : Math.floor(secs / 60) + "m 前";
+  }
+
+  // 审批出现时：中栏对应 Agent 卡转「等待人类」琥珀态
+  function markAgentWaiting(name) {
+    if (!name) return;
+    const card = document.querySelector(`.swarm-card[data-agent="${cssEscape(name)}"]`);
+    if (card) card.classList.add("waiting-human");
+  }
+  function clearAgentWaiting(name) {
+    if (!name) return;
+    const card = document.querySelector(`.swarm-card[data-agent="${cssEscape(name)}"]`);
+    if (card) card.classList.remove("waiting-human");
+  }
+
+  function cssEscape(s) {
+    return String(s).replace(/["\\]/g, "\\$&");
+  }
+
   // ---- 渗透任务实时监控控制台（全屏三栏） ----
   async function openTaskConsole(id) {
     try {
@@ -1197,6 +1385,25 @@
               <button class="btn small" data-console-report>报告</button>
             </div>
           </header>
+
+          <!-- 态势条：威胁态势 + 自主度仪表 -->
+          <div class="console-sitrep" id="console-sitrep">
+            <div class="sitrep-block sitrep-threat">
+              <span class="sitrep-label">威胁态势</span>
+              <div class="threat-bar" id="threat-bar"><span class="threat-empty">加载中…</span></div>
+            </div>
+            <div class="sitrep-block sitrep-autonomy">
+              <span class="sitrep-label">自主度</span>
+              <div class="autonomy-meter" id="autonomy-meter">
+                <div class="autonomy-fill" id="autonomy-fill" style="width:0%"></div>
+                <span class="autonomy-num" id="autonomy-num">—</span>
+              </div>
+            </div>
+            <div class="sitrep-block sitrep-last">
+              <span class="sitrep-label">最后活跃</span>
+              <span class="sitrep-last-val" id="sitrep-last">—</span>
+            </div>
+          </div>
 
           ${
             ut > 0
@@ -1273,6 +1480,15 @@
 
             <!-- 中栏：主控对话 -->
             <section class="console-col col-center">
+              <!-- Agent 蜂群工作区：多子 Agent 并发自主工作 -->
+              <div class="swarm-section">
+                <div class="swarm-head">
+                  <span class="swarm-title">Agent 蜂群</span>
+                  <span class="swarm-sub" id="swarm-sub">自主渗透进行中</span>
+                </div>
+                <div class="agent-swarm" id="agent-swarm"></div>
+              </div>
+
               <div class="console-phase">
                 <span class="phase-label">当前阶段</span>
                 <span class="phase-value" id="phase-value">${esc(live.current_phase || "初始化")}</span>
@@ -1375,10 +1591,19 @@
 
       // 渲染初始对话流 & 审批
       renderChatFromEvents(live.recent_events || []);
+      renderAgentSwarm(live);
+      updateSitrepLastActivity(live);
+      await loadConsoleSitrep(id);
       await loadConsoleApprovals(id);
 
-      // 启动实时流（SSE 联动计划/对话/审批）
-      startConsoleStream(id);
+      // 启动实时流（SSE 联动计划/对话/审批）。
+      // 已结束的任务直接关闭 SSE，避免反复重连导致 ERR_INCOMPLETE_CHUNKED_ENCODING。
+      const terminal = ["completed", "failed", "cancelled"];
+      if (terminal.includes(live.status)) {
+        closeStream();
+      } else {
+        startConsoleStream(id);
+      }
     } catch (err) {
       toast(err.message, true);
     }
@@ -1515,7 +1740,7 @@
       box.innerHTML = list
         .map(
           (a) => `
-        <div class="approval-item st-${a.status}">
+        <div class="approval-item st-${a.status}" data-agent="${esc(a.agent_name || "")}">
           <div class="ap-row">
             <span class="ap-tool">${esc(a.tool_name || "")}</span>
             <span class="risk-pill risk-${a.risk_level}">${esc(a.risk_level || "")}</span>
@@ -1523,6 +1748,7 @@
           <div class="ap-detail">${esc(a.detail || a.tool_args || "")}</div>
           <div class="ap-foot">
             <span class="ap-state">${approvalStateLabel(a.status)}</span>
+            <span class="ap-agent">${esc(a.agent_name || "主控")}</span>
             ${
               a.status === "pending"
                 ? `<span class="ap-actions">
@@ -1535,6 +1761,11 @@
         </div>`
         )
         .join("");
+      // 标记中栏对应 Agent 为「等待人类」态
+      box.querySelectorAll('.approval-item[data-agent]').forEach((it) => {
+        if (it.classList.contains("st-pending")) markAgentWaiting(it.dataset.agent);
+        else clearAgentWaiting(it.dataset.agent);
+      });
       box.querySelectorAll("[data-ap]").forEach((b) => {
         b.addEventListener("click", async () => {
           try {
@@ -1587,7 +1818,17 @@
         const pa = $("#phase-agent");
         if (pa) pa.textContent = p.agent_name;
       }
+      // Agent 蜂群卡片增量联动（角色色/状态/当前动作/活动流）
+      if (["agent_start", "agent_end", "agent_error", "tool_call_start", "tool_call_end", "agent_activity"].includes(ev.type)) {
+        applyAgentEvent(ev);
+      }
+      // 最后活跃时间刷新
+      const last = $("#sitrep-last");
+      if (last) last.textContent = "刚刚";
+      // 节流刷新威胁态势（约每 25 个事件）
+      if (++onEvent._n % 25 === 0) loadConsoleSitrep(taskId);
     };
+    onEvent._n = 0;
 
     // 初始事件（live.recent_events 已渲染），此处仅处理增量
     try {
@@ -1604,24 +1845,35 @@
       // 断线兜底：原生 EventSource 在服务端显式 close 后 readyState=CLOSED，
       // 浏览器不再自动重连；如果只是网络抖动则 readyState=CONNECTING，
       // 浏览器会自己做指数退避。我们只在 CLOSED 时介入：
-      //   1) 先 GET 一次 /tasks/:id 把 PG 真实状态拉回来，覆盖 SSE 漏掉的中间态；
-      //   2) 主动 close + 短暂退避后重新订阅，避免死循环打爆后端。
+      //   1) 先 GET 一次 /tasks/:id 把 PG 真实状态拉回来；
+      //   2) 若任务已终态，直接关闭并停止重连；否则短暂退避后重新订阅。
+      const terminal = ["completed", "failed", "cancelled"];
       let resyncing = false;
       es.onerror = async () => {
         if (es.readyState !== EventSource.CLOSED) return; // 仍在重连中，不插手
         if (resyncing) return;
         resyncing = true;
+        let shouldReconnect = false;
         try {
           const detail = await api(`/tasks/${taskId}`);
-          if (detail && detail.status) refreshConsoleStatus(detail.status);
-        } catch {}
-        try { es.close(); } catch {}
-        // 仅当用户仍在同一个控制台时重连；否则保持关闭。
-        setTimeout(() => {
-          if (state.es === es && state.consoleId === taskId) {
-            try { startConsoleStream(taskId); } catch {}
+          if (detail && detail.status) {
+            refreshConsoleStatus(detail.status);
+            if (!terminal.includes(detail.status)) shouldReconnect = true;
           }
-        }, 1500);
+        } catch {
+          // 状态拿不到时不主动重连，避免死循环
+        }
+        try { es.close(); } catch {}
+        // 仅当用户仍在同一个控制台且任务非终态时重连
+        if (shouldReconnect) {
+          setTimeout(() => {
+            if (state.es === es && state.consoleId === taskId) {
+              try { startConsoleStream(taskId); } catch {}
+            }
+          }, 1500);
+        } else {
+          state.es = null;
+        }
       };
     } catch (err) {
       /* 实时流不可用时静默，initial 数据已展示 */
