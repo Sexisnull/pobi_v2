@@ -406,3 +406,15 @@ class PricingConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
+
+
+# ---------------------------------------------------------------------------
+# RECON PG 聚合层（第二阶）
+# ---------------------------------------------------------------------------
+# 注册 recon 聚合表到 Base.metadata，使 alembic 自动迁移与 create_all 包含新表。
+# recon_models 仅依赖 Base，无反向依赖，避免循环导入。
+from pobi_v2.db.recon_models import (  # noqa: E402,F401
+    ReconFactAgg,
+    ReconThreatAgg,
+    ReconThreatEvidenceLink,
+)

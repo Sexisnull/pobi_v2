@@ -18,6 +18,10 @@ from pathlib import Path
 from typing import Dict, List, Set, Any, TYPE_CHECKING
 
 from pobi_agent.logging import logger
+from pobi_agent.utils.functions import num_tokens_from_string
+
+if TYPE_CHECKING:  # pragma: no cover - 仅类型标注，避免运行时循环依赖
+    from pobi_agent.recon import ReconStore
 from pobi_agent.config.settings import ModelSpec
 from pobi_agent.utils.structures import Task, TaskPlanner
 from pobi_agent.utils.functions import num_tokens_from_string
@@ -836,17 +840,28 @@ class ContextEngine:
         model: ModelSpec,
         session_id: uuid.UUID | None = None,
         agent_id: uuid.UUID | None = None,
+        recon_store: "ReconStore | None" = None,
+        target_id: "uuid.UUID | None" = None,
+        tenant_id: "uuid.UUID | None" = None,
     ) -> None:
         """Initialize the ContextEngine with empty state.
 
         Args:
             session_id: Optional UUID for the session. If not provided, a new one is generated.
+            recon_store: Optional per-task RECON 本地物化库（ReconStore）。注入后
+                add_discovered_fact / add_execution / record_attempt 会旁路非阻塞写入，
+                未注入时全部 no-op，保持向后兼容。
 
         Sets up the context engine with empty dictionaries for tasks and assets,
         initializes the next_agent to an empty string, and creates the context file path.
         """
         self.session_id = session_id
         self.agent_id = agent_id
+        # RECON 本地物化库（可选）；未注入时旁路写入全部跳过。
+        self.recon_store = recon_store
+        # PG 聚合层同步维度（第二阶）：target_id/tenant_id 用于触发 emit_recon_upsert。
+        self.recon_target_id = target_id
+        self.recon_tenant_id = tenant_id
         self.root_goal = ""
         self.tasks = {}
         self.next_agent = ""
@@ -1098,7 +1113,22 @@ class ContextEngine:
         # Ensure target is synced to structured context before generating unified context
         if self.target and not self.structured.target:
             self.structured.set_target(self.target)
-        return self.structured.get_unified_context(max_tokens=max_tokens)
+        base = self.structured.get_unified_context(max_tokens=max_tokens)
+        # 挂载 RECON 本地库 L0/L1/L2 分层注入块（已有历史侦察资产复用）。
+        recon_block = self._build_recon_index_block()
+        if recon_block:
+            return f"{recon_block}\n\n{base}"
+        return base
+
+    def _build_recon_index_block(self) -> str:
+        """构建 RECON 分层注入块；无库或未注入时返回空串。"""
+        if self.recon_store is None:
+            return ""
+        try:
+            return self.recon_store.build_index_view(task_id=self._recon_task_id())
+        except Exception as exc:  # noqa: BLE001 - 注入失败不阻断主上下文
+            logger.warning("RECON 分层索引构建失败（已跳过）: %s", exc)
+            return ""
 
     async def maybe_summarize_context(
         self,
@@ -1302,7 +1332,195 @@ class ContextEngine:
         Returns:
             False if this exact attempt was already tried and failed.
         """
-        return self.structured.record_attempt_simple(task, payload, result, reason)
+        added = self.structured.record_attempt_simple(task, payload, result, reason)
+        # 旁路写入 RECON 本地库（非阻塞、失败仅记 warning）。
+        self._recon_bypass_attempt(task, payload, result, reason)
+        return added
+
+    # ------------------------------------------------------------------
+    # RECON 本地物化库旁路写入（可选、非阻塞、失败安全）
+    # ------------------------------------------------------------------
+
+    def _recon_task_id(self) -> str:
+        """推断本地库 task_id：优先用 session_id 字符串（与 task_root 对齐）。"""
+        if self.session_id is not None:
+            return str(self.session_id)
+        return "default"
+
+    def _recon_emit_sync(self) -> None:
+        """旁路写入成功后，触发 PG 聚合层异步增量同步（事件钩子）。
+
+        仅当 target_id/tenant_id 均存在时触发；通过全局 get_event_hooks()
+        调用 PobiV2EventHooks 的扩展方法 emit_recon_upsert（NullEventHooks
+        无此方法，hasattr 安全跳过）。失败仅记 warning，不阻断主循环。
+        """
+        if self.recon_target_id is None or self.recon_tenant_id is None:
+            return
+        try:
+            from pobi_agent.hooks import get_event_hooks
+
+            hooks = get_event_hooks()
+            if hasattr(hooks, "emit_recon_upsert"):
+                hooks.emit_recon_upsert(  # type: ignore[attr-defined]
+                    session_id=str(self.session_id),
+                    target_id=str(self.recon_target_id),
+                    tenant_id=str(self.recon_tenant_id),
+                    task_id=self._recon_task_id(),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RECON PG 同步事件触发失败（已忽略）: %s", exc)
+
+    def _recon_bypass_fact(
+        self,
+        category: str,
+        key: str,
+        value: str,
+        confidence: float,
+        source_task: str,
+        details: dict | None,
+    ) -> None:
+        """旁路写入 recon_facts，异常被吞除以不阻断 agent 主循环。"""
+        if self.recon_store is None:
+            return
+        try:
+            self.recon_store.upsert_fact(
+                task_id=self._recon_task_id(),
+                category=category,
+                key=key,
+                value=value,
+                confidence=confidence,
+                source=source_task or "",
+                details=details or {},
+            )
+            self._recon_emit_sync()
+        except Exception as exc:  # noqa: BLE001 - 旁路写入失败不应影响推理
+            logger.warning("RECON 旁路 fact 写入失败（已忽略）: %s", exc)
+
+    def _recon_bypass_attempt(
+        self, task: str, payload: str, result: str, reason: str
+    ) -> None:
+        """旁路写入 recon_facts（attempt 维度），异常被吞除。
+
+        成功命中（result 含 "success"）时额外推进威胁状态至 exploited：
+        优先从 payload/reason 提取 CVE 编号定位威胁，失败则不推进（避免误判）。
+        """
+        if self.recon_store is None:
+            return
+        try:
+            self.recon_store.upsert_fact(
+                task_id=self._recon_task_id(),
+                category="finding",
+                key=f"attempt:{task}:{abs(hash(payload)) % 10**8}",
+                value=f"result={result}; reason={reason}",
+                confidence=0.4,
+                source=task,
+                details={"payload": payload[:500], "result": result, "reason": reason},
+            )
+            self._recon_emit_sync()
+            if "success" in (result or "").lower():
+                self._promote_threat_on_success(payload, reason)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RECON 旁路 attempt 写入失败（已忽略）: %s", exc)
+
+    def _promote_threat_on_success(self, payload: str, reason: str) -> None:
+        """attempt 成功后尝试把威胁推进到 exploited（须能定位到 CVE）。"""
+        import re as _re
+
+        cve = None
+        for text in (payload, reason):
+            m = _re.search(r"CVE-\d{4}-\d{4,7}", text or "")
+            if m:
+                cve = m.group(0)
+                break
+        if not cve:
+            return
+        try:
+            self.recon_store.update_threat_status(
+                task_id=self._recon_task_id(),
+                cve_id=cve,
+                new_status="exploited",
+                evidence_summary=reason or payload[:500],
+            )
+            self._recon_emit_sync()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("RECON attempt 成功但威胁提升失败（已忽略）: %s", exc)
+
+    def record_threat_status(
+        self,
+        cve_id: str,
+        new_status: str,
+        evidence_summary: str = "",
+        affected_endpoint: str = "",
+        confidence: float = 0.7,
+    ) -> bool:
+        """公开入口：按威胁状态机推进威胁状态（suspected→confirmed→exploited→remediated）。
+
+        供上层在威胁建模确认 / 利用验证成功处显式调用，失败仅记 warning
+        （旁路语义，不阻断主循环）。返回是否实际推进（False 表示降级被拒或幂等）。
+        """
+        if self.recon_store is None:
+            return False
+        try:
+            advanced = self.recon_store.update_threat_status(
+                task_id=self._recon_task_id(),
+                cve_id=cve_id,
+                new_status=new_status,
+                evidence_summary=evidence_summary,
+                confidence=confidence,
+                affected_endpoint=affected_endpoint,
+            )
+            if advanced:
+                self._recon_emit_sync()
+            return advanced
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RECON 威胁状态推进失败（已忽略）: %s", exc)
+            return False
+
+    def _recon_bypass_execution(
+        self,
+        action: str,
+        target_endpoint: str,
+        technique: str,
+        result_status: str,
+        key_finding: str,
+        parameters: dict | None,
+    ) -> None:
+        """旁路写入 recon_endpoints / recon_techniques / recon_facts。"""
+        if self.recon_store is None:
+            return
+        task_id = self._recon_task_id()
+        try:
+            if target_endpoint:
+                self.recon_store.upsert_endpoint(
+                    task_id=task_id,
+                    path_normalized=target_endpoint,
+                    notes=key_finding,
+                    discovered_via=action,
+                    confidence=0.7 if result_status == "success" else 0.5,
+                )
+            if technique:
+                self.recon_store.upsert_technique(
+                    task_id=task_id,
+                    name=technique,
+                    category="execution",
+                    status="success" if result_status == "success" else "failed",
+                    success_count=1 if result_status == "success" else 0,
+                    tested_count=1,
+                    last_result=key_finding,
+                    confidence=0.8 if result_status == "success" else 0.5,
+                )
+            if key_finding:
+                self.recon_store.upsert_fact(
+                    task_id=task_id,
+                    category="finding",
+                    key=f"exec:{target_endpoint}:{technique}",
+                    value=key_finding,
+                    confidence=0.7,
+                    details={"action": action, "parameters": parameters or {}},
+                )
+            self._recon_emit_sync()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RECON 旁路 execution 写入失败（已忽略）: %s", exc)
 
     def add_discovered_fact(
         self,
@@ -1338,9 +1556,12 @@ class ContextEngine:
                 actionable=True
             )
         """
-        return self.structured.add_fact_simple(
+        added = self.structured.add_fact_simple(
             category, key, value, confidence, source_task, details, actionable
         )
+        # 旁路写入 RECON 本地库（非阻塞、失败仅记 warning）。
+        self._recon_bypass_fact(category, key, value, confidence, source_task, details)
+        return added
 
     def was_already_attempted(self, payload: str, task: str) -> bool:
         """Check if a similar attempt was already made and failed.
@@ -1453,7 +1674,7 @@ class ContextEngine:
                 agent_name="requester"
             )
         """
-        return self.structured.add_execution_simple(
+        added = self.structured.add_execution_simple(
             action=action,
             target_endpoint=target_endpoint,
             technique=technique,
@@ -1463,6 +1684,11 @@ class ContextEngine:
             response_summary=response_summary,
             agent_name=agent_name
         )
+        # 旁路写入 RECON 本地库（非阻塞、失败仅记 warning）。
+        self._recon_bypass_execution(
+            action, target_endpoint, technique, result_status, key_finding, parameters
+        )
+        return added
 
     def add_thought(
         self,

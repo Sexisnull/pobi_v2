@@ -26,6 +26,7 @@ from .browser import (
 from .python_interpreter import run_python_file, read_auth_storage
 from .webapp_code_rag import webapp_code_rag
 from .webapp_analyzer import webapp_analyzer
+from .recon_lookup import recon_lookup
 from .tool_wrappers import with_tool_events, wrap_tool_with_events
 from .avfs import (
     avfs_mount,
@@ -71,6 +72,8 @@ __all__ = [
     "refresh_auth_context",
     # web app analyzer
     "webapp_analyzer",
+    # RECON 本地物化库检索
+    "recon_lookup",
     # AVFS
     "avfs_mount",
     "avfs_umount",

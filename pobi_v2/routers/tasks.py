@@ -37,6 +37,15 @@ from pobi_v2.engine.queue import enqueue_task
 from pobi_v2.engine.guardrails import check_scope
 from pobi_v2.engine.cancel_state import request_cancel
 from pobi_agent.constants import TASKS_ROOT
+from pobi_v2.schemas.recon import (
+    ReconAssetsOut,
+    ReconCoverageOut,
+    ReconEndpointOut,
+    ReconFactOut,
+    ReconSummaryOut,
+    ReconThreatOut,
+)
+from pobi_agent.recon.store import ReconStore
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 
@@ -286,6 +295,114 @@ async def _load_or_404(session: AsyncSession, task_id: UUID, tenant_id) -> Task:
     if task is None or task.tenant_id != tenant_id:
         raise NotFoundError("任务不存在")
     return task
+
+
+def _recon_store(task) -> ReconStore:
+    """为指定任务构造本地 RECON 库 Store（路径约束在 TASKS_ROOT/<task_id> 内）。
+
+    本地库可能尚未物化（任务未启动/未产出侦察数据），由 Store 只读方法
+    内部旁路容错返回空结构，调用方无需预判文件存在性。
+    """
+    task_root = TASKS_ROOT / str(task.id)
+    return ReconStore.for_task(str(task.id), task_root=str(task_root))
+
+
+@router.get("/{task_id}/recon/summary", response_model=ReconSummaryOut)
+async def get_task_recon_summary(
+    task_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_scope("tasks:read")),
+):
+    """任务侦察总览：资产/事实/终端/技术/威胁计数 + 威胁状态与严重度分布。"""
+    task = await _load_or_404(session, task_id, user.tenant_id)
+    return ReconSummaryOut(**_recon_store(task).get_summary(str(task.id)))
+
+
+@router.get("/{task_id}/recon/assets", response_model=ReconAssetsOut)
+async def get_task_recon_assets(
+    task_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_scope("tasks:read")),
+):
+    """派生资产视图：主机清单（来自攻击面终端）+ 服务/端口/子域类资产（来自事实）。"""
+    task = await _load_or_404(session, task_id, user.tenant_id)
+    return ReconAssetsOut(**_recon_store(task).derived_assets(str(task.id)))
+
+
+@router.get("/{task_id}/recon/endpoints", response_model=list[ReconEndpointOut])
+async def get_task_recon_endpoints(
+    task_id: UUID,
+    limit: int = Query(default=500, ge=1, le=2000),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_scope("tasks:read")),
+):
+    """攻击面终端明细：host/path/method/状态码/鉴权/技术栈。"""
+    task = await _load_or_404(session, task_id, user.tenant_id)
+    rows = _recon_store(task).list_endpoints(str(task.id), limit=limit)
+    return [ReconEndpointOut(**r) for r in rows]
+
+
+@router.get("/{task_id}/recon/facts", response_model=list[ReconFactOut])
+async def get_task_recon_facts(
+    task_id: UUID,
+    category: str | None = Query(default=None, description="事实类目过滤"),
+    limit: int = Query(default=200, ge=1, le=2000),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_scope("tasks:read")),
+):
+    """侦察事实列表，可选按类目过滤（如 service/port/subdomain/tech/credential）。"""
+    task = await _load_or_404(session, task_id, user.tenant_id)
+    rows = _recon_store(task).list_facts(str(task.id), category=category, limit=limit)
+    return [ReconFactOut(**r) for r in rows]
+
+
+@router.get("/{task_id}/recon/threats", response_model=list[ReconThreatOut])
+async def get_task_recon_threats(
+    task_id: UUID,
+    status: str | None = Query(default=None, description="威胁状态过滤"),
+    severity: str | None = Query(default=None, description="严重度过滤"),
+    limit: int = Query(default=500, ge=1, le=2000),
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_scope("tasks:read")),
+):
+    """威胁态势列表（含状态机 status/严重度/CVSS/证据），可按状态/严重度过滤。"""
+    task = await _load_or_404(session, task_id, user.tenant_id)
+    rows = _recon_store(task).list_threats(
+        str(task.id), status=status, severity=severity, limit=limit
+    )
+    return [ReconThreatOut(**r) for r in rows]
+
+
+@router.get("/{task_id}/recon/threats/{cve_id}", response_model=ReconThreatOut)
+async def get_task_recon_threat(
+    task_id: UUID,
+    cve_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_scope("tasks:read")),
+):
+    """单威胁详情；cve_id 未命中返回 404。"""
+    task = await _load_or_404(session, task_id, user.tenant_id)
+    row = _recon_store(task).get_threat(str(task.id), cve_id)
+    if row is None:
+        raise NotFoundError(f"威胁不存在: {cve_id}")
+    return ReconThreatOut(**row)
+
+
+@router.get("/{task_id}/recon/coverage", response_model=ReconCoverageOut)
+async def get_task_recon_coverage(
+    task_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_scope("tasks:read")),
+):
+    """增量续扫基线：已覆盖端点/技术栈/已确认威胁清单（历史任务沉淀，本轮跳过重复工作）。"""
+    task = await _load_or_404(session, task_id, user.tenant_id)
+    cov = _recon_store(task).covered_assets(str(task.id))
+    return ReconCoverageOut(
+        covered_endpoints=cov.covered_endpoints,
+        covered_techniques=cov.covered_techniques,
+        covered_threats=cov.covered_threats,
+        already_covered_count=cov.already_covered_count,
+    )
 
 
 @router.get("/{task_id}/plan", response_model=PlanSummary)

@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from pobi_agent.hooks import EventHooks
 
@@ -303,6 +306,37 @@ class PobiV2EventHooks:
 
         return is_cancelled_sync(session_id)
 
+    # ──────────────────────────────────────────────────────────────────────
+    # RECON 扩展事件（非 EventHooks Protocol 成员，仅 PobiV2EventHooks 提供）
+    # 供 ContextEngine 旁路写入本地库后，触发 PG 聚合层异步增量同步。
+    # ──────────────────────────────────────────────────────────────────────
+    def emit_recon_upsert(
+        self,
+        session_id: str,
+        target_id: str,
+        tenant_id: str,
+        task_id: str,
+        source: str = "context_engine",
+    ) -> None:
+        """通知 recon 同步 worker：该 session 的本地库有增量待同步至 PG。
+
+        Args:
+            session_id: 本地库定位键（=ContextEngine.session_id）。
+            target_id: 授权目标 UUID（PG 聚合层维度）。
+            tenant_id: 租户 UUID（多租户隔离）。
+            task_id: 来源任务 UUID（追加到 source_tasks 累计）。
+            source: 同步触发来源（便于审计）。
+        """
+        payload = _wrap(
+            "recon_upsert",
+            session_id,
+            target_id=target_id,
+            tenant_id=tenant_id,
+            task_id=task_id,
+            source=source,
+        )
+        asyncio.create_task(bus.publish("__recon_sync__", payload))
+
 
 async def persist_event_worker() -> None:
     """后台持久化：把总线上的控制台事件写入 TaskEvent 表（供 /plan 与 /live 聚合）。
@@ -380,6 +414,55 @@ async def persist_event_worker() -> None:
         except Exception:  # noqa: BLE001
             # 持久化失败不影响主流程与实时推送
             continue
+
+
+async def recon_sync_worker() -> None:
+    """后台同步：把本地 RECON 库增量聚合进 PG（设计文档 §5，第二阶）。
+
+    订阅 ``__recon_sync__`` 通道，收到增量事件后调用 ``ReconStore.upsert_to_pg``
+    将 per-task 本地库按 target_id 维度 upsert 到 recon_facts_agg /
+    recon_threats_agg。失败仅记 warning，不阻断 agent 主循环。
+
+    收敛保证：PG 聚合表唯一约束 (target_id, category, key) / 等，使多次任务对同一
+    目标的 upsert 只保留收敛后的一行，行数不随任务次数线性增长。
+    """
+    from pobi_agent.recon import ReconStore
+    from pobi_v2.db.session import AsyncSessionLocal
+
+    queue = await bus.subscribe("__recon_sync__")
+    while True:
+        try:
+            event = await queue.get()
+        except Exception:  # noqa: BLE001
+            continue
+        if event.get("type") != "recon_upsert":
+            continue
+        session_id = event.get("session_id")
+        target_id = event.get("target_id")
+        tenant_id = event.get("tenant_id")
+        task_id = event.get("task_id")
+        if not (session_id and target_id and tenant_id):
+            continue
+        try:
+            # 定位本地库：经 storage_context 取 task_root。
+            from pobi_agent.storage_context import get_task_root
+
+            task_root = get_task_root()
+            if task_root is None:
+                continue
+            db_path = task_root / "recon" / f"{session_id}.db"
+            if not db_path.exists():
+                continue
+            store = ReconStore(db_path)
+            await store.upsert_to_pg(
+                target_id=target_id,
+                tenant_id=tenant_id,
+                task_id=task_id,
+                async_session_factory=AsyncSessionLocal,
+            )
+            store.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RECON PG 同步失败（已忽略）: %s", exc)
 
 
 # ──────────────────────────────────────────────────────────────────────────

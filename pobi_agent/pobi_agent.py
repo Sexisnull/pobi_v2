@@ -97,6 +97,8 @@ class DeadEndAgent:
         agents_storage_root: str | None = None,
         local_agent_id: UUID | None = None,
         proxy_url: str | None = None,
+        target_id: UUID | None = None,
+        tenant_id: UUID | None = None,
     ):
         self.session_id = session_id
         self.embedding_session_id = embedding_session_id or session_id
@@ -120,7 +122,29 @@ class DeadEndAgent:
         self.workspace_root: str | None = None
         self.local_agent_id = local_agent_id or Config.get_local_agent_id()
         self.agent_id = self.local_agent_id
-        self.context = ContextEngine(model=self.model, session_id=self.embedding_session_id, agent_id=self.agent_id)
+        # RECON 本地物化库（第二阶）：注入可选 ReconStore 到 ContextEngine；
+        # target_id/tenant_id 用于 PG 聚合层同步与基线续扫。
+        self.target_id = target_id
+        self.tenant_id = tenant_id
+        self.recon_store: "ReconStore | None" = None
+        if agents_storage_root:  # 已有 task_root 时构造本地库
+            try:
+                from pobi_agent.recon import ReconStore
+
+                self.recon_store = ReconStore.for_task(
+                    task_id=str(self.embedding_session_id),
+                    task_root=agents_storage_root,
+                )
+            except Exception as exc:  # noqa: BLE001 - 构造失败降级，不影响主流程
+                logger.warning("RECON 本地库构造失败（已降级）: %s", exc)
+        self.context = ContextEngine(
+            model=self.model,
+            session_id=self.embedding_session_id,
+            agent_id=self.agent_id,
+            recon_store=self.recon_store,
+            target_id=self.target_id,
+            tenant_id=self.tenant_id,
+        )
 
         self.agents_storage_root = agents_storage_root or Config.agents_storage_root
         if not self.agents_storage_root:
@@ -150,6 +174,24 @@ class DeadEndAgent:
             # do not fail with "AVFS workspace 'workspace' is not mounted".
             workspace_default = Path(self.agents_storage_root) / str(self.agent_id) / str(self.embedding_session_id) / "workspace"
             self.set_workspace_root(str(workspace_default))
+
+    def _build_covered_block(self, token_budget: int = 1000) -> str:
+        """渲染「已覆盖资产（跳过重复工作）」prompt 块（第三阶）。
+
+        无 recon_store 或渲染失败/无覆盖时返回空串（调用方直接忽略）；
+        有覆盖时返回覆盖清单 + 显式跳过规则，供各阶段 prompt 复用，
+        避免同一授权目标的多次任务重复侦查/威胁建模/利用验证。
+        """
+        if self.recon_store is None:
+            return ""
+        try:
+            return self.recon_store.build_covered_block(
+                task_id=str(self.embedding_session_id),
+                token_budget=token_budget,
+            )
+        except Exception as exc:  # noqa: BLE001 - 注入失败不阻断主流程
+            logger.warning("RECON 覆盖清单渲染失败（已忽略）: %s", exc)
+            return ""
 
 
 ################################################################################
@@ -728,6 +770,9 @@ IMPORTANT:
         # Get unified context which contains confirmed exploits and discoveries
         previous_context = self.context.get_unified_context(max_tokens=4000)
 
+        # 已覆盖资产清单（第三阶）：利用验证阶段显式跳过已确认/已利用漏洞的重复验证。
+        covered_block = self._build_covered_block(token_budget=1000)
+
         # Clear only the execution log, but keep facts and successful attempts
         # This preserves what worked in reconnaissance for exploitation
         self.context.structured.clear_current_log()
@@ -753,6 +798,11 @@ The flag that you need to find has the following format : FLAG{{}}.
 
 ## Previous Reconnaissance Results
 {previous_context}
+
+{covered_block}
+### 跳过重复工作规则（历史任务已覆盖，禁止重复劳动）
+- 已确认/已利用漏洞直接引用历史 evidence 作为 PoC 依据，不再重复执行利用验证。
+- 仅在目标明确指向历史覆盖项时才需复核；否则聚焦未测试攻击面。
 
 ## Recon/ Threat model assessment Summary
 {threat_model}
@@ -820,6 +870,11 @@ The flag that you need to find has the following format : FLAG{{}}.
         self.context.reset()
         self.context.set_root_task(task)
 
+        # 保留历史侦察上下文与已覆盖资产清单（第三阶）：利用验证阶段
+        # 显式跳过已确认/已利用漏洞的重复验证，避免重复性工作。
+        previous_context = self.context.get_unified_context(max_tokens=3000)
+        covered_block = self._build_covered_block(token_budget=800)
+
         # Pass session_key as deps for the exploit agent
         self.planner = Planner(planner_agent=self.exploit_agent, deps=self._target_session_key())
         self.adapt_agent = ADaPTAgent(
@@ -834,6 +889,14 @@ You final goal is to find a flag that corresponds to the following task : {task}
 The flag that you need to find has the following format : FLAG{{}}.
 The threat model has been done :
 {threat_model}
+
+## Previous Reconnaissance Results
+{previous_context}
+
+{covered_block}
+### 跳过重复工作规则（历史任务已覆盖，禁止重复劳动）
+- 已确认/已利用漏洞直接引用历史 evidence 作为 PoC 依据，不再重复执行利用验证。
+- 仅在目标明确指向历史覆盖项时才需复核；否则聚焦未测试攻击面。
 """
         async for event in self.adapt_agent.run(task=task, context=exploit_context):
             # interrupt signal
@@ -916,6 +979,36 @@ IMPORTANT:
             yield self.stop_result.reporter_output
             return
 
+        # 基线续扫预热（第二阶）：任务启动前从 PG 聚合层拉取目标历史沉淀，
+        # 灌入本地库，使后续 get_unified_context 自动挂载 L0/L1/L2 基线。
+        # 增量语义（第三阶）：已覆盖资产不重复灌入，返回 SeedResult 供 prompt 跳过。
+        seed_result = None
+        if self.recon_store is not None and self.target_id is not None and self.tenant_id is not None:
+            try:
+                from pobi_v2.db.session import AsyncSessionLocal
+
+                seed_result = await self.recon_store.seed_from_pg(
+                    target_id=str(self.target_id),
+                    tenant_id=str(self.tenant_id),
+                    async_session_factory=AsyncSessionLocal,
+                )
+                if seed_result and seed_result.seeded_count:
+                    logger.info(
+                        "RECON 基线续扫预热完成，灌入 %d 条历史资产（已覆盖跳过 %d 条）",
+                        seed_result.seeded_count,
+                        seed_result.already_covered_count,
+                    )
+                elif seed_result and seed_result.already_covered_count:
+                    logger.info(
+                        "RECON 基线续扫：无新增，历史已覆盖 %d 条资产，本轮跳过",
+                        seed_result.already_covered_count,
+                    )
+            except Exception as exc:  # noqa: BLE001 - 预热失败不阻断主流程
+                logger.warning("RECON 基线续扫预热失败（已忽略）: %s", exc)
+
+        # 渲染「已覆盖资产（跳过重复工作）」块（第三阶）：无覆盖或渲染失败时空串。
+        covered_block = self._build_covered_block(token_budget=1000)
+
         prompt_task = f"""
 Your goal is to achieve the following task: {task}
 
@@ -943,6 +1036,12 @@ Your goal is to achieve the following task: {task}
 - Use gathered information to precisely define the vulnerability type you're looking for
 - Systematically test and verify the vulnerability once identified
 - Return when you have either: (1) successfully found and documented the vulnerability with proof, or (2) exhausted reasonable testing approaches and can explain what was done along with possible hints for finding the vulnerability
+
+{covered_block}
+### 跳过重复工作规则（历史任务已覆盖，禁止重复劳动）
+- 上述「已覆盖资产」来自同一授权目标的历史任务沉淀。除非本任务目标明确指向它们，**禁止重复扫描、重复枚举、重复验证**。
+- 已确认/已利用的漏洞直接引用历史 evidence 作为依据，不再重复尝试利用验证。
+- 聚焦新增资产与未测试攻击面；如需变更结论，必须先说明与历史记录的差异。
 
 ## The previous context if available is :
 {self.context.get_unified_context()}
