@@ -41,3 +41,15 @@ uv.lock
 
 # 本地临时验证脚本（dvwa/test/probe 等一次性调试产物）
 python_scripts/
+
+# IDE 规划缓存（CodeBuddy plans 非源码）
+.codebuddy/plans/
+
+# 设计产物库（非源码，按需本地保留）
+.design_library/
+
+# 基准测试结果（运行产物，非源码）
+pobi_v2/benchmark/benchmark_result.json
+
+# 监控/运行日志
+scripts/monitor_run_*.log
