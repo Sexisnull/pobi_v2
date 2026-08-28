@@ -174,10 +174,14 @@ async def run_python_file(
     # 将脚本复制进 Kali 容器 /pobi_scripts/
     await asyncio.to_thread(_copy_file_to_container, sandbox, file_path, filename)
 
-    # 安装依赖（若提供）——包名经 shlex.quote 防注入
+    # 安装依赖（若提供）——包名经 shlex.quote 防注入。
+    # Kali/Debian 的 pip 受 PEP 668（externally-managed-environment）保护，
+    # 裸 pip install 会被拒绝；共享 Kali 为单容器专属环境，加 --break-system-packages
+    # 绕过并抑制 root 警告（Kali 官方 python3-external-packages 方案，见 kali.org/docs）。
     if packages:
         pkg_cmd = (
             "python3 -m pip install --quiet --disable-pip-version-check "
+            "--break-system-packages --root-user-action=ignore "
             + " ".join(shlex.quote(p) for p in packages)
         )
         install_res = await asyncio.to_thread(sandbox.execute_command, pkg_cmd, stream=False)

@@ -8,8 +8,9 @@
 ``PobiV2EventHooks`` 可未来订阅落库事件，本次不实现同步。
 
 数据库路径约定（v2.1 per-task）：
-    {task_root}/recon/{task_id}.db
+    {task_root}/{task_id}.db
 其中 task_root 来自 ``pobi_agent.storage_context`` 协程级上下文。
+侦察与利用阶段产物共用此单一库，以不同表区分。
 """
 
 from __future__ import annotations
@@ -149,19 +150,19 @@ class ReconStore:
         task_root: Optional[str] = None,
         crypto: Optional[ReconCrypto] = None,
     ) -> "ReconStore":
-        """为指定任务构造 Store，定位到 {task_root}/recon/{task_id}.db。
+        """为指定任务构造 Store，定位到 {task_root}/{task_id}.db（任务级单一库）。
 
-        路径做规范化与越界校验，禁止 ``..`` 逃逸出 task_root。
+        侦察与利用阶段产物共用此库，以不同表区分。路径做规范化与越界校验，
+        禁止 ``..`` 逃逸出 task_root。
         """
         if not task_id:
             raise ReconStoreError("task_id 不能为空")
         safe_id = _sanitize_task_id(task_id)
         if task_root:
             root = Path(task_root).resolve()
-            recon_dir = root / "recon"
-            # 越界校验：recon 目录必须位于 task_root 内。
-            recon_dir.mkdir(parents=True, exist_ok=True)
-            db_path = recon_dir / f"{safe_id}.db"
+            # 任务级单一库：tasks/<id>/<id>.db（侦察/利用产物同库不同表）。
+            root.mkdir(parents=True, exist_ok=True)
+            db_path = root / f"{safe_id}.db"
             try:
                 db_path.resolve().relative_to(root)
             except ValueError as exc:
@@ -752,7 +753,10 @@ class ReconStore:
                         "confidence": stmt.excluded.confidence,
                         "sensitivity": stmt.excluded.sensitivity,
                         "details_json": stmt.excluded.details_json,
-                        "source_tasks": ReconFactAgg.source_tasks.op("||")(stmt.excluded.source_tasks),
+                        # 注：source_tasks 列为 JSON 类型，PG 的 json||json 操作符不存在，
+                        # 故冲突时取本次写入的任务列表（最新来源），不累计历史任务。
+                        # 行收敛（同一事实唯一一行）已满足增量更新需求。
+                        "source_tasks": stmt.excluded.source_tasks,
                         "last_seen": _utcnow(),
                     },
                     where=stmt.excluded.confidence > ReconFactAgg.confidence,
@@ -774,7 +778,7 @@ class ReconStore:
                         "cvss_score": stmt.excluded.cvss_score,
                         "evidence_summary": stmt.excluded.evidence_summary,
                         "confidence": stmt.excluded.confidence,
-                        "source_tasks": ReconThreatAgg.source_tasks.op("||")(stmt.excluded.source_tasks),
+                        "source_tasks": stmt.excluded.source_tasks,
                         "last_seen": _utcnow(),
                     },
                     where=stmt.excluded.confidence > ReconThreatAgg.confidence,

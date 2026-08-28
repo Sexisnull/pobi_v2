@@ -24,8 +24,9 @@ logger = logging.getLogger(__name__)
 from pobi_agent.hooks import get_event_hooks
 
 from pobi_v2.core.config import settings
-from pobi_v2.db.models import Task, TaskStatus, Target
+from pobi_v2.db.models import ArtifactKind, Task, TaskStatus, Target
 from pobi_v2.db.persistence import (
+    record_artifact,
     record_audit,
     record_finding,
     record_task_event,
@@ -391,4 +392,18 @@ async def _persist_outcome(session, task: Task, target: Target, outcome: dict) -
             confidence=f["confidence"],
             evidence={"text": f["evidence"]},
             cwe=f["cwe"],
+        )
+
+    # 3) 报告正文落库（阶段完成后的最终版，动态更新期间不写库）
+    report_text = structured.get("report")
+    if report_text:
+        await record_artifact(
+            session,
+            task_id=task.id,
+            target_id=target.id,
+            name=f"{target.name or '目标'} 安全评估报告.md",
+            kind=ArtifactKind.report,
+            content=report_text,
+            content_type="text/markdown",
+            size_bytes=len(report_text.encode("utf-8")),
         )

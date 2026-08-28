@@ -39,6 +39,7 @@ class ShellAgent(AgentRunner):
         deps_type: Any | None,
         target_information: str,
         requires_approval: bool,
+        phase: str | None = None,
     ):
         tools_metadata = {
             "sandboxed_shell_tool": render_tool_description("sandboxed_shell_tool"),
@@ -56,6 +57,7 @@ class ShellAgent(AgentRunner):
             deps_type=deps_type,
             output_type=[ShellOutput, DeferredToolRequests],
             tools=[Tool(sandboxed_shell_tool, requires_approval=requires_approval)],
+            phase=phase,
         )
 
     async def run(

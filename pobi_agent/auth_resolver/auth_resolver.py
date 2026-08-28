@@ -196,13 +196,16 @@ class CredentialsStore:
 
     @classmethod
     def _normalise_target(cls, target: str) -> str:
-        """Strip scheme and path so keys match consistently."""
+        """Strip scheme and path but keep the port so keys match consistently.
+
+        端口段保留（如 ``122.51.72.186:8081``），避免同 host 不同端口串用凭证。
+        """
         t = target.lower()
         for prefix in ("https://", "http://"):
             if t.startswith(prefix):
                 t = t[len(prefix):]
-        # drop any path or port
-        t = t.split("/")[0].split(":")[0]
+        # drop any path, keep host:port
+        t = t.split("/")[0]
         return t
 
     @classmethod
@@ -280,24 +283,14 @@ class AuthContextHandler:
         self.target_slug = slugify_target(target)
         self.agent_id = agent_id
         self.session_id = session_id
-        # 优先归口到统一任务根 tasks/<task_id>/agent/<agent_id>/<session_id>/auth_context；
-        # 未注入 task_root 时回退旧 agents/<agent_id>/<session_id>/auth_context 路径。
+        # 归口到统一任务根 tasks/<task_id>/agent/auth_context。
+        # 认证按 target（profile 名）隔离，不再嵌套 agent_id/session_id 两层；
+        # 后续若需多 agent 协作可在此重新引入 agent_id 层。
         task_root = get_task_root()
         if task_root is not None:
-            self._auth_dir = (
-                Path(task_root)
-                / "agent"
-                / str(agent_id)
-                / str(session_id)
-                / "auth_context"
-            )
+            self._auth_dir = Path(task_root) / "agent" / "auth_context"
         else:
-            self._auth_dir = (
-                DEADEND_AGENTS_PATH
-                / str(agent_id)
-                / str(session_id)
-                / "auth_context"
-            )
+            self._auth_dir = DEADEND_AGENTS_PATH / "auth_context"
         self._auth_dir.mkdir(parents=True, exist_ok=True)
         self._index_path = self._auth_dir / "index.json"
         self._index: dict[str, dict[str, Any]] = self._load_index()

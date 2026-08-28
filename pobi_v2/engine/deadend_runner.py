@@ -347,6 +347,29 @@ async def run_deadend_agent(
             auto_approve=auto_approve,
         )
     finally:
+        # 任务生命周期统一出口（中断/失败/完成均走此处）：兜底 flush 本地 recon
+        # 库到 PG 聚合层。实时的同进程旁路同步（ContextEngine._recon_emit_sync）
+        # 受事件循环调度时机影响，可能在进程退出前未排到；此处强制 await 一次，
+        # 确保最后批次与异常路径不丢数据。失败仅记 warning，不阻断出口清理。
+        try:
+            from pathlib import Path as _Path
+
+            from pobi_agent.recon import ReconStore
+
+            db_path = _Path(task_root) / f"{task_id}.db"
+            if db_path.exists():
+                store = ReconStore(db_path)
+                try:
+                    await store.upsert_to_pg(
+                        target_id=str(task.target_id),
+                        tenant_id=str(task.tenant_id),
+                        task_id=str(task_id),
+                        async_session_factory=_async_session_factory(),
+                    )
+                finally:
+                    store.close()
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("任务退出 recon PG 兜底同步失败（已忽略）: %s", exc)
         clear_task_root(task_root_token)
 
 
@@ -385,6 +408,12 @@ async def _run_deadend_agent_body(
         agents_storage_root=str(task_root / "agent"),
         local_agent_id=None,  # 让 Config 自动分配/创建 local_agent_id
         validation_config_path=str(validation_path),
+        # 注入 target/tenant 维度，驱动本地 RECON 库 → PG 聚合层同步与基线续扫。
+        target_id=task.target_id,
+        tenant_id=task.tenant_id,
+        # pg_session_factory 延迟导入，供 ContextEngine 同进程直连 upsert_to_pg
+        # （不再依赖跨进程的 web 事件总线，避免 recon 同步事件丢失）。
+        pg_session_factory=_async_session_factory(),
     )
 
     # 7) 设置目标（原 DeadEndAgent 内部通过 init_webtarget_indexer 绑定 target）

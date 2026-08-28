@@ -300,6 +300,9 @@ class Artifact(Base):
     task_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    target_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("targets.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     finding_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("findings.id", ondelete="CASCADE"), nullable=True, index=True
     )

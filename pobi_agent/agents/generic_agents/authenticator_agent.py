@@ -55,6 +55,7 @@ class AuthenticatorAgent(AgentRunner):
         deps_type: Any | None,
         target_information: str,
         requires_approval: bool,
+        phase: str | None = None,
     ) -> None:
         tools_metadata = {
             "authenticate": render_tool_description("authenticate"),
@@ -79,6 +80,7 @@ class AuthenticatorAgent(AgentRunner):
                 Tool(validate_auth_context, requires_approval=requires_approval),
                 Tool(refresh_auth_context, requires_approval=requires_approval),
             ],
+            phase=phase,
         )
 
     async def run(

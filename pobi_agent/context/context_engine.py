@@ -13,9 +13,10 @@ from pobi_agent.storage_context import get_task_root
 import json
 import uuid
 import time
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Set, Any, TYPE_CHECKING
+from typing import Dict, List, Set, Any, Callable, TYPE_CHECKING
 
 from pobi_agent.logging import logger
 from pobi_agent.utils.functions import num_tokens_from_string
@@ -843,6 +844,7 @@ class ContextEngine:
         recon_store: "ReconStore | None" = None,
         target_id: "uuid.UUID | None" = None,
         tenant_id: "uuid.UUID | None" = None,
+        pg_session_factory: "Callable[[], Any] | None" = None,
     ) -> None:
         """Initialize the ContextEngine with empty state.
 
@@ -859,9 +861,11 @@ class ContextEngine:
         self.agent_id = agent_id
         # RECON 本地物化库（可选）；未注入时旁路写入全部跳过。
         self.recon_store = recon_store
-        # PG 聚合层同步维度（第二阶）：target_id/tenant_id 用于触发 emit_recon_upsert。
+        # PG 聚合层同步维度（第二阶）：target_id/tenant_id 用于触发 upsert_to_pg。
         self.recon_target_id = target_id
         self.recon_tenant_id = tenant_id
+        # PG async session 工厂（注入以避免循环导入）；为空时跳过 PG 同步。
+        self.recon_pg_session_factory = pg_session_factory
         self.root_goal = ""
         self.tasks = {}
         self.next_agent = ""
@@ -875,24 +879,13 @@ class ContextEngine:
         self.structured = StructuredContext()
 
         # Create context directory if it doesn't exist
-        # 优先归口到统一任务根 tasks/<task_id>/agent/<agent_id>/<session_id>/run_context；
-        # 未注入 task_root 时回退旧 agents/<agent_id>/<session_id>/run_context 路径。
+        # 归口到统一任务根 tasks/<task_id>/agent/run_context。
+        # 不再嵌套 agent_id/session_id 两层；认证与运行上下文均按 task 隔离。
         task_root = get_task_root()
         if task_root is not None:
-            context_dir = (
-                Path(task_root)
-                / "agent"
-                / str(self.agent_id)
-                / str(self.session_id)
-                / "run_context"
-            )
+            context_dir = Path(task_root) / "agent" / "run_context"
         else:
-            context_dir = (
-                DEADEND_AGENTS_PATH
-                / str(self.agent_id)
-                / str(self.session_id)
-                / "run_context"
-            )
+            context_dir = DEADEND_AGENTS_PATH / "run_context"
         context_dir.mkdir(parents=True, exist_ok=True)
 
         # Set context file path
@@ -1348,27 +1341,49 @@ class ContextEngine:
         return "default"
 
     def _recon_emit_sync(self) -> None:
-        """旁路写入成功后，触发 PG 聚合层异步增量同步（事件钩子）。
+        """旁路写入成功后，在同进程内触发 PG 聚合层异步增量同步。
 
-        仅当 target_id/tenant_id 均存在时触发；通过全局 get_event_hooks()
-        调用 PobiV2EventHooks 的扩展方法 emit_recon_upsert（NullEventHooks
-        无此方法，hasattr 安全跳过）。失败仅记 warning，不阻断主循环。
+        设计变更（2026-08-27）：原实现经全局事件总线 emit_recon_upsert 推送
+        ``__recon_sync__`` 事件，由 web 进程的 recon_sync_worker 消费。但 agent
+        运行于 worker 进程、worker 默认用内存事件总线（不跨进程），导致事件丢失、
+        PG 聚合层（recon_facts_agg / recon_threats_agg）始终为空。
+
+        现改为同进程直连：在 worker 进程内直接以 ``asyncio.create_task`` 调用
+        ``ReconStore.upsert_to_pg``，绕开跨进程总线。无事件循环（如纯同步上下文）
+        或缺少 pg_session_factory 时降级跳过，由任务生命周期出口（deadend_runner
+        的 finally）做最终兜底 flush。失败仅记 warning，不阻断主循环。
         """
         if self.recon_target_id is None or self.recon_tenant_id is None:
             return
+        if self.recon_store is None or self.recon_pg_session_factory is None:
+            return
         try:
-            from pobi_agent.hooks import get_event_hooks
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # 当前无事件循环（纯同步上下文），交给出口 flush 兜底。
+            return
+        task_id = self._recon_task_id()
+        loop.create_task(
+            self._recon_upsert_to_pg_task(
+                target_id=str(self.recon_target_id),
+                tenant_id=str(self.recon_tenant_id),
+                task_id=task_id,
+            )
+        )
 
-            hooks = get_event_hooks()
-            if hasattr(hooks, "emit_recon_upsert"):
-                hooks.emit_recon_upsert(  # type: ignore[attr-defined]
-                    session_id=str(self.session_id),
-                    target_id=str(self.recon_target_id),
-                    tenant_id=str(self.recon_tenant_id),
-                    task_id=self._recon_task_id(),
-                )
+    async def _recon_upsert_to_pg_task(
+        self, target_id: str, tenant_id: str, task_id: str
+    ) -> None:
+        """实际执行 PG 聚合层 upsert 的协程（由 _recon_emit_sync 以 create_task 调度）。"""
+        try:
+            await self.recon_store.upsert_to_pg(
+                target_id=target_id,
+                tenant_id=tenant_id,
+                task_id=task_id,
+                async_session_factory=self.recon_pg_session_factory,
+            )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("RECON PG 同步事件触发失败（已忽略）: %s", exc)
+            logger.warning("RECON PG 同步失败（已忽略）: %s", exc)
 
     def _recon_bypass_fact(
         self,
@@ -1562,6 +1577,80 @@ class ContextEngine:
         # 旁路写入 RECON 本地库（非阻塞、失败仅记 warning）。
         self._recon_bypass_fact(category, key, value, confidence, source_task, details)
         return added
+
+    def add_recon_endpoint(
+        self,
+        path_normalized: str,
+        host: str = "",
+        method: str = "GET",
+        status_code: int | None = None,
+        auth_required: bool = False,
+        tech_stack: list[str] | None = None,
+        parameters: list[str] | None = None,
+        notes: str = "",
+        discovered_via: str = "",
+        confidence: float = 0.7,
+        session_id: int | None = None,
+    ) -> None:
+        """旁路写入 recon_endpoints（结构化端点/资产表）。
+
+        由 executor 在 agent 运行期解析侦察产物后调用；recon_store 未注入时
+        安全跳过，异常仅记 warning 不阻断主循环（语义对齐 _recon_bypass_*）。
+        """
+        if self.recon_store is None:
+            return
+        try:
+            self.recon_store.upsert_endpoint(
+                task_id=self._recon_task_id(),
+                path_normalized=path_normalized,
+                host=host,
+                method=method,
+                status_code=status_code,
+                auth_required=auth_required,
+                tech_stack=tech_stack,
+                parameters=parameters,
+                notes=notes,
+                discovered_via=discovered_via,
+                confidence=confidence,
+                session_id=session_id,
+            )
+            self._recon_emit_sync()
+        except Exception as exc:  # noqa: BLE001 - 旁路写入失败不应影响推理
+            logger.warning("RECON 旁路 endpoint 写入失败（已忽略）: %s", exc)
+
+    def add_recon_technique(
+        self,
+        name: str,
+        category: str = "",
+        status: str = "untested",
+        success_count: int = 0,
+        tested_count: int = 0,
+        last_result: str = "",
+        confidence: float = 0.5,
+        session_id: int | None = None,
+    ) -> None:
+        """旁路写入 recon_techniques（技术栈/技术探测表）。
+
+        由 executor 在 agent 运行期解析侦察产物后调用；recon_store 未注入时
+        安全跳过，异常仅记 warning 不阻断主循环（语义对齐 _recon_bypass_*）。
+        """
+        if self.recon_store is None:
+            return
+        try:
+            self.recon_store.upsert_technique(
+                task_id=self._recon_task_id(),
+                name=name,
+                category=category,
+                status=status,
+                success_count=success_count,
+                tested_count=tested_count,
+                last_result=last_result,
+                confidence=confidence,
+                session_id=session_id,
+            )
+            self._recon_emit_sync()
+        except Exception as exc:  # noqa: BLE001 - 旁路写入失败不应影响推理
+            logger.warning("RECON 旁路 technique 写入失败（已忽略）: %s", exc)
 
     def was_already_attempted(self, payload: str, task: str) -> bool:
         """Check if a similar attempt was already made and failed.

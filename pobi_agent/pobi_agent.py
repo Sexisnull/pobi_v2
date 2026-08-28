@@ -99,6 +99,7 @@ class DeadEndAgent:
         proxy_url: str | None = None,
         target_id: UUID | None = None,
         tenant_id: UUID | None = None,
+        pg_session_factory: "Callable[[], Any] | None" = None,
     ):
         self.session_id = session_id
         self.embedding_session_id = embedding_session_id or session_id
@@ -126,14 +127,19 @@ class DeadEndAgent:
         # target_id/tenant_id 用于 PG 聚合层同步与基线续扫。
         self.target_id = target_id
         self.tenant_id = tenant_id
+        # PG async session 工厂：供 ContextEngine 同进程直连 upsert_to_pg。
+        self.pg_session_factory = pg_session_factory
         self.recon_store: "ReconStore | None" = None
         if agents_storage_root:  # 已有 task_root 时构造本地库
             try:
                 from pobi_agent.recon import ReconStore
 
+                # agents_storage_root 为 task_root/agent（agent 级目录）；
+                # 本地 RECON 库为任务级单一库 tasks/<id>/<id>.db，故取父目录 task_root。
+                task_root = str(Path(agents_storage_root).resolve().parent)
                 self.recon_store = ReconStore.for_task(
                     task_id=str(self.embedding_session_id),
-                    task_root=agents_storage_root,
+                    task_root=task_root,
                 )
             except Exception as exc:  # noqa: BLE001 - 构造失败降级，不影响主流程
                 logger.warning("RECON 本地库构造失败（已降级）: %s", exc)
@@ -144,6 +150,7 @@ class DeadEndAgent:
             recon_store=self.recon_store,
             target_id=self.target_id,
             tenant_id=self.tenant_id,
+            pg_session_factory=self.pg_session_factory,
         )
 
         self.agents_storage_root = agents_storage_root or Config.agents_storage_root
@@ -172,7 +179,7 @@ class DeadEndAgent:
             # storage layout as the memory workspace so tools that write to the
             # fixed "workspace" namespace (e.g. write_workspace_file -> reports/)
             # do not fail with "AVFS workspace 'workspace' is not mounted".
-            workspace_default = Path(self.agents_storage_root) / str(self.agent_id) / str(self.embedding_session_id) / "workspace"
+            workspace_default = Path(self.agents_storage_root) / "workspace"
             self.set_workspace_root(str(workspace_default))
 
     def _build_covered_block(self, token_budget: int = 1000) -> str:
@@ -304,12 +311,10 @@ class DeadEndAgent:
     def _prepare_memory_workspace(self) -> str:
         """Ensure the persistent memory workspace exists for this local agent.
 
-        归口到统一任务根 tasks/<task_id>/agent/<agent_id>/<session_id>/memory。
+        归口到统一任务根 tasks/<task_id>/agent/memory。
         """
         memory_root = (
             Path(self.agents_storage_root).expanduser().resolve()
-            / str(self.local_agent_id)
-            / str(self.embedding_session_id)
             / "memory"
         )
         memory_root.mkdir(parents=True, exist_ok=True)
@@ -575,12 +580,14 @@ AUTHENTICATION IS PART OF RECON (mandatory when the target requires login):
         target_context =f"Target : {self.context.target}"
         context = {}
         confidence_score = 0.0
-        # Run the supervisor directly
+        # Run the supervisor directly. Mark as recon phase so the heavy
+        # LLM-call sub-agents use a higher concurrency limit.
         async for event in self.executor.execute_supervisor(
             task_node=task_node,
             agent_context=target_context,
             usage=RunUsage(),
-            usage_limits=UsageLimits(request_limit=None, tool_calls_limit=None)
+            usage_limits=UsageLimits(request_limit=None, tool_calls_limit=None),
+            phase="recon",
         ):
             if isinstance(event, ValidationStopEvent):
                 stop_result = self._record_validation_stop(event)

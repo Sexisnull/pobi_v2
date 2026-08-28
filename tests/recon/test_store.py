@@ -130,9 +130,10 @@ def test_lookup_by_tech(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_for_task_creates_recon_dir(tmp_path):
+def test_for_task_creates_task_level_db(tmp_path):
     store = ReconStore.for_task("taskX", task_root=str(tmp_path))
-    assert (tmp_path / "recon" / "taskX.db").exists()
+    # 任务级单一库：tasks/<id>/<id>.db（无 recon/ 子目录）。
+    assert (tmp_path / "taskX.db").exists()
     store.close()
 
 
@@ -143,6 +144,6 @@ def test_for_task_rejects_empty_id(tmp_path):
 
 def test_for_task_sanitizes_id(tmp_path):
     store = ReconStore.for_task("../evil", task_root=str(tmp_path))
-    # 越界字符被清理，库落在 recon/ 内而非 task_root 之外。
-    assert store.db_path.parent.name == "recon"
+    # 越界字符被清理，库落在 task_root 内（任务级单一库），而非 task_root 之外。
+    assert store.db_path.parent == tmp_path
     store.close()

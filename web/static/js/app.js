@@ -1633,6 +1633,8 @@
 
   function eventToChat(ev) {
     const type = ev.type || ev.event_type || "event";
+    // 内部状态事件：仅用于更新左侧『执行计划』/『运行视图』，不进入聊天流
+    if (type === "plan_step") return null;
     const p = ev.payload || {};
     // 事件时间戳：优先用后端持久化字段 created_at；其次兼容 timestamp / at；最终由 appendChat 兜底为前端当前时间
     const ts = ev.created_at || ev.timestamp || ev.at;

@@ -238,7 +238,8 @@ async def validate_auth_context_service(
         if v:
             headers[k] = v
 
-    request_kwargs: dict[str, Any] = {"headers": headers, "allow_redirects": True}
+    # 默认不跟随重定向：3xx 表示会话已失效/被弹回登录页，应判为 expired 而非有效。
+    request_kwargs: dict[str, Any] = {"headers": headers, "allow_redirects": False}
     if proxy_url:
         request_kwargs["proxy"] = proxy_url
 
@@ -285,7 +286,11 @@ async def validate_auth_context_service(
     validated = False
     expired = False
     expired_reason: str | None = None
-    if status in failure_status:
+    if 300 <= (status or 0) < 400:
+        # 重定向（例如落到登录页）代表当前会话已失效，不应再跟随判定有效。
+        expired = True
+        expired_reason = f"http_{status}"
+    elif status in failure_status:
         expired = True
         expired_reason = f"http_{status}"
     elif status in expected_status:

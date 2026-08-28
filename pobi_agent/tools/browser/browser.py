@@ -22,6 +22,7 @@ def _timeout_seconds(timeout_ms: float | None, *, default_ms: float = 30_000, ca
     seconds = max(1, int(math.ceil(ms / 1000.0)))
     return min(seconds, cap_s)
 
+
 def _resolve_keyboard_key(key_name: str) -> Key:
     name = key_name.strip()
     aliases = {
@@ -167,9 +168,8 @@ class ExtractStep:
     """Extract a value from a page element into ``context[context_key]``.
 
     Enables dynamic-form flows the static fill/select/check steps cannot handle, e.g.
-    reading a per-request CSRF token (DVWA ``user_token``) before submitting the login
-    form. CSS selectors like ``input[name='user_token']`` work even when the HTML quotes
-    the attribute name with single quotes.
+    reading a per-request token (such as a CSRF field) before submitting a form. The
+    extracted value can then be referenced by a subsequent fill step via ``context_key``.
     """
 
     selector: str
@@ -227,18 +227,21 @@ class BrowserSession:
             opts.add_argument("--disable-popup-blocking")
             opts.add_argument("--disable-gpu")
             opts.add_argument("--disable-dev-shm-usage")
+            # 容器内以 root 运行 chromium 必须 --no-sandbox，否则进程立即退出、CDP 不监听。
+            opts.add_argument("--no-sandbox")
+            opts.add_argument("--disable-setuid-sandbox")
             opts.add_argument("--disable-sync")
             opts.add_argument("--disable-translate")
             if self._proxy_url:
                 opts.add_argument(f"--proxy-server={self._proxy_url}")
             if not self._verify_ssl:
-                opts.add_argument("ignore-certification-errors")
+                opts.add_argument("--ignore-certificate-errors")
             if self._user_agent:
                 opts.add_argument(f"--user-agent={self._user_agent}")
             else:
                 opts.add_argument(
                     "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
                 )
         except ArgumentAlreadyExistsInOptions as e:
             print(f"Argument already exists in chromium options: {e}")
@@ -761,18 +764,17 @@ class BrowserSession:
         - ``checked`` → element.checked (bool)
         """
         el = await self.wait_for_selector(selector, timeout_ms=timeout_ms, page=page)
-        tab = await self._active_tab(page)
         js = {
-            "value": "return el.value;",
-            "text": "return el.textContent;",
-            "html": "return el.innerHTML;",
-            "checked": "return el.checked;",
+            "value": "return this.value;",
+            "text": "return this.textContent;",
+            "html": "return this.innerHTML;",
+            "checked": "return this.checked;",
         }[attribute]
-        result = await tab.execute_script(
-            "const el = arguments[0]; " + js,
-            el,
-        )
-        return result
+        # Pydoll 将 WebElement.execute_script 委托给 Runtime.callFunctionOn，
+        # 脚本内 ``this`` 指向该元素；返回结构为
+        # {"id":..., "result": {"result": {"type":..., "value":...}}}。
+        result = await el.execute_script(js)
+        return result["result"]["result"]["value"]
 
     # ------------------------------------------------------------------
     # Context-driven steps (backward-compatible helpers)

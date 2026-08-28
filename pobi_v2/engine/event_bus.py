@@ -121,7 +121,10 @@ bus: EventBusBackend = _build_backend()
 
 
 def _wrap(event_type: str, session_id: str, **payload: Any) -> dict[str, Any]:
-    return {"type": event_type, "session_id": session_id, **payload}
+    # 事件总线/SSE 线上的信封结构：{type, session_id, payload:{...}}。
+    # 注意：DB TaskEvent.payload 只存内层 payload（见 persist_event_worker 解包），
+    # 消费方（/plan、/live、/events 与前端 eventToChat）均按单层读取，勿在此叠加。
+    return {"type": event_type, "session_id": session_id, "payload": payload}
 
 
 class PobiV2EventHooks:
@@ -309,6 +312,12 @@ class PobiV2EventHooks:
     # ──────────────────────────────────────────────────────────────────────
     # RECON 扩展事件（非 EventHooks Protocol 成员，仅 PobiV2EventHooks 提供）
     # 供 ContextEngine 旁路写入本地库后，触发 PG 聚合层异步增量同步。
+    #
+    # ⚠️ 弃用（2026-08-27）：原经内存事件总线推送 __recon_sync__，由 web 进程的
+    # recon_sync_worker 消费。但 agent 运行于 worker 进程、默认内存总线不跨进程，
+    # 事件丢失导致 PG 聚合层空表。现改为 ContextEngine 同进程直连 upsert_to_pg +
+    # deadend_runner finally 兜底 flush（见 context_engine.py / deadend_runner.py）。
+    # 本方法保留仅作兼容空壳，不再被任何调用方使用。
     # ──────────────────────────────────────────────────────────────────────
     def emit_recon_upsert(
         self,
@@ -318,15 +327,8 @@ class PobiV2EventHooks:
         task_id: str,
         source: str = "context_engine",
     ) -> None:
-        """通知 recon 同步 worker：该 session 的本地库有增量待同步至 PG。
-
-        Args:
-            session_id: 本地库定位键（=ContextEngine.session_id）。
-            target_id: 授权目标 UUID（PG 聚合层维度）。
-            tenant_id: 租户 UUID（多租户隔离）。
-            task_id: 来源任务 UUID（追加到 source_tasks 累计）。
-            source: 同步触发来源（便于审计）。
-        """
+        """[弃用] 见类上方注释。保留空壳以避免潜在引用报错；新同步路径不依赖事件总线。"""
+        return
         payload = _wrap(
             "recon_upsert",
             session_id,
@@ -393,9 +395,10 @@ async def persist_event_worker() -> None:
 
             task_uuid = _UUID(str(task_id))
             async with AsyncSessionLocal() as session:
-                detail = dict(event)
-                detail.pop("type", None)
-                detail.pop("session_id", None)
+                # 落库只存内层 payload（去掉 _wrap 的 {type, session_id, payload} 外壳），
+                # 与 executor 直接落库的 agent_result 及 /plan、/live、/events 消费方
+                # 的单层口径保持一致；否则双层嵌套会导致回放时 iteration/content 等字段解析不到。
+                detail = event.get("payload") or {}
                 await record_task_event(
                     session,
                     task_uuid,
@@ -417,15 +420,14 @@ async def persist_event_worker() -> None:
 
 
 async def recon_sync_worker() -> None:
-    """后台同步：把本地 RECON 库增量聚合进 PG（设计文档 §5，第二阶）。
+    """[弃用] RECON 本地库 → PG 聚合层同步 worker（设计文档 §5，第二阶）。
 
-    订阅 ``__recon_sync__`` 通道，收到增量事件后调用 ``ReconStore.upsert_to_pg``
-    将 per-task 本地库按 target_id 维度 upsert 到 recon_facts_agg /
-    recon_threats_agg。失败仅记 warning，不阻断 agent 主循环。
-
-    收敛保证：PG 聚合表唯一约束 (target_id, category, key) / 等，使多次任务对同一
-    目标的 upsert 只保留收敛后的一行，行数不随任务次数线性增长。
+    ⚠️ 弃用（2026-08-27）：原经内存事件总线订阅 ``__recon_sync__``，但 agent 运行
+    于 worker 进程、默认内存总线不跨进程，web 进程订阅方永远收不到事件，导致 PG
+    聚合层空表。现改为 ContextEngine 同进程直连 upsert_to_pg + deadend_runner
+    finally 兜底 flush。本函数保留为空壳，main.py 已停止启动它。
     """
+    return
     from pobi_agent.recon import ReconStore
     from pobi_v2.db.session import AsyncSessionLocal
 
@@ -450,7 +452,7 @@ async def recon_sync_worker() -> None:
             task_root = get_task_root()
             if task_root is None:
                 continue
-            db_path = task_root / "recon" / f"{session_id}.db"
+            db_path = task_root / f"{session_id}.db"
             if not db_path.exists():
                 continue
             store = ReconStore(db_path)

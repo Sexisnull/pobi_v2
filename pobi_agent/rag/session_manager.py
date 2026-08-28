@@ -46,7 +46,9 @@ class RagSessionManager:
     def session_dir(
         self, agent_id: UUID | str, embedding_session_id: UUID | str
     ) -> Path:
-        return self._root / str(agent_id) / str(embedding_session_id)
+        # RAG 索引按 task（embedding_session_id）隔离、跨 agent 共享，
+        # 故仅保留 session 层，去掉 agent_id 层。
+        return self._root / str(embedding_session_id)
 
     async def get_connector(
         self,

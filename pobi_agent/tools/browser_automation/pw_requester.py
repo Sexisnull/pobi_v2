@@ -199,9 +199,9 @@ class PlaywrightRequester:
         """
         task_root = get_task_root()
         if task_root is not None:
-            path_storage = StdPath(task_root) / "agent" / agent_id / session_id / "auth_context"
+            path_storage = StdPath(task_root) / "agent" / "auth_context"
         else:
-            path_storage = DEADEND_AGENTS_PATH / agent_id / session_id / "auth_context"
+            path_storage = DEADEND_AGENTS_PATH / "auth_context"
         path_storage.mkdir(parents=True, exist_ok=True)
         storage_file = path_storage / "playwright_state.json"
         return str(storage_file)

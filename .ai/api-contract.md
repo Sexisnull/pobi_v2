@@ -62,6 +62,7 @@
 - 须走后端 `/app` 携带同源 Cookie，禁止 `file://` 直接打开。
 - SSE：`EventSource('/api/v1/tasks/{id}/stream')`；终态任务（`completed`/`failed`/`cancelled`）不建立流、`onerror` 不重连。
 - 控制台详情页 DOM：`.console-root(fixed) → #console-body → .console-shell(flex col) → [.console-head, .console-sitrep, .console-tokens(可选), .console-grid] → .col-center → [.swarm-section, .console-phase, #chat-stream, .console-input]`。
+- **SSE 事件信封（统一结构）**：所有实时事件与 `TaskEvent` 持久化记录均为 `{type, session_id, payload:{...}}` 嵌套结构（`event_bus._wrap` 生成）。前端经 `ev.payload.*` 读取业务字段；`/live` 与历史 `recent_events` 同样以 `payload` 承载数据，三者层级一致。`plan_step` 为内部状态事件，仅驱动左栏『执行计划』，不进入聊天流（`eventToChat` 过滤）。
 
 ## 基础数据模型（`pobi_v2/db/models.py`）
 Tenant / User / Target / Task / ApprovalRequest / Finding / AuditEvent / TaskEvent / Artifact / PricingConfig / (PAT) ApiToken 等。迁移：`alembic/versions/`。
@@ -72,3 +73,11 @@ Tenant / User / Target / Task / ApprovalRequest / Finding / AuditEvent / TaskEve
 ## 入参出参规则
 - 统一异常处理：`core/exceptions.py` 注册 HTTP 映射。
 - Schema 校验：`schemas/` 下 Pydantic（task 含 `PlanStep`/`TaskLiveState`/`TaskInstructionIn`/`TaskUsage`/`UsageSummary`）。
+
+## 本地 RECON 旁路落库（运行期）
+侦察/利用阶段产物在 agent 运行期旁路写入本地 SQLite（非 PG 主库），供后续任务快速建立认知：
+- 路径（任务级单一库）：`~/.pobi_v2/tasks/<task_id>/<task_id>.db`。侦察与利用阶段产物共用此单一库，以不同表（`recon_facts` / `recon_endpoints` / `recon_techniques` / `recon_threats` 等）区分，不再使用 `recon/` 子目录。
+- 触发：`agents/components/executor.py` 的 `_add_agent_output_to_context` → `_persist_recon_facts`，解析 agent 输出的 `detailed_summary`/`thoughts` 文本中的端点（扩展名路径）与技术栈词表。
+- 写入通道：`ContextEngine.add_discovered_fact`（→ `ReconStore.upsert_fact`，落 `recon_facts`，category=`endpoint`/`technology`）与 `ContextEngine.add_recon_endpoint`（→ `ReconStore.upsert_endpoint`，落 `recon_endpoints` 结构化表，含 host/tech_stack/parameters/auth_required）。
+- 时序保证：随跑随写、异常仅记 warning 不阻断主循环；`recon_store` 未注入时全 no-op。**任务取消不影响已落库数据**（取消分支跳过的是 PG 正式 `findings`/`task_events`，非本地 recon 库）。
+- 幂等：端点以 `task_id + path_normalized` 去重；fact 以 `category + key` 去重。

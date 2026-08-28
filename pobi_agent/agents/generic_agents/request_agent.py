@@ -40,6 +40,7 @@ class RequesterAgent(AgentRunner):
         deps_type: Any | None,
         target_information: str,
         requires_approval: bool,
+        phase: str | None = None,
     ):
         tools_metadata = {
             "pw_send_payload": render_tool_description("send_payload"),
@@ -61,7 +62,8 @@ class RequesterAgent(AgentRunner):
             tools=[
                 Tool(pw_send_payload, requires_approval=requires_approval),
                 Tool(browser_run_steps, requires_approval=requires_approval),
-            ]
+            ],
+            phase=phase,
         )
 
     async def run(

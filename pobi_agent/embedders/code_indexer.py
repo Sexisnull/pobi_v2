@@ -97,7 +97,7 @@ class SourceCodeIndexer:
 
         目录契约：必须由调用方（deadend_runner 或平台层）显式传入
         storage_root=task_root/agent，归口到
-        tasks/<task_id>/agent/<agent_id>/<session_id>/webpages。
+        tasks/<task_id>/agent/webpages。
         不再回退旧 agents/<agent_id>/<session_id>/webpages 路径，
         避免在已迁移删除的旧目录上静默新建散落结构。
         """
@@ -106,11 +106,7 @@ class SourceCodeIndexer:
                 "SourceCodeIndexer.storage_root 未设置：必须由平台层注入 "
                 "task_root/agent，禁止回退旧 agents/ 路径。"
             )
-        self.cache_path = (
-            Path(self.storage_root)
-            / str(self.agent_id)
-            / str(self.session_id)
-        )
+        self.cache_path = Path(self.storage_root)
         if not self.cache_path.exists():
             self.cache_path.mkdir(parents=True, exist_ok=True)
 

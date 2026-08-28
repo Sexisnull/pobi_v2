@@ -94,12 +94,14 @@ async def record_artifact(
     content: str | None = None,
     content_type: str | None = None,
     size_bytes: int | None = None,
+    target_id: UUID | None = None,
 ) -> Artifact:
     """记录一件任务产物（截图 / PoC / 报告 / 日志）。"""
     artifact = Artifact(
         id=uuid4(),
         task_id=task_id,
         finding_id=finding_id,
+        target_id=target_id,
         kind=ArtifactKind(kind) if not isinstance(kind, ArtifactKind) else kind,
         name=name,
         storage_key=storage_key,

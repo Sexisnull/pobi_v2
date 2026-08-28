@@ -17,7 +17,9 @@ def load_reusable_credentials() -> Dict[str, Any]:
             creds = f.read()
             return json.loads(creds)
     except (FileNotFoundError, json.JSONDecodeError) as e:
-        logger.warning("Could not load reusable credentials: %s", e)
+        # 凭证钱包文件未配置是常态（多数任务不提供），静默降级避免每次
+        # 发送请求都刷两条 warning 干扰日志/LLM 观察（原为 logger.warning）。
+        logger.debug("Could not load reusable credentials: %s", e)
         return {"accounts": []}
 
 def replace_credential_placeholders(request_data: str, account_index: int = 0) -> str:
@@ -32,11 +34,16 @@ def replace_credential_placeholders(request_data: str, account_index: int = 0) -
     Returns:
         str: Request data with placeholders replaced by actual credential values
     """
+    # 请求体不含占位符（dummy_*）时无需加载凭证钱包：避免为每个请求读一次
+    # 不存在的文件并刷屏。只有真正携带占位符的请求才走替换流程。
+    if "dummy_" not in request_data:
+        return request_data
     credentials = load_reusable_credentials()
     accounts: Any = credentials.get("accounts", [])
 
     if not accounts or account_index >= len(accounts):
-        logger.warning("No account found at index %d", account_index)
+        # 有占位符但无可用账户：保持原样，debug 级提示（不刷屏）
+        logger.debug("No account found at index %d", account_index)
         return request_data
 
     account = accounts[account_index]

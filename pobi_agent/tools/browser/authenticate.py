@@ -504,8 +504,12 @@ async def _authenticate_via_json(
     status: int | None = None
     body_preview: str = ""
     try:
+        # 与 validate/refresh 对齐：使用 unsafe cookie jar，否则 IP 地址主机的
+        # Set-Cookie 会被 aiohttp 默认安全策略丢弃（aiohttp < 4 行为）。
+        jar = aiohttp.CookieJar(unsafe=True)
         async with aiohttp.ClientSession(
             connector=connector,
+            cookie_jar=jar,
             timeout=aiohttp.ClientTimeout(total=timeout_s),
         ) as session:
             async with session.request(method, effective_auth_url, **request_kwargs) as resp:
@@ -677,14 +681,18 @@ async def _authenticate_via_http_basic(
                 async with session.get(effective_auth_url, **request_kwargs) as resp:
                     status = resp.status
                     final_url = str(resp.url)
-                    if status in (401, 403):
+                    challenge = resp.headers.get("WWW-Authenticate", "")
+                    if status not in (401, 403) or "basic" not in challenge.lower():
                         return _failure(
                             target=target,
                             target_slug=handler.target_slug,
                             agent_id=agent_id,
                             session_id=session_id,
                             profile=profile,
-                            error=f"HTTP Basic probe returned {status} (credentials rejected)",
+                            error=(
+                                "Target is not using HTTP Basic auth "
+                                f"(probe status {status}, WWW-Authenticate={challenge!r})"
+                            ),
                             auth_flow=auth_flow,
                             auth_type=auth_type,
                             extra={"final_url": final_url},

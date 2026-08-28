@@ -573,9 +573,9 @@ tbody tr:hover { background: rgba(255,255,255,.03); }
 .console-grid {
   flex: 1 1 auto; min-height: 0; display: grid;
   grid-template-columns: 290px 1fr 330px;
-  align-items: start;          /* 各列顶部对齐，随内容自然撑高 */
+  align-items: stretch;        /* 各列撑满 grid 行高，使 card 的 flex:1 获得可分配高度 */
   gap: 14px; padding: 14px 18px 18px;
-  overflow: auto;             /* 整页可滚动，内容自然展开 */
+  overflow-y: auto;           /* 列内列表自滚；整页仅在列本身超高时滚动 */
   scrollbar-gutter: stable;
 }
 .console-col {

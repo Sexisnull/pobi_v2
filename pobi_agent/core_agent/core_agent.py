@@ -85,6 +85,10 @@ logger = get_module_logger(__name__)
 # Rich console for colored output - uses stderr to avoid breaking RPC communication
 console = Console(force_terminal=True, stderr=True)
 
+# 单工具连续失败重试上限：当同一工具连续失败达到该次数时，向 LLM 注入明确错误阻断无限重试，
+# 避免环境性错误（如浏览器不可用）让 LLM 在单次迭代内空耗至 job_timeout。
+MAX_TOOL_CONSECUTIVE_FAILURES = 5
+
 try:
     import litellm
     from litellm import acompletion
@@ -165,6 +169,7 @@ class CoreAgent:
         api_base: str | None = None,
         rate_limit_rpm: int = 200,
         name: str = "agent",
+        phase: str | None = None,
     ):
         """Initialize CoreAgent.
 
@@ -188,8 +193,9 @@ class CoreAgent:
         self.output_schema = output_schema
         self.api_key = api_key
         self.api_base = api_base
+        self.phase = phase
         self.tracer = trace.get_tracer(name)
-        self.concurrent_limiter = self._get_concurrency_limiter()
+        self.concurrent_limiter = self._get_concurrency_limiter(phase=phase)
 
         # Rate limiting - simple AsyncLimiter
         if AIOLIMITER_AVAILABLE:
@@ -221,23 +227,33 @@ class CoreAgent:
             if output_schema and not INSTRUCTOR_AVAILABLE and _is_pydantic_schema:
                 logger.warning("instructor not available, structured output disabled")
 
-    def _get_concurrency_limiter(self) -> asyncio.Semaphore | None:
+    def _get_concurrency_limiter(self, phase: str | None = None) -> asyncio.Semaphore | None:
         """Return a shared concurrency limiter for this backend/model.
 
         Azure AI surfaces 429s such as "Server at maximum concurrent capacity (8)".
         A small shared semaphore reduces burst concurrency across agent instances
         before requests reach the provider.
+
+        The reconnaissance phase is LLM-call heavy (many serial tool calls); it uses
+        a dedicated, higher default concurrency via DEADEND_RECON_LLM_MAX_CONCURRENCY
+        so independent requests overlap instead of queuing one behind another.
         """
-        raw_limit = os.getenv("DEADEND_LLM_MAX_CONCURRENCY", "6").strip()
+        if phase == "recon":
+            raw_limit = os.getenv("DEADEND_RECON_LLM_MAX_CONCURRENCY", "").strip()
+            if not raw_limit:
+                # Fall back to the general limit, but allow recon to run wider by default.
+                raw_limit = os.getenv("DEADEND_LLM_MAX_CONCURRENCY", "10").strip()
+        else:
+            raw_limit = os.getenv("DEADEND_LLM_MAX_CONCURRENCY", "6").strip()
         try:
             limit = int(raw_limit)
         except ValueError:
-            limit = 6
+            limit = 10 if phase == "recon" else 6
 
         if limit <= 0:
             return None
 
-        limiter_key = f"{self.api_base or 'default'}|{self.model}"
+        limiter_key = f"{self.api_base or 'default'}|{self.model}|{phase or 'default'}"
         limiter = self._concurrency_semaphores.get(limiter_key)
         if limiter is None:
             limiter = asyncio.Semaphore(limit)
@@ -358,6 +374,9 @@ class CoreAgent:
         # Agent loop (Phoenix captures traces via Instructor auto-instrumentation)
         iteration = 0
         max_iterations = 50  # Safety limit
+
+        # 单工具连续失败计数：key 为工具名，value 为当前连续失败次数。
+        consecutive_failures: dict[str, int] = {}
 
         while iteration < max_iterations:
             iteration += 1
@@ -585,6 +604,31 @@ class CoreAgent:
                 tool_results = await self._execute_tools(choice.message.tool_calls, deps)
                 messages.extend(tool_results)
                 self.tool_call_count += len(tool_results)
+
+                # 单工具连续失败上限：阻断环境性错误导致的 LLM 无限重试。
+                for res in tool_results:
+                    name = res.get("name", "")
+                    content = res.get("content", "") or ""
+                    failed = content.startswith("Error") or "Error:" in content
+                    if failed:
+                        consecutive_failures[name] = consecutive_failures.get(name, 0) + 1
+                    else:
+                        consecutive_failures[name] = 0
+                    if consecutive_failures[name] >= MAX_TOOL_CONSECUTIVE_FAILURES:
+                        block = (
+                            f"Error: 工具 '{name}' 已连续失败 "
+                            f"{consecutive_failures[name]} 次，已终止重试。请改用其他工具"
+                            f"（如 pw_send_payload）或直接跳过该步骤，不要继续重复调用。"
+                        )
+                        messages.append({"role": "tool", "name": name, "content": block})
+                        consecutive_failures[name] = 0
+                        try:
+                            console.print(
+                                f"[bold red][Tool Retry Guard][/bold red] {name} "
+                                f"连续失败 {MAX_TOOL_CONSECUTIVE_FAILURES} 次，已阻断"
+                            )
+                        except BlockingIOError:
+                            pass
 
                 # Check tool limit
                 if usage_limits and self.tool_call_count >= usage_limits.get("tools", float('inf')):
@@ -816,6 +860,11 @@ class CoreAgent:
             # Fallback for older litellm versions
             retryable_exceptions = (Exception,)
 
+        # Tighten retries so a single stuck request cannot balloon total runtime:
+        # bounded attempt count + capped exponential backoff, both env-overridable.
+        max_retries = int(os.getenv("DEADEND_LLM_MAX_RETRIES", "3").strip() or "3")
+        retry_max_wait = int(os.getenv("DEADEND_LLM_RETRY_MAX_WAIT", "4").strip() or "4")
+
         def log_retry(retry_state):
             """Log retry attempts."""
             attempt = retry_state.attempt_number
@@ -823,13 +872,13 @@ class CoreAgent:
             exc_name = type(exception).__name__ if exception else "Unknown"
             wait_time = retry_state.next_action.sleep if retry_state.next_action else 0
             logger.warning(
-                "Retry %d/5 for %s - waiting %.1fs before next attempt",
-                attempt, exc_name, wait_time
+                "Retry %d/%d for %s - waiting %.1fs before next attempt",
+                attempt, max_retries, exc_name, wait_time
             )
 
         @retry(
-            stop=stop_after_attempt(5),
-            wait=wait_exponential(multiplier=1, min=1, max=12),
+            stop=stop_after_attempt(max_retries),
+            wait=wait_exponential(multiplier=1, min=1, max=retry_max_wait),
             retry=retry_if_exception_type(retryable_exceptions),
             reraise=True,
             before_sleep=log_retry,

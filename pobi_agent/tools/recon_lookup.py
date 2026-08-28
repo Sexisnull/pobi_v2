@@ -5,8 +5,8 @@ agent 在探索/利用阶段调用本工具，按 host / 技术 / 路径前缀 /
 
 实现策略（最小侵入、编排不变）：
 - 不依赖注入的 ReconStore，而是依据 ``ctx.deps.session_id`` 作为 task_id，
-  从协程级 ``storage_context.get_task_root()`` 定位 ``{task_root}/recon/{task_id}.db``，
-  构造临时只读 ReconStore 查询。
+  从协程级 ``storage_context.get_task_root()`` 定位 ``{task_root}/{task_id}.db``
+  （任务级单一库，侦察/利用产物同库不同表），构造临时只读 ReconStore 查询。
 - 库文件不存在时返回空结果（表示该任务尚无历史侦察资产），不抛错。
 """
 
@@ -33,7 +33,7 @@ def _resolve_store(session_id) -> Optional[ReconStore]:
         if task_root is None:
             logger.debug("recon_lookup: task_root 未注入，跳过得物化库")
             return None
-        db_path = task_root / "recon" / f"{session_id}.db"
+        db_path = task_root / f"{session_id}.db"
         if not db_path.exists():
             return None
         # 复用 for_task 定位逻辑（task_root 已知，直接构造）。

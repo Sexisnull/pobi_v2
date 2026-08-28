@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import json
+import re
 from typing import Any, Literal, AsyncGenerator
 import asyncio
 from pydantic import BaseModel
@@ -70,6 +71,109 @@ def _build_memory_summary(agent_name: str, task: str, output: AgentOutput) -> st
         f"- Proofs: {proofs}\n"
         f"- Thoughts: {thoughts}\n\n"
     )
+
+
+# 侦察文本中需过滤的噪声路径（HTML 标签 / HTTP 版本 / SQL 片段 / 版本号等）。
+_RECON_NOISE_PATHS = {
+    "/div", "/li", "/ul", "/h1", "/h2", "/h3", "/pre", "/em", "/a",
+    "/title", "/1.1", "/2.4.25", "/or", "/union", "/and", "/password",
+}
+# 常见 Web 技术栈词表（不区分大小写匹配）。
+_RECON_TECH_STACK = [
+    "PHP", "Apache", "Nginx", "MySQL", "PostgreSQL", "WordPress", "Joomla",
+    "Drupal", "Tomcat", "DVWA", "Python", "Django", "Flask", "React",
+    "Vue", "jQuery", "Bootstrap", "ASP.NET", "IIS", "Redis", "MongoDB",
+    "Node.js", "Express", "Laravel", "Spring", "Ruby", "Rails",
+]
+# 端点须以这些扩展名或目录特征收尾，过滤掉 HTML 标签 / 版本号等噪声。
+_RECON_ENDPOINT_RE = re.compile(
+    r"(?P<path>/(?:[a-zA-Z0-9_][a-zA-Z0-9_.\-]*/)*[a-zA-Z0-9_][a-zA-Z0-9_.\-]*"
+    r"(?:\.(?:php|html?|asp|aspx|jsp|json|xml|txt|cfg|ini|bak|dist|inc|yml|yaml|env))?)"
+)
+_AUTH_HINT_RE = re.compile(r"(login|auth|session|signin|logout|oauth|token|captcha)", re.IGNORECASE)
+
+
+def _parse_recon_endpoints(text: str) -> list[str]:
+    """从侦察文本中宽松提取端点路径，过滤 HTML 标签与版本号等噪声。
+
+    仅保留命中扩展名（.php/.html/...）的路径，避免把 /div、/1.1 等噪声写入库。
+    IP 地址片段（如 /122.51.72.186）视为噪声一并过滤。
+    """
+    if not text:
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+    for m in _RECON_ENDPOINT_RE.finditer(text):
+        path = m.group("path").rstrip(".")
+        low = path.lower()
+        if low in _RECON_NOISE_PATHS or len(path) < 2:
+            continue
+        # 过滤被误判为路径的 IP 地址片段（第一个路径段全为数字与点的组合）。
+        first_seg = low.lstrip("/").split("/")[0]
+        if re.fullmatch(r"[\d.]+", first_seg):
+            continue
+        if low not in seen:
+            seen.add(low)
+            found.append(path)
+    return found
+
+
+def _parse_recon_tech_stack(text: str) -> list[str]:
+    """从侦察文本中提取命中的技术栈词（去重，保留原大小写）。"""
+    if not text:
+        return []
+    hits: list[str] = []
+    lower_text = text.lower()
+    for tech in _RECON_TECH_STACK:
+        if tech.lower() in lower_text and tech not in hits:
+            hits.append(tech)
+    return hits
+
+
+def _persist_recon_facts(context: "ContextEngine | None", agent_name: str, output: "AgentOutput") -> None:
+    """将 agent 输出中的侦察产物（端点 / 技术栈）结构化落本地 recon 库。
+
+    无论侦察还是利用阶段（共用同一 agent），凡在 detailed_summary / thoughts
+    中出现的端点与技术栈都旁路写入 recon_facts 与 recon_endpoints，
+    使中途取消的任务也能保留可检索的侦察认知。recon_store 未注入时全部 no-op。
+    """
+    if context is None:
+        return
+    output_dict = output.model_dump()
+    summary = output_dict.get("detailed_summary", "") or ""
+    thoughts = output_dict.get("thoughts", "") or ""
+    corpus = f"{summary}\n{thoughts}"
+
+    endpoints = _parse_recon_endpoints(corpus)
+    for ep in endpoints:
+        # 写结构化端点表（含认证面标记）。
+        context.add_recon_endpoint(
+            path_normalized=ep,
+            auth_required=bool(_AUTH_HINT_RE.search(ep)),
+            discovered_via=agent_name,
+            confidence=0.6,
+        )
+        # 同时写 recon_facts 维度，便于统一检索。
+        context.add_discovered_fact(
+            category="endpoint",
+            key=ep,
+            value=f"Reconnaissance endpoint discovered by {agent_name}: {ep}",
+            confidence=0.6,
+            source_task=agent_name,
+            details={"auth_required": bool(_AUTH_HINT_RE.search(ep))},
+            actionable=True,
+        )
+
+    for tech in _parse_recon_tech_stack(corpus):
+        context.add_recon_technique(name=tech, category="technology", confidence=0.6)
+        context.add_discovered_fact(
+            category="technology",
+            key=tech,
+            value=f"Technology stack detected during recon: {tech}",
+            confidence=0.6,
+            source_task=agent_name,
+            actionable=False,
+        )
 
 
 def _format_tool_result_for_supervisor(agent_name: str, output: Any) -> str:
@@ -366,7 +470,8 @@ class AgentExecutor:
         usage: RunUsage = RunUsage(),
         usage_limits: UsageLimits = UsageLimits(request_limit=None, tool_calls_limit=None),
         deferred_tool_results: DeferredToolResults | None = None,
-        message_history: list | None = None
+        message_history: list | None = None,
+        phase: str | None = None,
     ) -> AsyncGenerator[ExecutorEvent, None]:
         """Execute a task using supervisor pattern where router has access to all agents as tools.
         
@@ -410,7 +515,8 @@ class AgentExecutor:
                 model=self.model,
                 deps_type=RequesterDeps,
                 target_information=self.context.target,
-                requires_approval=self.requires_approval
+                requires_approval=self.requires_approval,
+                phase=phase,
             ) if self.requester_deps is not None else None
 
             authenticator_agent = AuthenticatorAgent(
@@ -418,6 +524,7 @@ class AgentExecutor:
                 deps_type=RequesterDeps,
                 target_information=self.context.target,
                 requires_approval=self.requires_approval,
+                phase=phase,
             ) if self.requester_deps is not None else None
 
             shell_agent = ShellAgent(
@@ -425,6 +532,7 @@ class AgentExecutor:
                 deps_type=WebappreconDeps,
                 target_information=self.context.target,
                 requires_approval=self.requires_approval,
+                phase=phase,
             ) if self.shell_deps is not None else None
 
             python_interpreter_agent = PythonInterpreterAgent(
@@ -531,6 +639,9 @@ class AgentExecutor:
                         thought=thoughts,
                         summary="",  # Let context auto-generate summary
                     )
+
+                # 侦察产物结构化落库（端点/技术栈），与阶段无关，取消亦可保留。
+                _persist_recon_facts(context, agent_name, output)
 
                 # Log the full agent response - NO TRUNCATION
                 full_response = f"[{agent_name}]\nSummary: {detailed_summary}\nProofs: {proofs}\nThoughts: {thoughts}"

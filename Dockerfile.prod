@@ -56,6 +56,14 @@ COPY --from=builder /opt/venv /opt/venv
 # venv 就位后再安装 chromium 浏览器二进制
 RUN /opt/venv/bin/python -m playwright install --with-deps chromium
 
+# Pydoll 默认只检索系统路径（如 /usr/bin/google-chrome），不读取 PLAYWRIGHT_BROWSERS_PATH。
+# 将 Playwright 预装的完整 chromium 软链到系统路径，使 Pydoll 无需显式 binary_location 即可启动。
+# 使用通配避免 chromium 版本号变化时断裂；仅链接完整 chromium（非 headless_shell），
+# 因 headless_shell 在 CDP 交互上支持不全，会导致 pydoll 部分 API 失效。
+RUN CHROME_BIN=$(ls -d /opt/venv/lib/*/site-packages/playwright/driver/package/.local-browsers/chromium-*/chrome-linux/chrome 2>/dev/null | head -1) \
+    && if [ -n "$CHROME_BIN" ]; then ln -sf "$CHROME_BIN" /usr/bin/google-chrome; fi \
+    && ln -sf /usr/bin/google-chrome /usr/bin/google-chrome-stable 2>/dev/null || true
+
 # 复制应用源码（含内嵌 pobi_agent / pobi_prompts / web）
 COPY pobi_v2 ./pobi_v2
 COPY pobi_agent ./pobi_agent

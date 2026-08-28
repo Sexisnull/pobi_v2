@@ -170,6 +170,7 @@ class AgentRunner:
         deps_type: Any | None,
         output_type: Any | None,
         tools: list,
+        phase: str | None = None,
     ):
         """Initialize an AgentRunner instance.
 
@@ -214,6 +215,7 @@ class AgentRunner:
             api_key=api_key,
             api_base=api_base,
             name=name,
+            phase=phase,
         )
 
         self.response = None

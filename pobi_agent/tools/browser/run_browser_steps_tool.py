@@ -141,10 +141,10 @@ class BrowserExtractStep(BaseModel):
     **What the model passes:**
     ``{"action": "extract", "selector": "<css>", "key": "<context_key>", "attribute": "value"}``.
 
-    **How it works:** Before submitting a form that embeds a per-request token (e.g. DVWA
-    ``input[name='user_token']``), run an ``extract`` step to capture the rotated token into
-    ``context[user_token]``, then reference it from a later ``fill`` step's ``key``. This is the
-    only way to drive CSRF-protected login forms, which the static fill/select/check steps cannot.
+    **How it works:** Before submitting a form that embeds a per-request token (such as a CSRF
+    field), run an ``extract`` step to capture the rotated token into the context key, then
+    reference it from a later ``fill`` step's ``key``. This is the only way to drive token-protected
+    login forms, which the static fill/select/check steps cannot.
     ``attribute`` is one of: ``value`` (default), ``text``, ``html``, ``checked``.
     """
 
@@ -153,7 +153,7 @@ class BrowserExtractStep(BaseModel):
     action: Literal["extract"] = "extract"
     selector: str = Field(
         ...,
-        description="CSS selector for the element to read (e.g. input[name='user_token']). Single-quoted attributes are fine.",
+        description="CSS selector for the element to read (e.g. input[name='csrf_token']). Single-quoted attributes are fine.",
     )
     key: str = Field(
         ...,

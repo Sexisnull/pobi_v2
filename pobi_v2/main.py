@@ -42,6 +42,9 @@ async def lifespan(app: FastAPI):
     install_event_hooks()
     # 后台持久化 plan_step 事件（供执行计划聚合端点读取）
     asyncio.create_task(persist_event_worker())
+    # 注：RECON 本地库 → PG 聚合层同步已改为同进程直连（ContextEngine 内部
+    # 经 pg_session_factory 直调 upsert_to_pg + deadend_runner finally 兜底 flush），
+    # 不再依赖跨进程的 recon_sync_worker，故此处不再启动。
     # 首次启动时自动创建 admin 账号（幂等：仅当库内无用户时）
     await seed_admin_if_needed()
     # 启动阶段确保全局共享 Kali 沙箱容器就绪（全面容器化核心依赖）。

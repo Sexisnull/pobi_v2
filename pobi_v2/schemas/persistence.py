@@ -38,6 +38,7 @@ class FindingRead(BaseModel):
 class ArtifactRead(BaseModel):
     id: UUID
     task_id: UUID
+    target_id: UUID | None = None
     finding_id: UUID | None = None
     kind: ArtifactKind = ArtifactKind.other
     name: str
