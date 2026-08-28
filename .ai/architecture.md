@@ -12,7 +12,7 @@
         ├─ db/              # SQLAlchemy 2.0 异步模型与持久化（models / session / persistence）
         ├─ schemas/         # Pydantic Schema（target/task/persistence/auth/approval/pricing）
         ├─ core/            # config / exceptions / security(JWT+bcrypt) / deps / seed
-        ├─ llm/             # 统一 LLM 抽象层（LiteLLM+Instructor），预留未接入消费方
+        ├─ llm/             # 统一 LLM 抽象层（LiteLLM+Instructor），agent 内核与平台统一接入
         └─ services/        # 跨域服务（邮件、定价等，PROJECT_GOAL 提及）
    └─ pobi_agent（内核，仓库根目录子包，uv workspace 复用）
         ├─ CoreAgent / DeadEndAgent / EventHooks
@@ -33,8 +33,8 @@
 | `pobi_v2/engine/` | 任务执行管线、事件总线、ARQ worker、审批引擎、护栏、报告 | 被 router 调用 | 禁止跨模块循环依赖 |
 | `pobi_v2/db/` | 模型定义、session、落库辅助 | ORM 模型 | 禁止在 model 写业务；持久化逻辑放 `persistence.py` |
 | `pobi_v2/core/` | 配置/异常/安全/鉴权依赖/seed | `get_current_user` 等 | 安全密钥走环境变量，禁止硬编码 |
-| `pobi_v2/llm/` | 统一 LLM 抽象层 | `complete/complete_json/chat`、`ModelSpec` 解析 | 当前为预留层，消费方未接入 |
-| `pobi_agent/`（根） | AI 内核：CoreAgent / DeadEndAgent / 工具 / 子 Agent | 被 `engine/deadend_runner.agent_adapter` 驱动 | 视为外部内核，改动需追溯上游 pobi |
+| `pobi_v2/llm/` | 统一 LLM 抽象层（**唯一 litellm 入口**） | `complete/complete_json/chat`、`ModelSpec` 解析、异常归一 | 所有 LLM 调用必须经此层；禁止在别处直连 litellm |
+| `pobi_agent/`（根） | AI 内核：CoreAgent / DeadEndAgent / 工具 / 子 Agent | 被 `engine/deadend_runner.agent_adapter` 驱动 | 视为外部内核，改动需追溯上游 pobi；LLM 调用经 `pobi_v2.llm`（函数内惰性 import，避免顶层循环） |
 | `web/` | 前端 SPA（index.html + static/css + static/js），零构建 | `/app` 托管 | 禁止引入 Node 构建步骤 |
 
 ## 核心数据流
@@ -51,5 +51,6 @@
 
 - `routers` → `engine` → `db` / `pobi_agent`（经 adapter）→ 外部依赖。
 - `engine/event_bus` 对接 `pobi_agent.EventHooks`；`agent_adapter` 安装钩子（`main.py` lifespan）。
+- `pobi_agent/core_agent` **惰性 import** `pobi_v2.llm`（函数内，规避内核↔平台顶层循环）：所有 LLM 调用（补全/结构化/JSON 提取）统一走统一层；统一层负责模型解析、限流、tenacity 重试（归一后类型）、异常归一（抛内核异常）与 usage 返回。
 - 前端 `web/static/js/app.js` 经 `/api/v1/*` + SSE 与后端交互，同源 Cookie（须走 `/app`，禁止 `file://`）。
 - 两层持久架构（README「记忆与缓存」）：Cache（`POBI_CACHE_HOME`，全局命名空间）与 Memory（`ROOT_DEADEND_PATH/agents/<agent_id>/<task_id>/memory`，`agent_id` 命名空间）；二者生命周期不同，不可混淆。AVFS 按 `session_id × workspace` 建表，memory 读写必须用同一 `memory_session_id`（历史因误用 `session_id`(task_id) 阻塞 131 次）。

@@ -35,7 +35,7 @@ from pobi_v2.schemas.task import (
 )
 from pobi_v2.engine.queue import enqueue_task
 from pobi_v2.engine.guardrails import check_scope
-from pobi_v2.engine.cancel_state import request_cancel
+from pobi_v2.engine.cancel_state import clear_cancel, request_cancel
 from pobi_agent.constants import TASKS_ROOT
 from pobi_v2.schemas.recon import (
     ReconAssetsOut,
@@ -91,7 +91,12 @@ async def re_enqueue_task(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(require_scope("tasks:write")),
 ) -> Task:
-    """将 pending 任务重新入队（队列曾不可用或手动触发）。"""
+    """将 pending 任务重新入队（队列曾不可用或手动触发）。
+
+    续跑会清除上次终止留下的残留状态（error / finished_at / cancel_requested /
+    Redis 取消标志），避免出现 status=running 但 error="检测到取消请求" 的
+    矛盾状态（历史任务的取消残留问题）。
+    """
     task = await session.get(Task, task_id)
     if task is None or task.tenant_id != user.tenant_id:
         raise NotFoundError("任务不存在")
@@ -101,7 +106,16 @@ async def re_enqueue_task(
             detail=f"任务当前状态 {task.status.value}，无法重新入队",
         )
     task.status = TaskStatus.queued
+    task.error = None
+    task.finished_at = None
+    task.cancel_requested = False
     await session.commit()
+    # 提前清 Redis 取消标志（run_task 启动时也会清，但此处提前清可消除
+    # queued→running 窗口期内任务被对账/启动检查误判为已取消的可能）。
+    try:
+        await clear_cancel(task.id)
+    except Exception:  # noqa: BLE001 — 取消标志清理失败不应阻断续跑
+        logger.exception("续跑任务 %s 清理取消标志失败", task_id)
     await enqueue_task(str(task.id))
     await session.refresh(task)
     return task

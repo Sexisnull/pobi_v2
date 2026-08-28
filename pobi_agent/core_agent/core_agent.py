@@ -2,12 +2,11 @@
 # Licensed under the GNU Affero General Public License v3
 # See LICENSE file for full license information.
 
-"""Core agent implementation using LiteLLM and Instructor.
+"""Core agent implementation backed by the platform unified LLM layer.
 
-- Uses LiteLLM for universal model access
-- Uses Instructor for structured output
+- All LLM interactions go through ``pobi_v2.llm`` (unified abstraction layer),
+  which owns litellm routing, retry, structured output and error normalization
 - Auto-generates tool schemas from function signatures
-- Implements retry logic with tenacity
 - Tracks usage with simple counters
 - Integrates OpenTelemetry for observability
 """
@@ -17,36 +16,16 @@ import json
 import inspect
 import asyncio
 import os
-from typing import Callable, Type, Any, cast
+from typing import Callable, Type, Any
 from rich.console import Console
 from rich.panel import Panel
 from pydantic import BaseModel, Field
 from pydantic_ai import RunUsage
 from opentelemetry import trace
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-    RetryError
-)
-from litellm.exceptions import (
-    RateLimitError as LiteLLMRateLimitError,
-    ServiceUnavailableError,
-    Timeout as LiteLLMTimeout,
-    APIConnectionError as LiteLLMConnectionError,
-    ContentPolicyViolationError,
-)
+from pobi_agent.config.settings import ModelSpec
 from pobi_agent.logging import get_module_logger
 from . import (
     UsageLimitExceeded,
-    LLMError,
-    RateLimitError as CoreRateLimitError,
-    QuotaExceededError,
-    AuthenticationError,
-    ConnectionError as CoreConnectionError,
-    ModelNotFoundError,
-    InvalidRequestError,
 )
 from pobi_agent.hooks import get_event_hooks
 
@@ -88,21 +67,6 @@ console = Console(force_terminal=True, stderr=True)
 # 单工具连续失败重试上限：当同一工具连续失败达到该次数时，向 LLM 注入明确错误阻断无限重试，
 # 避免环境性错误（如浏览器不可用）让 LLM 在单次迭代内空耗至 job_timeout。
 MAX_TOOL_CONSECUTIVE_FAILURES = 5
-
-try:
-    import litellm
-    from litellm import acompletion
-    # Suppress litellm debug info
-    cast(Any, litellm).suppress_debug_info = True
-    LITELLM_AVAILABLE = True
-except ImportError:
-    LITELLM_AVAILABLE = False
-
-try:
-    import instructor
-    INSTRUCTOR_AVAILABLE = True
-except ImportError:
-    INSTRUCTOR_AVAILABLE = False
 
 try:
     from aiolimiter import AsyncLimiter
@@ -148,13 +112,13 @@ class AgentResult(BaseModel):
 
 
 class CoreAgent:
-    """Core agent implementation using LiteLLM and Instructor.
+    """Core agent implementation backed by the unified LLM layer.
 
     Philosophy: Simplest implementation that works.
     - No unnecessary abstractions
     - Plain functions for tools
     - Simple counters for usage tracking
-    - Direct use of libraries as intended
+    - All LLM calls delegate to the pobi_v2.llm unified abstraction layer
     """
 
     _concurrency_semaphores: dict[str, asyncio.Semaphore] = {}
@@ -183,9 +147,6 @@ class CoreAgent:
             rate_limit_rpm: Rate limit in requests per minute (default: 60)
             name: Name of the agent for logging (default: "agent")
         """
-        if not LITELLM_AVAILABLE:
-            raise ImportError("litellm is required. Install with: pip install litellm")
-
         self.name = name
         self.model = model
         self.instructions = instructions
@@ -211,21 +172,26 @@ class CoreAgent:
         self.prompt_tokens = 0
         self.completion_tokens = 0
 
-        # Instructor client for structured output
-        # We always *attempt* to use Instructor when available and an output_schema
-        # is provided, but will gracefully fall back to manual JSON extraction
-        # if the Instructor call fails for any reason.
-        # Only use structured output for actual Pydantic BaseModel subclasses,
-        # not plain types like str, int, etc.
-        _is_pydantic_schema = (
-            isinstance(output_schema, type) and issubclass(output_schema, BaseModel)
-        )
-        if INSTRUCTOR_AVAILABLE and output_schema and _is_pydantic_schema:
-            self.instructor_client = instructor.from_litellm(acompletion)
+        # 结构化输出统一由平台 LLM 抽象层 pobi_v2.llm.complete_json 承担
+        # （instructor 强制 schema），失败时 _extract_structured 回退 manual JSON。
+
+    def _build_model_spec(self) -> ModelSpec:
+        """把内核 model/api_key/api_base 构造成统一层 ``ModelSpec``。
+
+        统一层以 ``ModelSpec`` 为唯一模型载体（provider/model_name/api_key/base_url），
+        CoreAgent 收到的 ``model`` 为 ``"provider/model"`` 字符串，此处拆解后
+        交给 ``pobi_v2.llm`` 消费，凭证沿用构造传入的 api_key/api_base。
+        """
+        if "/" in self.model:
+            provider, model_name = self.model.split("/", 1)
         else:
-            self.instructor_client = None
-            if output_schema and not INSTRUCTOR_AVAILABLE and _is_pydantic_schema:
-                logger.warning("instructor not available, structured output disabled")
+            provider, model_name = "openai", self.model
+        return ModelSpec(
+            provider=provider,
+            model_name=model_name,
+            api_key=self.api_key,
+            base_url=self.api_base,
+        )
 
     def _get_concurrency_limiter(self, phase: str | None = None) -> asyncio.Semaphore | None:
         """Return a shared concurrency limiter for this backend/model.
@@ -446,25 +412,23 @@ class CoreAgent:
 
             self.request_count += 1
 
-            # Record usage
-            if hasattr(response, 'usage') and response.usage:
-                usage = response.usage
-                prompt_tok = getattr(usage, 'prompt_tokens', 0)
-                completion_tok = getattr(usage, 'completion_tokens', 0)
-                total_tok = getattr(usage, 'total_tokens', 0) or (prompt_tok + completion_tok)
+            # Record usage（统一层返回 UsageRecord）
+            if response.usage:
+                prompt_tok = response.usage.prompt_tokens or 0
+                completion_tok = response.usage.completion_tokens or 0
+                total_tok = response.usage.total_tokens or (prompt_tok + completion_tok)
 
                 self.prompt_tokens += prompt_tok
                 self.completion_tokens += completion_tok
                 self.total_tokens += total_tok
 
-            # Add assistant message to history
-            choice = response.choices[0]
-            content = choice.message.content or ""
+            # Add assistant message to history（统一层已解包 content/thinking）
+            content = response.content
 
             # Extract thinking/reasoning content from extended-thinking models
-            # LiteLLM surfaces this as `reasoning_content` on the message object
-            # (works for Anthropic Claude, DeepSeek, and other thinking models).
-            thinking_content = getattr(choice.message, "reasoning_content", None) or ""
+            # 统一层已把 litellm 的 `reasoning_content` 提取到 LLMResponse.thinking_content
+            # （覆盖 Anthropic Claude、DeepSeek 等思考模型）。
+            thinking_content = response.thinking_content
 
             assistant_message = {
                 "role": "assistant",
@@ -476,7 +440,7 @@ class CoreAgent:
             if thinking_content:
                 assistant_message["thinking_content"] = thinking_content
 
-            tool_calls = getattr(choice.message, "tool_calls", None) or []
+            tool_calls = response.tool_calls or []
             llm_trace_full = self._build_llm_trace_output(content, thinking_content, tool_calls)
             llm_trace_attr = self._truncate_for_span_attr(llm_trace_full)
 
@@ -542,7 +506,7 @@ class CoreAgent:
                     agent_name=self.name,
                     response_text=content,
                     thinking_text=thinking_content or None,
-                    usage=getattr(response, "usage", None),
+                    usage=response.usage,
                 )
 
                 # Emit agent thought event for CLI (include thinking if present)
@@ -557,30 +521,21 @@ class CoreAgent:
                 )
 
             # Add tool calls if present
-            if hasattr(choice.message, 'tool_calls') and choice.message.tool_calls:
-                tool_names = [tc.function.name for tc in choice.message.tool_calls]
+            if response.tool_calls:
+                tool_names = [tc["function"]["name"] for tc in response.tool_calls]
                 try:
                     console.print(
                         f"[bold yellow][LLM Tool Calls][/bold yellow] {', '.join(tool_names)}"
                     )
                 except BlockingIOError:
                     pass
-                assistant_message["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        }
-                    }
-                    for tc in choice.message.tool_calls
-                ]
+                # 统一层已返回 OpenAI 兼容 dict 格式，直接并入历史
+                assistant_message["tool_calls"] = response.tool_calls
 
             messages.append(assistant_message)
 
             # Check if done
-            if choice.finish_reason == "stop":
+            if response.finish_reason == "stop":
                 try:
                     console.print(
                         f"[bold white on dark_green][LLM] Finished[/bold white on dark_green] "
@@ -600,8 +555,8 @@ class CoreAgent:
                 break
 
             # Execute tool calls if present
-            if hasattr(choice.message, 'tool_calls') and choice.message.tool_calls:
-                tool_results = await self._execute_tools(choice.message.tool_calls, deps)
+            if response.tool_calls:
+                tool_results = await self._execute_tools(response.tool_calls, deps)
                 messages.extend(tool_results)
                 self.tool_call_count += len(tool_results)
 
@@ -823,123 +778,52 @@ class CoreAgent:
         return {"type": "string", "description": param_name}
 
     async def _call_llm_with_retry(self, messages: list[dict], tools: list[dict] | None) -> Any:
-        """Call LiteLLM with retry logic using tenacity.
+        """通过平台统一 LLM 抽象层发起补全。
 
-        Retries on:
-        - RateLimitError (rate limiting)
-        - ServiceUnavailableError (503)
-        - Timeout errors
-        - Connection errors
+        统一层（``pobi_v2.llm.client.complete``）内部完成模型解析、全局限流、
+        tenacity 重试（作用于归一后的 RateLimit / Connection）与异常归一（抛内核
+        ``pobi_agent.core_agent`` 异常体系），返回统一 ``LLMResponse``
+        （content / thinking / tool_calls / usage / finish_reason）。
 
         Args:
-            messages: List of messages
+            messages: OpenAI 原生 dict 消息列表（含 tool_calls / tool 角色等）
             tools: List of tool schemas (optional)
 
         Returns:
-            LiteLLM response object
+            统一 ``LLMResponse`` 对象
 
         Raises:
-            CoreRateLimitError: When rate limited and retries exhausted
-            QuotaExceededError: When API quota/billing limit exceeded
-            AuthenticationError: When API authentication fails
-            CoreConnectionError: When connection to API fails
-            ModelNotFoundError: When requested model not available
-            InvalidRequestError: When request is invalid
-            LLMError: For other LLM-related errors
+            统一层归一后的内核异常（RateLimitError / QuotaExceededError /
+            AuthenticationError / ConnectionError / ModelNotFoundError /
+            InvalidRequestError / LLMError）
         """
-        # Get litellm exception types (they're in litellm.exceptions)
-        try:
+        # 惰性 import：pobi_v2 为平台层，core_agent 为内核，避免顶层互相引用。
+        from pobi_v2.llm.client import complete
+        from pobi_v2.llm.types import LLMRequest
 
-            retryable_exceptions = (
-                LiteLLMRateLimitError,
-                ServiceUnavailableError,
-                LiteLLMTimeout,
-                LiteLLMConnectionError,
-            )
-        except ImportError:
-            # Fallback for older litellm versions
-            retryable_exceptions = (Exception,)
-
-        # Tighten retries so a single stuck request cannot balloon total runtime:
-        # bounded attempt count + capped exponential backoff, both env-overridable.
-        max_retries = int(os.getenv("DEADEND_LLM_MAX_RETRIES", "3").strip() or "3")
-        retry_max_wait = int(os.getenv("DEADEND_LLM_RETRY_MAX_WAIT", "4").strip() or "4")
-
-        def log_retry(retry_state):
-            """Log retry attempts."""
-            attempt = retry_state.attempt_number
-            exception = retry_state.outcome.exception() if retry_state.outcome else None
-            exc_name = type(exception).__name__ if exception else "Unknown"
-            wait_time = retry_state.next_action.sleep if retry_state.next_action else 0
-            logger.warning(
-                "Retry %d/%d for %s - waiting %.1fs before next attempt",
-                attempt, max_retries, exc_name, wait_time
-            )
-
-        @retry(
-            stop=stop_after_attempt(max_retries),
-            wait=wait_exponential(multiplier=1, min=1, max=retry_max_wait),
-            retry=retry_if_exception_type(retryable_exceptions),
-            reraise=True,
-            before_sleep=log_retry,
+        req = LLMRequest(
+            model=self._build_model_spec(),
+            messages=messages,
+            tools=tools,
         )
-        async def _call():
-            kwargs = {
-                "model": self.model,
-                "messages": messages,
-            }
-
-            if tools:
-                kwargs["tools"] = tools
-
-            # For custom endpoints, we need api_key and api_base
-            if self.api_base:
-                kwargs["api_base"] = self.api_base
-
-            # API key handling
-            if self.api_key:
-                kwargs["api_key"] = self.api_key
-            elif self.api_base and self.model.startswith("openai/"):
-                # For custom OpenAI-compatible endpoints without explicit api_key
-                # Use a placeholder - some local models don't require authentication
-                kwargs["api_key"] = "sk-dummy-key-for-local-model"
-
+        try:
             if self.concurrent_limiter is not None:
                 async with self.concurrent_limiter:
-                    return await acompletion(**kwargs)
-            return await acompletion(**kwargs)
+                    return await complete(req)
+            return await complete(req)
+        except Exception as exc:
+            # 统一层已把 litellm 异常归一为内核异常；此处仅补发 CLI 可见的
+            # 错误事件（保持原有可观测性），随后原样上抛。
+            self._emit_llm_error_event(exc)
+            raise
 
-        try:
-            return await _call()
-        except ContentPolicyViolationError as e:
-            self._handle_content_policy_violation(e)
-        except RetryError as e:
-            # Extract the original exception from RetryError so we surface the real LLM error
-            original = e.last_attempt.exception() if e.last_attempt else None
-            exc_to_handle = original if isinstance(original, Exception) else e
-            self._handle_llm_error(exc_to_handle)
-        except Exception as e:
-            self._handle_llm_error(e)
+    def _emit_llm_error_event(self, error: Exception) -> None:
+        """向事件总线补发 LLM 错误事件（CLI 可见），不改变异常流。
 
-    def _handle_llm_error(self, error: Exception) -> None:
-        """Convert LLM errors to user-friendly exceptions.
-
-        Emits the error to the event bus so the CLI can display it (e.g. litellm.APIConnectionError, 429 body).
-
-        Args:
-            error: The original exception
-
-        Raises:
-            Appropriate CoreAgent exception type
+        统一层已完成异常归一，此处只负责把错误明细发射给上层展示。
         """
-        error_str = str(error).lower()
-        error_msg = str(error)
-
-        # Log the full error (no truncation) so logs show e.g. 429 body, connection details
-        logger.error("LLM error: %s", error_msg)
-
-        # Emit to CLI so user sees the error (e.g. rate limit, connection, auth)
         try:
+            logger.error("LLM error: %s", error)
             hooks = get_event_hooks()
             session_id = getattr(self, "_last_session_id", "unknown")
             task = getattr(self, "_last_task", "")
@@ -948,98 +832,10 @@ class CoreAgent:
                 agent_name=self.name,
                 task=task,
                 error_type=type(error).__name__,
-                error_message=error_msg,
+                error_message=str(error),
             )
         except Exception:  # do not let hook failures mask the LLM error
             pass
-
-        # Check for quota exceeded (billing issue - don't retry)
-        if "insufficient_quota" in error_str or "exceeded your current quota" in error_str:
-            raise QuotaExceededError(
-                "API quota exceeded. " + error_msg,
-                original_error=error
-            )
-
-        # Check for rate limit (temporary - already retried); include full provider message (e.g. 429 body)
-        if "rate_limit" in error_str or "rate limit" in error_str or "429" in error_str:
-            raise CoreRateLimitError(
-                "Rate limit exceeded. " + error_msg,
-                original_error=error
-            )
-
-        # Check for authentication errors
-        if "auth" in error_str or "api_key" in error_str or "401" in error_str or "invalid_api_key" in error_str:
-            raise AuthenticationError(
-                "API authentication failed. " + error_msg,
-                original_error=error
-            )
-
-        # Check for model not found
-        if "model" in error_str and ("not found" in error_str or "does not exist" in error_str or "404" in error_str):
-            raise ModelNotFoundError(
-                f"Model '{self.model}' not found. " + error_msg,
-                original_error=error
-            )
-
-        # Check for connection errors
-        if "connection" in error_str or "connect" in error_str or "timeout" in error_str or "unreachable" in error_str:
-            raise CoreConnectionError(
-                "Failed to connect to the API. " + error_msg,
-                original_error=error
-            )
-
-        # Check for bad request
-        if "bad request" in error_str or "invalid" in error_str or "400" in error_str:
-            raise InvalidRequestError(
-                "Invalid request to the API: " + error_msg,
-                original_error=error
-            )
-
-        # Generic LLM error (include full message so user sees provider detail)
-        raise LLMError(
-            "LLM request failed: " + error_msg,
-            original_error=error
-        )
-
-    def _handle_content_policy_violation(self, error: ContentPolicyViolationError) -> None:
-        """Handle Azure/OpenAI content policy violations with detailed logging.
-
-        This surfaces provider-specific content filter information (when available)
-        and then raises a user-facing InvalidRequestError.
-        """
-        details = getattr(error, "provider_specific_fields", None) or {}
-        innererror = details.get("innererror") if isinstance(details, dict) else None
-
-        if innererror:
-            content_filter_result = innererror.get("content_filter_result", {}) or {}
-
-            # Access content filter results for common categories
-            hate_filtered = (content_filter_result.get("hate") or {}).get("filtered")
-            violence_severity = (content_filter_result.get("violence") or {}).get("severity")
-            sexual_filtered = (content_filter_result.get("sexual") or {}).get("filtered")
-            code = innererror.get("code")
-
-            log_msg = (
-                "Content policy violation from provider. "
-                f"code={code}, hate_filtered={hate_filtered}, "
-                f"violence_severity={violence_severity}, sexual_filtered={sexual_filtered}"
-            )
-
-            logger.warning(log_msg)
-            try:
-                console.print(Panel(
-                    log_msg,
-                    title="[bold red]Content Policy Violation[/bold red]",
-                    border_style="red",
-                ))
-            except BlockingIOError:
-                # If stdout/stderr is blocked, we still raise the error below
-                pass
-
-        raise InvalidRequestError(
-            "Request blocked by provider content policy. Please adjust the prompt/content and try again.",
-            original_error=error,
-        )
 
     async def _execute_tools(self, tool_calls: list, deps: Any) -> list[dict]:
         """Execute tool calls with dependency injection.
@@ -1051,8 +847,8 @@ class CoreAgent:
         results = []
 
         for tc in tool_calls:
-            function_name = tc.function.name
-            function_args_str = tc.function.arguments
+            function_name = tc["function"]["name"]
+            function_args_str = tc["function"]["arguments"]
             span_attrs = {
                 _TOOL_ATTR_KIND: "TOOL",
                 _TOOL_ATTR_NAME: function_name,
@@ -1070,7 +866,7 @@ class CoreAgent:
                     tool_span.set_attribute(_TOOL_ATTR_OUTPUT, f"Error: Tool '{function_name}' not found")
                     tool_span.set_status(trace.Status(trace.StatusCode.ERROR))
                     results.append({
-                        "tool_call_id": tc.id,
+                        "tool_call_id": tc["id"],
                         "role": "tool",
                         "name": function_name,
                         "content": f"Error: Tool '{function_name}' not found"
@@ -1088,7 +884,7 @@ class CoreAgent:
                     except BlockingIOError:
                         pass
                     results.append({
-                        "tool_call_id": tc.id,
+                        "tool_call_id": tc["id"],
                         "role": "tool",
                         "name": function_name,
                         "content": f"Error executing tool: {err_msg}"
@@ -1141,7 +937,7 @@ class CoreAgent:
                     tool_span.set_status(trace.Status(trace.StatusCode.OK))
 
                     results.append({
-                        "tool_call_id": tc.id,
+                        "tool_call_id": tc["id"],
                         "role": "tool",
                         "name": function_name,
                         "content": serialized
@@ -1156,7 +952,7 @@ class CoreAgent:
                     except BlockingIOError:
                         pass
                     results.append({
-                        "tool_call_id": tc.id,
+                        "tool_call_id": tc["id"],
                         "role": "tool",
                         "name": function_name,
                         "content": f"Error executing tool: {err_msg}"
@@ -1215,7 +1011,7 @@ class CoreAgent:
         return None
 
     async def _extract_structured(self, messages: list[dict]) -> BaseModel:
-        """Extract structured output using Instructor or manual JSON parsing.
+        """Extract structured output via unified LLM layer or manual JSON parsing.
 
         Args:
             messages: Full message history
@@ -1229,47 +1025,34 @@ class CoreAgent:
         if not self.output_schema:
             raise ValueError("Output schema not configured")
 
-        # First try Instructor if available
-        if self.instructor_client:
+        # First try the unified LLM abstraction layer (instructor-backed structured output).
+        # 惰性 import：统一层 pobi_v2.llm.complete_json 内部用 instructor 强制 schema。
+        try:
+            from pobi_v2.llm.client import complete_json
+            from pobi_v2.llm.types import LLMRequest
+
+            req = LLMRequest(
+                model=self._build_model_spec(),
+                messages=messages,
+            )
+            response = await complete_json(req, self.output_schema)
             try:
-                kwargs = {
-                    "model": self.model,
-                    "messages": messages,
-                    "response_model": self.output_schema,
-                }
-
-                # Ollama requires the 'format' parameter for structured output;
-                # other providers (OpenAI, Anthropic, etc.) don't recognise it.
-                if self.model.startswith("ollama") or self.model.startswith("ollama_chat"):
-                    kwargs["format"] = "json"
-
-
-                if self.api_base:
-                    kwargs["api_base"] = self.api_base
-
-                if self.api_key:
-                    kwargs["api_key"] = self.api_key
-                elif self.api_base and self.model.startswith("openai/"):
-                    kwargs["api_key"] = "sk-dummy-key-for-local-model"
-
-                response = await self.instructor_client.chat.completions.create(**kwargs)
-                try:
-                    console.print(f"[bold green][Structured Output OK][/bold green] {type(response).__name__}")
-                except BlockingIOError:
-                    pass
-                return response
-            except Exception as instructor_error:
-                # Any failure in Instructor structured output should fall back to
-                # manual JSON extraction so that providers with partial support
-                # don't break the agent.
-                try:
-                    console.print(
-                        "[bold yellow][Instructor Failed][/bold yellow] "
-                        f"{str(instructor_error)[:200]} - falling back to manual JSON extraction..."
-                    )
-                except BlockingIOError:
-                    pass
-                # Fall through to manual extraction below
+                console.print(f"[bold green][Structured Output OK][/bold green] {type(response).__name__}")
+            except BlockingIOError:
+                pass
+            return response
+        except Exception as instructor_error:
+            # Any failure in the unified structured output should fall back to
+            # manual JSON extraction so that providers with partial support
+            # don't break the agent.
+            try:
+                console.print(
+                    "[bold yellow][Structured Output Failed][/bold yellow] "
+                    f"{str(instructor_error)[:200]} - falling back to manual JSON extraction..."
+                )
+            except BlockingIOError:
+                pass
+            # Fall through to manual extraction below
 
         # Manual JSON extraction fallback
         # Ask the LLM to output JSON and parse it ourselves
@@ -1365,23 +1148,17 @@ Output ONLY valid JSON, no other text. The JSON must match the schema exactly.""
         extraction_messages = messages.copy()
         extraction_messages.append({"role": "user", "content": json_prompt})
 
-        kwargs = {
-            "model": self.model,
-            "messages": extraction_messages,
-            "response_format": {"type": "json_object"},
-        }
-        if self.api_base:
-            kwargs["api_base"] = self.api_base
-        if self.api_key:
-            kwargs["api_key"] = self.api_key
-        elif self.api_base and self.model.startswith("openai/"):
-            kwargs["api_key"] = "sk-dummy-key-for-local-model"
+        # 经统一 LLM 抽象层走 json_mode（response_format=json_object）
+        from pobi_v2.llm.client import complete
+        from pobi_v2.llm.types import LLMRequest
 
-        try:
-            response = await acompletion(**kwargs)
-        except ContentPolicyViolationError as e:
-            self._handle_content_policy_violation(e)
-        content = response.choices[0].message.content or ""
+        req = LLMRequest(
+            model=self._build_model_spec(),
+            messages=extraction_messages,
+            json_mode=True,
+        )
+        response = await complete(req)
+        content = response.content
 
         result = self._try_parse_json_from_content(content)
         if result:

@@ -36,13 +36,19 @@ class LLMMessage:
 
 @dataclass
 class LLMRequest:
-    """一次 LLM 调用的完整请求。"""
+    """一次 LLM 调用的完整请求。
+
+    ``messages`` 兼容两种输入：``LLMMessage`` 列表（平台简单场景），或 OpenAI
+    原生 ``dict`` 消息列表（agent 完整对话历史，含 ``tool_calls`` / ``tool``
+    角色 / ``thinking_content`` 等字段，原样透传 litellm）。
+    """
 
     model: ModelSpec
-    messages: list[LLMMessage]
+    messages: list[LLMMessage] | list[dict]
     temperature: float = 0.7
     max_tokens: Optional[int] = None
     json_mode: bool = False
+    tools: Optional[list[dict]] = None
 
 
 @dataclass
@@ -56,7 +62,12 @@ class UsageRecord:
 
 @dataclass
 class LLMResponse:
-    """LLM 调用的结构化响应。"""
+    """LLM 调用的结构化响应。
+
+    ``tool_calls`` 采用 OpenAI 兼容格式（``[{"id","type","function":{"name","arguments"}}]``），
+    ``thinking_content`` 承载扩展推理模型的思考内容（litellm 的 ``reasoning_content``）。
+    ``raw`` 保留 litellm 原始响应供深度消费。
+    """
 
     content: str
     model: str
@@ -64,6 +75,8 @@ class LLMResponse:
     raw: Any = None
     finish_reason: Optional[str] = None
     latency_ms: float = 0.0
+    thinking_content: str = ""
+    tool_calls: Optional[list[dict]] = None
 
 
 class LLMError(RuntimeError):
