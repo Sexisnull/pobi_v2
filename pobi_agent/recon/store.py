@@ -786,6 +786,250 @@ class ReconStore:
                 await pg.execute(stmt)
             await pg.commit()
 
+    async def sync_local_artifacts_to_pg(
+        self,
+        task_root: Path,
+        target_id: str,
+        tenant_id: str,
+        task_id: str,
+        async_session_factory,
+    ) -> None:
+        """任务终态落库：将本地非认证 artifacts 沉淀到 PG 三张聚合表。
+
+        复用 finally 出口（deadend_runner），在 upsert_to_pg 之后调用一次。
+        此时任务已终态，本地文件定型、完整可信。仅 upsert 非认证类产物：
+        - task_memory_agg：agent/<agent_id>/<session_id>/memory/summaries/<role>.md
+        - task_context_agg：agent/run_context/context.txt
+        - task_metrics_agg：metrics/metrics.json + rag/ 索引引用名
+        显式跳过 agent/auth_context/*（每次重认证，凭据不入 PG）。
+
+        幂等 upsert（INSERT ... ON CONFLICT DO UPDATE）：冲突取本次列表、
+        刷新 last_seen，行收敛为唯一约束维度。文件缺失（如摘要未生成）优雅跳过。
+
+        Args:
+            task_root: 任务本地目录（tasks/<task_id>）。
+            target_id: 授权目标 UUID（PG 聚合维度）。
+            tenant_id: 租户 UUID（多租户隔离）。
+            task_id: 来源任务 UUID（追加到 source_tasks）。
+            async_session_factory: AsyncSessionLocal 工厂（注入以避免循环导入）。
+        """
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        from uuid import UUID as _UUID
+
+        from pobi_v2.db.recon_models import (
+            TaskContextAgg,
+            TaskMemoryAgg,
+            TaskMetricsAgg,
+        )
+
+        tgt = _UUID(str(target_id))
+        ten = _UUID(str(tenant_id))
+        tk = str(task_id)
+        root = Path(task_root)
+        now = _utcnow()
+
+        # --- 读取本地文件（一次性，IO 可控） ---
+        memory_rows: List[Dict[str, Any]] = []
+        summaries_dir = root / "agent"
+        if summaries_dir.exists():
+            # 遍历 agent/<agent_id>/<session_id>/memory/summaries/<role>.md
+            for md in summaries_dir.glob("*/memory/summaries/*.md"):
+                role = md.stem
+                text = md.read_text(encoding="utf-8", errors="replace").strip()
+                if not text:
+                    continue
+                memory_rows.append(
+                    {
+                        "target_id": tgt,
+                        "tenant_id": ten,
+                        "agent_role": role,
+                        "summary_text": text,
+                        "source_tasks": [tk],
+                        "sensitivity": "internal",
+                        "first_seen": now,
+                        "last_seen": now,
+                    }
+                )
+
+        context_text = ""
+        context_file = root / "agent" / "run_context" / "context.txt"
+        if context_file.exists():
+            context_text = context_file.read_text(
+                encoding="utf-8", errors="replace"
+            ).strip()
+
+        metrics_json: Dict[str, Any] = {}
+        metrics_file = root / "metrics" / "metrics.json"
+        if metrics_file.exists():
+            try:
+                import json
+
+                metrics_json = json.loads(
+                    metrics_file.read_text(encoding="utf-8", errors="replace") or "{}"
+                )
+            except (json.JSONDecodeError, OSError):
+                metrics_json = {}
+
+        # rag 索引仅存引用名（不存向量二进制），扫描 rag/ 下 *.db
+        rag_index_ref: List[str] = []
+        rag_dir = root / "rag"
+        if rag_dir.exists():
+            rag_index_ref = sorted(
+                str(p.relative_to(root)) for p in rag_dir.rglob("*.db")
+            )
+
+        async with async_session_factory() as pg:
+            if memory_rows:
+                stmt = pg_insert(TaskMemoryAgg).values(memory_rows)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["target_id", "agent_role"],
+                    set_={
+                        "summary_text": stmt.excluded.summary_text,
+                        "source_tasks": stmt.excluded.source_tasks,
+                        "sensitivity": stmt.excluded.sensitivity,
+                        "last_seen": _utcnow(),
+                    },
+                )
+                await pg.execute(stmt)
+            if context_text:
+                stmt = pg_insert(TaskContextAgg).values(
+                    [
+                        {
+                            "target_id": tgt,
+                            "tenant_id": ten,
+                            "content_text": context_text,
+                            "source_tasks": [tk],
+                            "sensitivity": "internal",
+                            "first_seen": now,
+                            "last_seen": now,
+                        }
+                    ]
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["target_id"],
+                    set_={
+                        "content_text": stmt.excluded.content_text,
+                        "source_tasks": stmt.excluded.source_tasks,
+                        "sensitivity": stmt.excluded.sensitivity,
+                        "last_seen": _utcnow(),
+                    },
+                )
+                await pg.execute(stmt)
+            # metrics 始终 upsert（即使为空 json，也记录该目标已跑过任务）
+            stmt = pg_insert(TaskMetricsAgg).values(
+                [
+                    {
+                        "target_id": tgt,
+                        "tenant_id": ten,
+                        "metrics_json": metrics_json,
+                        "rag_index_ref": rag_index_ref,
+                        "source_tasks": [tk],
+                        "first_seen": now,
+                        "last_seen": now,
+                    }
+                ]
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["target_id"],
+                set_={
+                    "metrics_json": stmt.excluded.metrics_json,
+                    "rag_index_ref": stmt.excluded.rag_index_ref,
+                    "source_tasks": stmt.excluded.source_tasks,
+                    "last_seen": _utcnow(),
+                },
+            )
+            await pg.execute(stmt)
+            await pg.commit()
+
+    async def seed_local_artifacts(
+        self,
+        task_root: Path,
+        target_id: str,
+        tenant_id: str,
+        async_session_factory,
+    ) -> Dict[str, Any]:
+        """新任务启动期复用：按 target_id 从 PG 沉淀层拉取历史，写回本地文件。
+
+        供 ContextEngine 与 _persist_agent_summary 启动即读到历史经验。
+        返回摘要 dict（memory/context/metrics 命中情况），上层可用于 prompt 注入。
+
+        Args:
+            task_root: 新任务本地目录（tasks/<task_id>），历史沉淀写回此处。
+            target_id: 授权目标 UUID（PG 聚合维度）。
+            tenant_id: 租户 UUID（多租户隔离）。
+            async_session_factory: AsyncSessionLocal 工厂（注入以避免循环导入）。
+
+        Returns:
+            dict: {"memory": {role: text}, "context": str, "metrics": dict,
+                   "rag_index_ref": list, "seeded": bool}
+        """
+        from uuid import UUID as _UUID
+
+        from pobi_v2.db.recon_models import (
+            TaskContextAgg,
+            TaskMemoryAgg,
+            TaskMetricsAgg,
+        )
+
+        tgt = _UUID(str(target_id))
+        ten = _UUID(str(tenant_id))
+        result: Dict[str, Any] = {
+            "memory": {},
+            "context": "",
+            "metrics": {},
+            "rag_index_ref": [],
+            "seeded": False,
+        }
+        async with async_session_factory() as pg:
+            mem_aggs = (
+                await pg.execute(
+                    select(TaskMemoryAgg).where(
+                        TaskMemoryAgg.target_id == tgt,
+                        TaskMemoryAgg.tenant_id == ten,
+                    )
+                )
+            ).scalars().all()
+            ctx_aggs = (
+                await pg.execute(
+                    select(TaskContextAgg).where(
+                        TaskContextAgg.target_id == tgt,
+                        TaskContextAgg.tenant_id == ten,
+                    )
+                )
+            ).scalars().all()
+            mtr_aggs = (
+                await pg.execute(
+                    select(TaskMetricsAgg).where(
+                        TaskMetricsAgg.target_id == tgt,
+                        TaskMetricsAgg.tenant_id == ten,
+                    )
+                )
+            ).scalars().all()
+
+        if not (mem_aggs or ctx_aggs or mtr_aggs):
+            return result
+
+        # 写回本地：memory 摘要 + context.txt（仅当本地尚无该内容时写入，避免覆盖新任务自身产出）
+        root = Path(task_root)
+        summaries_dir = root / "agent" / "memory" / "summaries"
+        for m in mem_aggs:
+            result["memory"][m.agent_role] = m.summary_text
+            dest = summaries_dir / f"{m.agent_role}.md"
+            if not dest.exists():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(m.summary_text, encoding="utf-8")
+        if ctx_aggs:
+            result["context"] = ctx_aggs[0].content_text
+            ctx_dest = root / "agent" / "run_context" / "context.txt"
+            if not ctx_dest.exists() and ctx_aggs[0].content_text:
+                ctx_dest.parent.mkdir(parents=True, exist_ok=True)
+                ctx_dest.write_text(ctx_aggs[0].content_text, encoding="utf-8")
+        if mtr_aggs:
+            result["metrics"] = mtr_aggs[0].metrics_json or {}
+            result["rag_index_ref"] = mtr_aggs[0].rag_index_ref or []
+        result["seeded"] = True
+        return result
+
     async def seed_from_pg(
         self,
         target_id: str,

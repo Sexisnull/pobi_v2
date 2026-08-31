@@ -1010,6 +1010,28 @@ IMPORTANT:
                         "RECON 基线续扫：无新增，历史已覆盖 %d 条资产，本轮跳过",
                         seed_result.already_covered_count,
                     )
+                # 本地文件沉淀层复用（设计文档 §本地文件沉淀层落库到 PG）：
+                # 从 PG 聚合层按 target_id 拉取历史经验（memory/context/metrics），
+                # 写回本地文件，使 ContextEngine 与 _persist_agent_summary 启动即读到。
+                # 与 seed_from_pg 同源触发；失败仅记 warning 不阻断启动。
+                try:
+                    from pathlib import Path as _Path
+
+                    artifact_seed = await self.recon_store.seed_local_artifacts(
+                        task_root=_Path(self.recon_store.db_path).parent,
+                        target_id=str(self.target_id),
+                        tenant_id=str(self.tenant_id),
+                        async_session_factory=AsyncSessionLocal,
+                    )
+                    if artifact_seed and artifact_seed.get("seeded"):
+                        logger.info(
+                            "本地文件沉淀层复用完成：memory %d 项 / context %d 字符 / metrics %s",
+                            len(artifact_seed.get("memory", {})),
+                            len(artifact_seed.get("context", "")),
+                            "有" if artifact_seed.get("metrics") else "无",
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logging.warning("本地文件沉淀层复用失败（已忽略）: %s", exc)
             except Exception as exc:  # noqa: BLE001 - 预热失败不阻断主流程
                 logger.warning("RECON 基线续扫预热失败（已忽略）: %s", exc)
 

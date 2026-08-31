@@ -366,6 +366,16 @@ async def run_deadend_agent(
                         task_id=str(task_id),
                         async_session_factory=_async_session_factory(),
                     )
+                    # 本地文件沉淀层终态落库（设计文档 §本地文件沉淀层落库到 PG）：
+                    # 将非认证类本地文件聚合进 PG 三表，供后续同目标新任务 seed 复用。
+                    # 与 upsert_to_pg 同源触发、同源失败降级；认证文件不落库。
+                    await store.sync_local_artifacts_to_pg(
+                        task_root=_Path(task_root),
+                        target_id=str(task.target_id),
+                        tenant_id=str(task.tenant_id),
+                        task_id=str(task_id),
+                        async_session_factory=_async_session_factory(),
+                    )
                 finally:
                     store.close()
         except Exception as exc:  # noqa: BLE001

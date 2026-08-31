@@ -177,3 +177,107 @@ class ReconThreatEvidenceLink(Base):
 
     threat = relationship("ReconThreatAgg", back_populates="evidence_links")
     fact = relationship("ReconFactAgg", back_populates="evidence_links")
+
+
+# ----------------------------------------------------------------------
+# 本地文件沉淀层聚合表（v2.2，设计文档 §本地文件沉淀层落库到 PG）
+# ----------------------------------------------------------------------
+# 与 recon 聚合层平行的"任务经验沉淀层"：把 per-task 本地文件（Agent 记忆摘要、
+# 运行上下文、metrics、rag 索引元数据）以 target_id 为维度聚合进 PG，供后续同目标
+# 新任务启动期 seed 复用。认证类文件（agent/auth_context/*）不落库、每次重认证。
+# 三表均 sensitivity='internal' 明文、按 target_id+tenant_id 租户隔离、级联挂
+# targets/tenants，UNIQUE 约束保证跨任务 upsert 收敛（同一目标同键仅一行）。
+
+
+class TaskMemoryAgg(Base):
+    """task_memory_agg：按 (target_id, agent_role) 聚合的 Agent 经验摘要。
+
+    来源：tasks/<task_id>/agent/<agent_id>/<session_id>/memory/summaries/<role>.md
+    """
+
+    __tablename__ = "task_memory_agg"
+    __table_args__ = (
+        UniqueConstraint(
+            "target_id", "agent_role", name="uq_task_memory_agg_tgt_role"
+        ),
+        Index("ix_task_memory_agg_tenant", "tenant_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    target_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("targets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    agent_role: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    source_tasks: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    sensitivity: Mapped[str] = mapped_column(String(16), nullable=False, default="internal")
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    last_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    target = relationship("Target")
+
+
+class TaskContextAgg(Base):
+    """task_context_agg：按 target_id 聚合的运行上下文（context.txt 全文）。
+
+    来源：tasks/<task_id>/agent/run_context/context.txt
+    """
+
+    __tablename__ = "task_context_agg"
+    __table_args__ = (
+        UniqueConstraint("target_id", name="uq_task_context_agg_tgt"),
+        Index("ix_task_context_agg_tenant", "tenant_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    target_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("targets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    content_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    source_tasks: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    sensitivity: Mapped[str] = mapped_column(String(16), nullable=False, default="internal")
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    last_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    target = relationship("Target")
+
+
+class TaskMetricsAgg(Base):
+    """task_metrics_agg：按 target_id 聚合的会话指标 + RAG 索引引用。
+
+    来源：tasks/<task_id>/metrics/metrics.json + rag/<agent_id>/<session_id>/<target>.db
+    （rag 仅存元数据引用，不存向量二进制）。
+    """
+
+    __tablename__ = "task_metrics_agg"
+    __table_args__ = (
+        UniqueConstraint("target_id", name="uq_task_metrics_agg_tgt"),
+        Index("ix_task_metrics_agg_tenant", "tenant_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    target_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("targets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    metrics_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    rag_index_ref: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    source_tasks: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    last_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    target = relationship("Target")
