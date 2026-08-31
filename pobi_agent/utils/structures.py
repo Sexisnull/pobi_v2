@@ -10,13 +10,16 @@ injection containers, and task management structures.
 """
 
 import uuid
-from typing import Dict
+from typing import Dict, TYPE_CHECKING, Optional
 from dataclasses import dataclass
 from pydantic import BaseModel, Field, ConfigDict
 from pobi_agent.rag.sqlite_connector import SqliteRagConnector
 from pobi_agent.sandbox.sandbox import Sandbox
 from pobi_agent.models.registry import EmbedderClient
 from pobi_agent.utils.functions import truncate_string
+
+if TYPE_CHECKING:
+    from pobi_agent.context.context_engine import ContextEngine
 
 class CmdLog(BaseModel):
     """
@@ -149,6 +152,9 @@ class RequesterDeps:
     embedding_session_id: uuid.UUID | None = None
     memory_workspace_root: str | None = None
     memory_context: str = ""
+    # 足迹旁路写入通道：子 agent 工具层实时记录尝试（payload/结果）用，
+    # 由 executor 组装 deps 时注入；未注入时为 None，写入安全 no-op。
+    context: Optional["ContextEngine"] = None
 
 @dataclass
 class WebappreconDeps:

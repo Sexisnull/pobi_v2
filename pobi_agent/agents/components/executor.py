@@ -22,6 +22,7 @@ from pobi_agent.context import ContextEngine
 from pobi_agent.config.settings import ModelSpec
 from pobi_agent.tools.avfs.write import write_text
 from pobi_agent.utils.structures import MemoryWorkspaceDeps, WebappreconDeps, RequesterDeps, ShellDeps
+from pobi_agent.logging import logger
 
 
 class LogEvent(BaseModel):
@@ -773,8 +774,17 @@ class AgentExecutor:
                 if ctx.deps.requester_agent is None or ctx.deps.requester_deps is None:
                     return "Requester agent dependencies not configured."
                 memory_prefix = _memory_prompt_prefix(ctx.deps.memory_context)
+                # 证据驱动收敛：每次委派 requester 前注入失败足迹，提醒转向而非硬试
+                footprint_prefix = ""
+                try:
+                    if ctx.deps.context is not None:
+                        fp = ctx.deps.context.get_failed_footprint_summary()
+                        if fp:
+                            footprint_prefix = f"\n{fp}\n"
+                except Exception as _fp_exc:  # noqa: BLE001
+                    logger.debug("requester 足迹摘要注入失败（忽略）: %s", _fp_exc)
                 result = await ctx.deps.requester_agent.run(
-                    f"{memory_prefix}{prompt}",
+                    f"{memory_prefix}{footprint_prefix}{prompt}",
                     deps=ctx.deps.requester_deps,
                     message_history=ctx.deps.message_history,
                     usage=ctx.usage,
@@ -903,6 +913,13 @@ class AgentExecutor:
                 supervisor_prompt += f"## Persistent Memory Context:\n{supervisor_deps.memory_context}\n"
             if agent_context:
                 supervisor_prompt += f"## Traces: \n{agent_context}\n"
+            # 证据驱动收敛：注入失败足迹摘要，主控据此转向而非死磕同一攻击面
+            try:
+                footprint_summary = self.context.get_failed_footprint_summary()
+                if footprint_summary:
+                    supervisor_prompt += f"\n{footprint_summary}\n"
+            except Exception as _fp_exc:  # noqa: BLE001
+                logger.debug("足迹摘要注入失败（忽略）: %s", _fp_exc)
 
             result = await supervisor.run(
                 prompt=supervisor_prompt,

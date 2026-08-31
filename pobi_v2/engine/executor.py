@@ -293,7 +293,11 @@ async def _run_task_body(tid: UUID) -> dict:
                     await _publish_status_change(tid, TaskStatus.cancelled)
                     return {"task_id": task_id, "status": "cancelled"}
                 # 无取消请求却超时：视为真卡死，交给 run_task 兜底标记 failed。
-                raise
+                # 显式补充错误描述：裸 asyncio.TimeoutError 的 str() 为空，直接 raise
+                # 会导致 tasks.error 落库为空字符串，事后无法定位失败原因。
+                raise TimeoutError(
+                    f"DeadEndAgent 子超时熔断（{int(_AGENT_SUB_TIMEOUT)}s 内未收敛），疑似 agent 死循环"
+                ) from None
             except RuntimeError as exc:
                 if "沙箱" in str(exc) or "Docker" in str(exc):
                     # 无 Docker 沙箱：回退到不依赖沙箱的轻量实现，保证可运行

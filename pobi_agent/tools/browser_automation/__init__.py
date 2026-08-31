@@ -23,6 +23,51 @@ from pobi_agent.tools.browser.validate_refresh import auto_validate_before_consu
 __all__ = ["is_valid_request_detailed", "PlaywrightRequester"]
 
 
+def _extract_endpoint(raw_request: str) -> str:
+    """从原始 HTTP 请求第一行提取 METHOD + path（用于足迹归类）。"""
+    first = (raw_request or "").splitlines()[0] if raw_request else ""
+    parts = first.split()
+    if len(parts) >= 2:
+        return f"{parts[0]} {parts[1]}"
+    return first[:80]
+
+
+def _record_payload_footprint(
+    ctx: RunContext[RequesterDeps],
+    endpoint: str,
+    payload: str,
+    status: str,
+    last_result: str = "",
+    success: bool = False,
+) -> None:
+    """旁路记录 requester 每次 payload 尝试到 recon_techniques。
+
+    供主控（supervisor）证据驱动收敛：同一 payload 的尝试次数 / 最新结果
+    （如 connection reset / 404）在主控决策时可见，避免死磕已失败的攻击面。
+    仅在 deps 注入 context 时生效；异常仅记 warning，绝不阻断请求主流程。
+    """
+    context = getattr(ctx.deps, "context", None)
+    if context is None:
+        return
+    try:
+        # 幂等键 (task_id, name)：同 payload 合并计数，不同 payload 各自成行。
+        # name 前缀带 endpoint，便于主控按攻击面聚合失败足迹（UNION 变体归为同一面）。
+        p = payload.strip().replace("\r\n", " ").replace("\n", " ")[:80]
+        digest = hashlib.sha1(payload.encode("utf-8", "replace")).hexdigest()[:8]
+        name = f"{endpoint} | {p} [{digest}]"
+        context.add_recon_technique(
+            name=name,
+            category="http",
+            status=status,
+            success_count=1 if success else 0,
+            tested_count=1,
+            last_result=last_result[:200] or "",
+            confidence=0.5,
+        )
+    except Exception as exc:  # noqa: BLE001 - 旁路写入失败不影响攻击执行
+        logger.warning("RECON 足迹写入失败（已忽略）: %s", exc)
+
+
 @with_tool_events("pw_send_payload")
 async def pw_send_payload(
     ctx: RunContext[RequesterDeps],
@@ -134,6 +179,28 @@ async def pw_send_payload(
     # The function detects the dummy credentials given and replaces them with
     # the real ones, so the LLM will never see the true credentials.
     raw_request_anon = replace_credential_placeholders(raw_request)
+    endpoint = _extract_endpoint(raw_request)
+    # 防重复护栏：同会话内该 payload 已尝试且失败过（如 connection reset），
+    # 直接提示换变体，避免子 agent 反复重发同一请求烧 token。
+    context = getattr(ctx.deps, "context", None)
+    if context is not None:
+        task_key = str(ctx.deps.session_id)
+        try:
+            if context.was_already_attempted(raw_request_anon, task_key):
+                return (
+                    f"Notice: this exact payload was already attempted and failed "
+                    f"earlier in this session (connection reset or error). "
+                    f"Do NOT resend it; craft a different payload/variant instead."
+                )
+            if context.is_surface_dead(endpoint, threshold=10):
+                return (
+                    f"BLOCKED: attack surface {endpoint!r} is a dead end "
+                    f"(>=10 failed attempts, no success, e.g. connection reset). "
+                    f"Do NOT keep sending payloads to it. Switch to a different "
+                    f"attack vector (blind SQLi / error-based / other endpoints)."
+                )
+        except Exception as _exc:  # noqa: BLE001 - 去重/死路检查失败不阻断请求
+            logger.debug("去重/死路检查失败（忽略）: %s", _exc)
     # session_key = _build_session_key(
     #     host=host,
     #     port=port,
@@ -180,9 +247,32 @@ async def pw_send_payload(
             string_responses.append(response_str)
 
         truncated_responses = [truncate_string(resp) for resp in string_responses]
+        # 足迹：请求层结果（成功拿到响应），内容摘要供主控判断攻击语义
+        _record_payload_footprint(
+            ctx, endpoint, raw_request_anon,
+            status="success", success=True,
+            last_result=str(truncated_responses)[:200],
+        )
         return str(truncated_responses)
 
     except Exception as e:
+        # 足迹：请求失败（连接重置 / 超时等），主控可见该攻击面持续被断
+        _record_payload_footprint(
+            ctx, endpoint, raw_request_anon,
+            status="failed", success=False,
+            last_result=str(e),
+        )
+        # 防重复护栏：记录失败尝试，供后续同 payload 查重拦截
+        if context is not None:
+            try:
+                context.record_attempt(
+                    task=str(ctx.deps.session_id),
+                    payload=raw_request_anon,
+                    result="failed",
+                    reason=str(e),
+                )
+            except Exception as _exc:  # noqa: BLE001
+                logger.debug("失败尝试记录（忽略）: %s", _exc)
         return f"Error when sending payload: {str(e)}"
 
 

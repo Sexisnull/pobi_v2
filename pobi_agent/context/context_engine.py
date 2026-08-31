@@ -1664,6 +1664,71 @@ class ContextEngine:
         """
         return self.structured.was_already_attempted(payload, task)
 
+    def get_failed_footprint_summary(self, max_items: int = 10) -> str:
+        """从 recon_techniques 聚合失败足迹（按攻击面），供主控/子 agent 决策转向。
+
+        若某攻击面累计尝试多次且全部失败，说明该路径被阻（如连接重置 / WAF），
+        应引导转向其他向量，而非继续换 payload 变体硬试。
+        """
+        if self.recon_store is None:
+            return ""
+        try:
+            rows = self.recon_store.list_techniques(self._recon_task_id())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RECON 足迹摘要读取失败（忽略）: %s", exc)
+            return ""
+        failed = [r for r in rows if str(r.get("status", "")) == "failed"]
+        if not failed:
+            return ""
+        agg: Dict[str, Dict[str, Any]] = {}
+        for r in failed:
+            name = str(r.get("name", ""))
+            surface = name.split(" | ")[0] if " | " in name else name[:60]
+            a = agg.setdefault(surface, {"tested": 0, "success": 0, "failed": 0, "last": ""})
+            tested = int(r.get("tested_count", 0) or 0)
+            success = int(r.get("success_count", 0) or 0)
+            a["tested"] += tested
+            a["success"] += success
+            a["failed"] += max(0, tested - success)
+            if r.get("last_result"):
+                a["last"] = str(r.get("last_result", ""))[:120]
+        lines = [
+            "## Failed Attempt Footprints (Do NOT keep retrying these surfaces)",
+            "以下攻击面已累计尝试且失败；若失败 >= 5 且无新信息，视为死路，",
+            "请转向其他攻击向量（如盲注 / 报错注入 / 其他端点），而非继续换 payload 变体硬试。",
+        ]
+        for surface, a in list(agg.items())[:max_items]:
+            line = f"- {surface}: 尝试 {a['tested']} 次 / 失败 {a['failed']} 次"
+            if a["last"]:
+                line += f" / 最新结果: {a['last']}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    def is_surface_dead(self, endpoint: str, threshold: int = 10) -> bool:
+        """判断某攻击面是否已成死路：失败足迹累计 >= threshold 且无任何成功。
+
+        供工具层硬护栏使用：一旦判定死路，直接拒绝继续向该攻击面发送 payload，
+        强制子 agent 转向，避免 requester 内部循环死磕被阻路径（如 connection reset）。
+        """
+        if self.recon_store is None or not endpoint:
+            return False
+        try:
+            rows = self.recon_store.list_techniques(self._recon_task_id())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RECON 死路判断读取失败（忽略）: %s", exc)
+            return False
+        failed = 0
+        success = 0
+        prefix = f"{endpoint} | "
+        for r in rows:
+            name = str(r.get("name", ""))
+            if not name.startswith(prefix):
+                continue
+            success += int(r.get("success_count", 0) or 0)
+            if str(r.get("status", "")) == "failed":
+                failed += int(r.get("tested_count", 0) or 0)
+        return failed >= threshold and success == 0
+
     def mark_task_completed(self, task: str, confidence_score: float = 1.0) -> None:
         """Mark a task as completed in structured context and update task status.
 

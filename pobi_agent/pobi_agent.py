@@ -470,6 +470,7 @@ class DeadEndAgent:
             embedding_session_id=self.embedding_session_id,
             memory_workspace_root=self.memory_workspace_root,
             memory_context=self.memory_context,
+            context=self.context,
         )
         self.webapprecon_deps = WebappreconDeps(
             embedder_client=embedder_client,

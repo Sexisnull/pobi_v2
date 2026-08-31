@@ -1535,6 +1535,37 @@ class ReconStore:
             logger.warning("RECON 读取终端失败（返回空列表）: %s", exc)
         return out
 
+    def list_techniques(
+        self, task_id: str, limit: int = 500
+    ) -> List[Dict[str, object]]:
+        """返回已测技术/尝试足迹（recon_techniques），供主控证据驱动收敛。"""
+        out: List[Dict[str, object]] = []
+        try:
+            with self._session_factory() as session:
+                stmt = (
+                    select(ReconTechnique)
+                    .where(ReconTechnique.task_id == task_id)
+                    .order_by(ReconTechnique.updated_at.desc())
+                    .limit(limit)
+                )
+                for t in session.execute(stmt).scalars().all():
+                    out.append(
+                        {
+                            "id": t.id,
+                            "name": t.name,
+                            "category": t.category,
+                            "status": t.status,
+                            "success_count": t.success_count,
+                            "tested_count": t.tested_count,
+                            "last_result": t.last_result,
+                            "confidence": t.confidence,
+                            "updated_at": _iso(t.updated_at),
+                        }
+                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RECON 读取足迹失败（返回空列表）: %s", exc)
+        return out
+
     def list_threats(
         self,
         task_id: str,
