@@ -199,6 +199,22 @@ class ReconStore:
             if current < SCHEMA_VERSION:
                 conn.exec_driver_sql(f"PRAGMA user_version={SCHEMA_VERSION}")
                 conn.commit()
+        # 幂等加列：PG 增量同步游标 pg_synced_at（旧库缺列时 ALTER TABLE 补齐）。
+        for table in ("recon_facts", "recon_endpoints", "recon_threats"):
+            self._ensure_column(table, "pg_synced_at")
+
+    def _ensure_column(self, table: str, column: str) -> None:
+        """检查表是否存在指定列，缺失则 ALTER TABLE ADD COLUMN（幂等）。
+
+        新库经 ``metadata.create_all`` 已含全部列；仅历史库需要补齐。
+        """
+        with self._engine.connect() as conn:
+            rows = conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+            if column not in {r[1] for r in rows}:
+                conn.exec_driver_sql(
+                    f"ALTER TABLE {table} ADD COLUMN {column} DATETIME"
+                )
+                conn.commit()
 
     def close(self) -> None:
         """关闭引擎，释放连接。"""
@@ -283,6 +299,8 @@ class ReconStore:
                 )
             ).scalar_one_or_none()
             if existing:
+                # 任何更新都置脏（pg_synced_at=NULL），保证增量同步不遗漏。
+                existing.pg_synced_at = None
                 if confidence > existing.confidence:
                     existing.value = value
                     existing.confidence = confidence
@@ -344,6 +362,8 @@ class ReconStore:
                 )
             ).scalar_one_or_none()
             if existing:
+                # 任何更新都置脏（pg_synced_at=NULL），保证增量同步不遗漏。
+                existing.pg_synced_at = None
                 # 合并技术栈与参数，置信度取高。
                 if tech_stack:
                     merged = list(existing.tech_stack or [])
@@ -405,6 +425,8 @@ class ReconStore:
                 )
             ).scalar_one_or_none()
             if existing:
+                # 计数/结果变化都置脏（pg_synced_at=NULL），保证增量同步不遗漏。
+                existing.pg_synced_at = None
                 existing.success_count += success_count
                 existing.tested_count += tested_count
                 if last_result:
@@ -462,6 +484,8 @@ class ReconStore:
                 )
             ).scalar_one_or_none()
             if existing:
+                # 任何更新都置脏（pg_synced_at=NULL），保证增量同步不遗漏。
+                existing.pg_synced_at = None
                 if confidence > existing.confidence:
                     existing.severity = severity
                     existing.status = st
@@ -692,7 +716,10 @@ class ReconStore:
         from sqlalchemy.dialects.postgresql import insert as pg_insert
         from uuid import UUID as _UUID
 
+        from sqlalchemy import func, update
+
         from pobi_v2.db.recon_models import (
+            ReconEndpointAgg,
             ReconFactAgg,
             ReconThreatAgg,
             ReconThreatEvidenceLink,
@@ -702,13 +729,22 @@ class ReconStore:
         ten = _UUID(str(tenant_id))
         tk = str(task_id)
 
-        # 读取本地库全部待同步数据。
+        # 增量读取：仅取自上次成功同步以来新增/变化的脏行（pg_synced_at IS NULL）。
         with self._session_factory() as session:
             facts = session.execute(
-                select(ReconFact).where(ReconFact.task_id == tk)
+                select(ReconFact).where(
+                    ReconFact.task_id == tk, ReconFact.pg_synced_at.is_(None)
+                )
             ).scalars().all()
             threats = session.execute(
-                select(ReconThreat).where(ReconThreat.task_id == tk)
+                select(ReconThreat).where(
+                    ReconThreat.task_id == tk, ReconThreat.pg_synced_at.is_(None)
+                )
+            ).scalars().all()
+            endpoints = session.execute(
+                select(ReconEndpoint).where(
+                    ReconEndpoint.task_id == tk, ReconEndpoint.pg_synced_at.is_(None)
+                )
             ).scalars().all()
 
         fact_rows = [
@@ -742,6 +778,24 @@ class ReconStore:
             }
             for t in threats
         ]
+        endpoint_rows = [
+            {
+                "target_id": tgt,
+                "tenant_id": ten,
+                "host": e.host,
+                "path_normalized": e.path_normalized,
+                "method": e.method,
+                "status_code": e.status_code,
+                "auth_required": e.auth_required,
+                "tech_stack": e.tech_stack or [],
+                "parameters": e.parameters or [],
+                "notes": e.notes,
+                "discovered_via": e.discovered_via,
+                "confidence": e.confidence,
+                "source_tasks": [tk],
+            }
+            for e in endpoints
+        ]
 
         async with async_session_factory() as pg:
             if fact_rows:
@@ -750,7 +804,10 @@ class ReconStore:
                     index_elements=["target_id", "category", "key"],
                     set_={
                         "value": stmt.excluded.value,
-                        "confidence": stmt.excluded.confidence,
+                        # 内容始终更新（最新 wins）；confidence 取历史与新的最大值。
+                        "confidence": func.greatest(
+                            ReconFactAgg.confidence, stmt.excluded.confidence
+                        ),
                         "sensitivity": stmt.excluded.sensitivity,
                         "details_json": stmt.excluded.details_json,
                         # 注：source_tasks 列为 JSON 类型，PG 的 json||json 操作符不存在，
@@ -759,7 +816,6 @@ class ReconStore:
                         "source_tasks": stmt.excluded.source_tasks,
                         "last_seen": _utcnow(),
                     },
-                    where=stmt.excluded.confidence > ReconFactAgg.confidence,
                 )
                 await pg.execute(stmt)
             if threat_rows:
@@ -777,14 +833,72 @@ class ReconStore:
                         "status": stmt.excluded.status,
                         "cvss_score": stmt.excluded.cvss_score,
                         "evidence_summary": stmt.excluded.evidence_summary,
-                        "confidence": stmt.excluded.confidence,
+                        "confidence": func.greatest(
+                            ReconThreatAgg.confidence, stmt.excluded.confidence
+                        ),
                         "source_tasks": stmt.excluded.source_tasks,
                         "last_seen": _utcnow(),
                     },
-                    where=stmt.excluded.confidence > ReconThreatAgg.confidence,
+                )
+                await pg.execute(stmt)
+            if endpoint_rows:
+                stmt = pg_insert(ReconEndpointAgg).values(endpoint_rows)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[
+                        "target_id",
+                        "host",
+                        "path_normalized",
+                        "method",
+                    ],
+                    set_={
+                        "status_code": stmt.excluded.status_code,
+                        "auth_required": stmt.excluded.auth_required,
+                        "tech_stack": stmt.excluded.tech_stack,
+                        "parameters": stmt.excluded.parameters,
+                        "notes": stmt.excluded.notes,
+                        "discovered_via": stmt.excluded.discovered_via,
+                        "confidence": func.greatest(
+                            ReconEndpointAgg.confidence, stmt.excluded.confidence
+                        ),
+                        "source_tasks": stmt.excluded.source_tasks,
+                        "last_seen": _utcnow(),
+                    },
                 )
                 await pg.execute(stmt)
             await pg.commit()
+
+        # 增量打标：仅 PG 提交成功后，将本次成功同步的行标记为已同步（下次跳过）。
+        if fact_rows or threat_rows or endpoint_rows:
+            now = _utcnow()
+            with self._session_factory() as session:
+                if fact_rows:
+                    session.execute(
+                        update(ReconFact)
+                        .where(
+                            ReconFact.task_id == tk,
+                            ReconFact.id.in_([f.id for f in facts]),
+                        )
+                        .values(pg_synced_at=now)
+                    )
+                if threat_rows:
+                    session.execute(
+                        update(ReconThreat)
+                        .where(
+                            ReconThreat.task_id == tk,
+                            ReconThreat.id.in_([t.id for t in threats]),
+                        )
+                        .values(pg_synced_at=now)
+                    )
+                if endpoint_rows:
+                    session.execute(
+                        update(ReconEndpoint)
+                        .where(
+                            ReconEndpoint.task_id == tk,
+                            ReconEndpoint.id.in_([e.id for e in endpoints]),
+                        )
+                        .values(pg_synced_at=now)
+                    )
+                session.commit()
 
     async def sync_local_artifacts_to_pg(
         self,
@@ -1055,11 +1169,23 @@ class ReconStore:
         """
         from uuid import UUID as _UUID
 
-        from pobi_v2.db.recon_models import ReconFactAgg, ReconThreatAgg
+        from pobi_v2.db.recon_models import (
+            ReconEndpointAgg,
+            ReconFactAgg,
+            ReconThreatAgg,
+        )
 
         tgt = _UUID(str(target_id))
         ten = _UUID(str(tenant_id))
         async with async_session_factory() as pg:
+            endpoint_aggs = (
+                await pg.execute(
+                    select(ReconEndpointAgg).where(
+                        ReconEndpointAgg.target_id == tgt,
+                        ReconEndpointAgg.tenant_id == ten,
+                    )
+                )
+            ).scalars().all()
             fact_aggs = (
                 await pg.execute(
                     select(ReconFactAgg).where(
@@ -1110,6 +1236,29 @@ class ReconStore:
             ).scalars():
                 if th.status in ("confirmed", "exploited"):
                     result.covered_threats.append(th.cve_id or th.title)
+
+        # 灌入结构化端点资产（recon_endpoints_agg，per-target 收敛，最完整）。
+        for ea in endpoint_aggs:
+            if ea.path_normalized in local_endpoints:
+                result.already_covered_count += 1
+            else:
+                result.seeded_count += 1
+                local_endpoints.add(ea.path_normalized)
+            self.upsert_endpoint(
+                task_id,
+                path_normalized=ea.path_normalized,
+                host=ea.host,
+                method=ea.method,
+                status_code=ea.status_code,
+                auth_required=ea.auth_required,
+                tech_stack=ea.tech_stack or [],
+                parameters=ea.parameters or [],
+                notes=ea.notes,
+                discovered_via=ea.discovered_via,
+                confidence=ea.confidence,
+            )
+            if ea.path_normalized not in result.covered_endpoints:
+                result.covered_endpoints.append(ea.path_normalized)
 
         # 灌入事实（含端点类 category 映射为端点，便于 L1 挂载）。
         for fa in fact_aggs:

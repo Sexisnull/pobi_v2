@@ -200,6 +200,8 @@ class ReconFact(ReconBase):
     blob_ref = Column(String(256), nullable=True)
     created_at = Column(DateTime, nullable=False, default=_now)
     updated_at = Column(DateTime, nullable=False, default=_now, onupdate=_now)
+    # PG 聚合层同步标记：NULL=待同步（脏），非 NULL=最近成功同步时间（增量游标）。
+    pg_synced_at = Column(DateTime, nullable=True)
 
     session = relationship("ReconSession", back_populates="facts")
 
@@ -235,6 +237,8 @@ class ReconEndpoint(ReconBase):
     confidence = Column(Float, nullable=False, default=0.7)
     created_at = Column(DateTime, nullable=False, default=_now)
     updated_at = Column(DateTime, nullable=False, default=_now, onupdate=_now)
+    # PG 聚合层同步标记：NULL=待同步（脏），非 NULL=最近成功同步时间（增量游标）。
+    pg_synced_at = Column(DateTime, nullable=True)
 
     session = relationship("ReconSession", back_populates="endpoints")
 
@@ -300,5 +304,7 @@ class ReconThreat(ReconBase):
     confidence = Column(Float, nullable=False, default=0.5)
     created_at = Column(DateTime, nullable=False, default=_now)
     updated_at = Column(DateTime, nullable=False, default=_now, onupdate=_now)
+    # PG 聚合层同步标记：NULL=待同步（脏），非 NULL=最近成功同步时间（增量游标）。
+    pg_synced_at = Column(DateTime, nullable=True)
 
     session = relationship("ReconSession", back_populates="threats")

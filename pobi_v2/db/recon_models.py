@@ -90,6 +90,54 @@ class ReconFactAgg(Base):
     )
 
 
+class ReconEndpointAgg(Base):
+    """recon_endpoints_agg：按 (target_id, host, path_normalized, method) 聚合的资产/端点表。
+
+    对应本地 recon_endpoints，per-target 跨任务收敛。冲突收敛策略同 ReconFactAgg，
+    但内容字段（status_code/auth_required/tech_stack 等）为时效数据，采用"最新 wins"，
+    仅在 confidence 更高时才覆盖 confidence 本身。
+    """
+
+    __tablename__ = "recon_endpoints_agg"
+    __table_args__ = (
+        UniqueConstraint(
+            "target_id",
+            "host",
+            "path_normalized",
+            "method",
+            name="uq_recon_endpoints_agg_tgt_host_path_method",
+        ),
+        Index("ix_recon_endpoints_agg_tenant", "tenant_id"),
+        Index("ix_recon_endpoints_agg_tgt_host", "target_id", "host"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    target_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("targets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    host: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    path_normalized: Mapped[str] = mapped_column(String(512), nullable=False)
+    method: Mapped[str] = mapped_column(String(16), nullable=False, default="GET")
+    status_code: Mapped[int] = mapped_column(Integer, nullable=True)
+    auth_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    tech_stack: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    parameters: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    discovered_via: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.7)
+    # 来源任务列表（跨任务收敛累计），JSON 数组。
+    source_tasks: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    last_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    target = relationship("Target")
+
+
 class ReconThreatAgg(Base):
     """recon_threats_agg：按 (target_id, target_endpoint, category) 聚合的威胁表。
 

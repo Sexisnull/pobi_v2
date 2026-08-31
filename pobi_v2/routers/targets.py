@@ -11,6 +11,7 @@ from uuid import UUID
 from pobi_v2.core.deps import get_current_user, require_scope
 from pobi_v2.core.exceptions import ConflictError, NotFoundError
 from pobi_v2.db.models import Target, User
+from pobi_v2.db.recon_models import ReconEndpointAgg
 from pobi_v2.db.session import get_session
 from pobi_v2.schemas.target import TargetCreate, TargetRead, TargetUpdate
 
@@ -73,6 +74,48 @@ async def get_target(
     if target is None or target.tenant_id != user.tenant_id:
         raise NotFoundError("目标不存在")
     return target
+
+
+@router.get("/{target_id}/assets")
+async def list_target_assets(
+    target_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_scope("targets:read")),
+) -> dict:
+    """目标资产/端点全景（per-target 聚合，来自 recon_endpoints_agg）。
+
+    供前端"目标全景图"的资产清单视图：主机 + 路径 + 方法 + 状态码 + 技术栈指纹 +
+    参数 + 发现途径 + 时间。跨任务收敛，同一端点跨任务只保留最新状态。
+    """
+    target = await session.get(Target, target_id)
+    if target is None or target.tenant_id != user.tenant_id:
+        raise NotFoundError("目标不存在")
+    stmt = (
+        select(ReconEndpointAgg)
+        .where(ReconEndpointAgg.target_id == target_id)
+        .order_by(ReconEndpointAgg.host, ReconEndpointAgg.path_normalized)
+        .limit(1000)
+    )
+    result = await session.execute(stmt)
+    assets = []
+    for r in result.scalars().all():
+        assets.append(
+            {
+                "id": str(r.id),
+                "host": r.host,
+                "path": r.path_normalized,
+                "method": r.method,
+                "status_code": r.status_code,
+                "auth_required": r.auth_required,
+                "tech_stack": r.tech_stack or [],
+                "parameters": r.parameters or [],
+                "discovered_via": r.discovered_via,
+                "confidence": r.confidence,
+                "first_seen": r.first_seen.isoformat() if r.first_seen else None,
+                "last_seen": r.last_seen.isoformat() if r.last_seen else None,
+            }
+        )
+    return {"target_id": str(target_id), "count": len(assets), "assets": assets}
 
 
 @router.patch("/{target_id}", response_model=TargetRead)

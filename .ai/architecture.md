@@ -89,7 +89,7 @@ tasks/<task_id>/
 ### B. 本地 sqlite（可查的结构化结果）
 
 **B1 任务 recon 库 `tasks/<task_id>/<task_id>.db`（ReconStore）**
-由 `ReconStore.for_task` 创建；`ContextEngine` 旁路写入（`add_discovered_fact`/`record_attempt`/`add_execution` → `_recon_bypass_fact` 等；executor `_persist_recon_facts` 落端点/技术栈），运行期随跑随写、异常仅 warning 不阻断主循环。
+由 `ReconStore.for_task` 创建；`ContextEngine` 旁路写入（`add_discovered_fact`/`record_attempt`/`add_execution` → `_recon_bypass_fact` 等；executor `_persist_recon_facts` 落端点/技术栈；**2026-08-31 起 `pw_send_payload` 工具层经 `add_recon_technique` 实时落尝试足迹**），运行期随跑随写、异常仅 warning 不阻断主循环。
 
 | 表 | 内容 |
 |---|---|
@@ -100,6 +100,8 @@ tasks/<task_id>/
 | `recon_threats` | 威胁（CVE、severity、status：suspected/confirmed/exploited） |
 
 > **足迹驱动收敛（2026-08-31）**：`RequesterDeps` 注入 `context`（TYPE_CHECKING）→ `pw_send_payload` 每次请求实时 upsert `recon_techniques`（name 幂等键 `"{endpoint} | {payload摘要} [{sha1:8}]"`）→ 接通 `was_already_attempted` 防重复 + `is_surface_dead(endpoint, threshold=10)` 死路硬护栏（BLOCKED 拒绝）→ supervisor 决策 / requester 委派前注入 `get_failed_footprint_summary()` 摘要。目的：不限攻击轮数，靠证据引导子 agent 在死路上转向（如 UNION 全被 connection reset → 切布尔盲注）。
+
+> **PG 增量同步（2026-08-31）**：本地 `recon_facts`/`recon_endpoints`/`recon_threats` 三表加 `pg_synced_at` 脏标记列（旧库 `_ensure_column` 幂等补列）；四个 upsert 更新已有行时自动置脏。`upsert_to_pg` 只读脏行 → PG upsert → 提交成功打标（失败不打标重试不丢数据）。触发侧 `_recon_emit_sync` per-task in-flight 合并（同步期间新写入标记 pending 补一轮），不再每次写入 create_task。收敛策略：内容字段最新 wins + confidence 取 `GREATEST`，替代原 `confidence>` 整行门控（修复静默过期）。新增 PG 资产聚合表 `recon_endpoints_agg`（迁移 0017），`seed_from_pg` 续扫时灌入本地结构化端点。
 
 **B2 RAG 索引库 `rag/<agent_id>/<session_id>/<target>.db`（sqlite_connector）**
 `rag_manager.get_connector` + `batch_insert_code_chunks` 写入网页/代码 chunks + 向量，供 `webapp_code_rag` 语义检索；embedder 缺失时优雅降级引导改用 facts/shell。

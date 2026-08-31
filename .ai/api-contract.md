@@ -76,8 +76,66 @@ Tenant / User / Target / Task / ApprovalRequest / Finding / AuditEvent / TaskEve
 
 ## 本地 RECON 旁路落库（运行期）
 侦察/利用阶段产物在 agent 运行期旁路写入本地 SQLite（非 PG 主库），供后续任务快速建立认知：
-- 路径（任务级单一库）：`~/.pobi_v2/tasks/<task_id>/<task_id>.db`。侦察与利用阶段产物共用此单一库，以不同表（`recon_facts` / `recon_endpoints` / `recon_techniques` / `recon_threats` 等）区分，不再使用 `recon/` 子目录。
-- 触发：`agents/components/executor.py` 的 `_add_agent_output_to_context` → `_persist_recon_facts`，解析 agent 输出的 `detailed_summary`/`thoughts` 文本中的端点（扩展名路径）与技术栈词表。
-- 写入通道：`ContextEngine.add_discovered_fact`（→ `ReconStore.upsert_fact`，落 `recon_facts`，category=`endpoint`/`technology`）与 `ContextEngine.add_recon_endpoint`（→ `ReconStore.upsert_endpoint`，落 `recon_endpoints` 结构化表，含 host/tech_stack/parameters/auth_required）。
+- 路径（任务级单一库）：`~/.pobi_v2/tasks/<task_id>/<task_id>.db`。侦察与利用阶段产物共用此单一库，以不同表（`recon_sessions` / `recon_facts` / `recon_endpoints` / `recon_techniques` / `recon_threats`）区分，不再使用 `recon/` 子目录。
+- 触发（被动·输出解析）：`agents/components/executor.py` 的 `_add_agent_output_to_context` → `_persist_recon_facts`，解析 agent 输出的 `detailed_summary`/`thoughts` 文本中的端点（扩展名路径）与技术栈词表。
+- 触发（主动·工具层实时足迹，2026-08-31 起）：`pw_send_payload`（`tools/browser_automation/__init__.py`）每次 HTTP 请求后实时 `ContextEngine.add_recon_technique`（→ `ReconStore.upsert_technique`，落 `recon_techniques`），**成功 / 失败 / connection reset 均记**，供主控证据驱动收敛。
+- 写入通道：
+  - `ContextEngine.add_discovered_fact`（→ `ReconStore.upsert_fact`，落 `recon_facts`，category=`endpoint`/`technology`/`finding`/`authentication`…）
+  - `ContextEngine.add_recon_endpoint`（→ `ReconStore.upsert_endpoint`，落 `recon_endpoints` 结构化表，含 host/tech_stack/parameters/auth_required）
+  - `ContextEngine.add_recon_technique`（→ `ReconStore.upsert_technique`，落 `recon_techniques`，name 幂等键 `"{endpoint} | {payload摘要} [{sha1:8}]"`）
+- 读取（证据驱动收敛，2026-08-31 起）：`ReconStore.list_techniques` → `ContextEngine.get_failed_footprint_summary`（按攻击面聚合失败足迹）/ `ContextEngine.is_surface_dead`（死路判断：同攻击面失败 >=threshold 且无成功）。
 - 时序保证：随跑随写、异常仅记 warning 不阻断主循环；`recon_store` 未注入时全 no-op。**任务取消不影响已落库数据**（取消分支跳过的是 PG 正式 `findings`/`task_events`，非本地 recon 库）。
-- 幂等：端点以 `task_id + path_normalized` 去重；fact 以 `category + key` 去重。
+- 幂等：端点以 `task_id + path_normalized` 去重；fact 以 `category + key` 去重；technique 以 `task_id + name` 去重（同 payload 合并计数）。
+
+### recon_techniques 表结构（`pobi_agent/recon/sqlite_models.py` → `ReconTechnique`）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | PK autoincrement | — |
+| `session_id` | FK → `recon_sessions.id`（ondelete CASCADE） | 会话归属 |
+| `task_id` | String(64) | 幂等键之一 |
+| `name` | String(128) | **幂等键**：`"{endpoint} | {payload摘要} [{sha1:8}]"`；必须含 endpoint 前缀，供主控按攻击面聚合失败足迹 |
+| `category` | String(64) | `http`（工具层足迹）/ `technology`（executor 输出解析）/ `execution`（record_attempt 旁路） |
+| `status` | String(32) | `untested` / `success` / `failed` 等 |
+| `success_count` | Integer | 成功次数累计 |
+| `tested_count` | Integer | 尝试次数累计 |
+| `last_result` | Text | 最近一次结果摘要（如 connection reset 原因） |
+| `confidence` | Float | 默认 0.5 |
+| `created_at` / `updated_at` | DateTime | 时间戳 |
+
+- 唯一约束：`uq_recon_techniques_task_name (task_id, name)`；索引 `ix_recon_techniques_task_status (task_id, status)`。
+- 写入语义：`upsert_technique` 对已存在行**累加** `success_count`/`tested_count`、覆盖 `last_result`/`status`（`status != "untested"` 时）、`confidence` 取最大值。
+
+### recon_endpoints_agg 表结构（`pobi_v2/db/recon_models.py` → `ReconEndpointAgg`，2026-08-31 新增）
+
+per-target 资产/端点聚合表，支撑目标全景图资产视图。迁移：`alembic/versions/0017_recon_endpoints_agg.py`。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | Uuid PK | — |
+| `target_id` | Uuid FK → targets.id | 聚合维度 |
+| `tenant_id` | Uuid FK → tenants.id | 多租户隔离 |
+| `host` | String(255) | 主机 |
+| `path_normalized` | String(512) | 规范化路径 |
+| `method` | String(16) | 默认 GET |
+| `status_code` | Integer nullable | 最近状态码（时效字段，最新 wins） |
+| `auth_required` | Boolean | 是否需认证 |
+| `tech_stack` | JSON list | 技术栈指纹（跨任务合并） |
+| `parameters` | JSON list | 参数 |
+| `notes` | Text | 备注 |
+| `discovered_via` | String(128) | 发现途径 |
+| `confidence` | Float | 取历史与新值最大值 |
+| `source_tasks` | JSON list | 来源任务（最新任务覆盖） |
+| `first_seen` / `last_seen` | DateTime(tz) | 时间 |
+
+- 唯一约束：`uq_recon_endpoints_agg_tgt_host_path_method (target_id, host, path_normalized, method)`。
+- 读取接口：`GET /api/v1/targets/{target_id}/assets`（`pobi_v2/routers/targets.py`），返回该目标资产清单，供全景图资产视图。
+- 续扫预热：`ReconStore.seed_from_pg` 会从本表灌入结构化端点到本地 `recon_endpoints`（比从 facts 解析更完整）。
+
+### PG 增量同步机制（2026-08-31 起）
+
+- **脏标记列**：本地 `recon_facts` / `recon_endpoints` / `recon_threats` 三表新增 `pg_synced_at`（DateTime，NULL=待同步）。旧库经 `ReconStore._ensure_column` 幂等 `ALTER TABLE` 补齐。
+- **置脏**：`upsert_fact` / `upsert_endpoint` / `upsert_technique` / `upsert_threat` 更新已有行时自动 `pg_synced_at=NULL`；新行默认 NULL（脏）。
+- **增量搬运**：`ReconStore.upsert_to_pg` 只读 `pg_synced_at IS NULL` 的脏行 → PG upsert → **PG 提交成功后**打标 `pg_synced_at=now`（失败不打标，下次重试，不丢数据）。
+- **触发合并**：`ContextEngine._recon_emit_sync` per-task in-flight 合并——同步进行期间的新写入只标记 `_recon_sync_pending`，当前轮结束后立即补一轮；不再每次写入 `create_task`（防并发 upsert 堆积）。
+- **收敛策略变更**：facts/threats/endpoints 的 `on_conflict_do_update` 不再用 `confidence >` 整行门控，改为**内容字段最新 wins + confidence 取 `GREATEST(旧,新)`**，修复"同键内容更新但置信度未提升则 PG 静默过期"的 bug。

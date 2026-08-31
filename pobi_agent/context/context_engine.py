@@ -866,6 +866,9 @@ class ContextEngine:
         self.recon_tenant_id = tenant_id
         # PG async session 工厂（注入以避免循环导入）；为空时跳过 PG 同步。
         self.recon_pg_session_factory = pg_session_factory
+        # PG 增量同步的防抖合并状态（per-task）：running=正在同步，pending=同步期间新增写入。
+        self._recon_sync_running: set = set()
+        self._recon_sync_pending: set = set()
         self.root_goal = ""
         self.tasks = {}
         self.next_agent = ""
@@ -1363,6 +1366,12 @@ class ContextEngine:
             # 当前无事件循环（纯同步上下文），交给出口 flush 兜底。
             return
         task_id = self._recon_task_id()
+        if task_id in self._recon_sync_running:
+            # 已有同步协程在跑：仅标记 pending，当前轮结束后会立即补一轮，
+            # 把窗口内多次写入合并为一次批量增量同步，避免每次写入都 create_task。
+            self._recon_sync_pending.add(task_id)
+            return
+        self._recon_sync_running.add(task_id)
         loop.create_task(
             self._recon_upsert_to_pg_task(
                 target_id=str(self.recon_target_id),
@@ -1374,16 +1383,31 @@ class ContextEngine:
     async def _recon_upsert_to_pg_task(
         self, target_id: str, tenant_id: str, task_id: str
     ) -> None:
-        """实际执行 PG 聚合层 upsert 的协程（由 _recon_emit_sync 以 create_task 调度）。"""
+        """实际执行 PG 聚合层 upsert 的协程（由 _recon_emit_sync 调度）。
+
+        防抖合并：同步进行期间的新写入只标记 pending，本协程跑完后若仍有
+        pending 则立即再跑一轮，把连续写入合并为增量批量同步（配合本地库
+        pg_synced_at 脏标记，每轮只搬运新增/变化行）。
+        """
         try:
-            await self.recon_store.upsert_to_pg(
-                target_id=target_id,
-                tenant_id=tenant_id,
-                task_id=task_id,
-                async_session_factory=self.recon_pg_session_factory,
-            )
+            while True:
+                await self.recon_store.upsert_to_pg(
+                    target_id=target_id,
+                    tenant_id=tenant_id,
+                    task_id=task_id,
+                    async_session_factory=self.recon_pg_session_factory,
+                )
+                # 同步期间是否有新写入？有则再补一轮（合并窗口），否则结束。
+                if task_id in self._recon_sync_pending:
+                    self._recon_sync_pending.discard(task_id)
+                    continue
+                break
         except Exception as exc:  # noqa: BLE001
             logger.warning("RECON PG 同步失败（已忽略）: %s", exc)
+        finally:
+            # 异常退出时若仍有 pending，数据保持脏（pg_synced_at=NULL），
+            # 下次写入或任务终态 finally 兜底 flush 会再次同步，不丢数据。
+            self._recon_sync_running.discard(task_id)
 
     def _recon_bypass_fact(
         self,
@@ -1677,7 +1701,12 @@ class ContextEngine:
         except Exception as exc:  # noqa: BLE001
             logger.warning("RECON 足迹摘要读取失败（忽略）: %s", exc)
             return ""
-        failed = [r for r in rows if str(r.get("status", "")) == "failed"]
+        # 仅聚合工具层 HTTP 足迹（category=http）；execution/technology 类（sqlmap 等
+        # 工具、executor 输出解析）不参与"攻击面死路"判断，避免误伤。
+        failed = [
+            r for r in rows
+            if str(r.get("category", "")) == "http" and str(r.get("status", "")) == "failed"
+        ]
         if not failed:
             return ""
         agg: Dict[str, Dict[str, Any]] = {}
@@ -1721,6 +1750,8 @@ class ContextEngine:
         success = 0
         prefix = f"{endpoint} | "
         for r in rows:
+            if str(r.get("category", "")) != "http":
+                continue  # 仅统计工具层 HTTP 足迹，避免 execution/technology 类干扰
             name = str(r.get("name", ""))
             if not name.startswith(prefix):
                 continue
