@@ -3,6 +3,7 @@
 > 取自 `README.md` 待办、`docs/PROJECT_GOAL.md` §2.4/§2.5。以源码与 docs 为准。
 
 ## 已落地（本轮更新确认）
+- [x] **子 agent 死循环熔断 + 足迹驱动收敛（2026-08-31）**：修复任务 `535aee8e` requester 死磕 UNION SELECT 被 connection reset 拦截后 50 轮不收敛、30min 熔断 failed 的问题。落地：`pw_send_payload` 实时足迹写 `recon_techniques`（含 endpoint 前缀、成功/失败均记）→ 接通 `was_already_attempted` 防重复 → `is_surface_dead` 死路硬护栏（>=10 失败无成功即 BLOCKED）→ supervisor/requester prompt 注入 "Failed Attempt Footprints" 摘要证据引导转向 → 超时分支补错误描述。用户自行新建任务验证。
 - [x] **跨任务数据存储（Recon 双主轴）**：`docs/RECON_LOCAL_STORE_DESIGN.md` 描述，2026-08-19 三阶全合入：
   - 本地 SQLite per-task（`recon_sessions/facts/endpoints/techniques/threats` + `ReconStore`，WAL/AES-GCM 占位/`lookup`/L0-L2 token 预算裁剪），`ContextEngine` 旁路非阻塞写入。
   - **PG 聚合层 per-target**（`recon_facts_agg`/`recon_threats_agg`/`recon_threat_evidence_link`，`pobi_v2/db/recon_models.py`，alembic `0014_recon_agg.py`）：按 `target_id` 跨任务收敛历史沉淀。

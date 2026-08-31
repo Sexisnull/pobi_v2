@@ -61,7 +61,7 @@ def _get_template_loader():
     """
     # Try to use PackageLoader first (for installed packages)
     try:
-        return Environment(loader=PackageLoader("pobi_prompts", ""))
+        return Environment(loader=PackageLoader("deadend_prompts", ""))
     except (ImportError, OSError):
         # Fallback to FileSystemLoader for development
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -76,10 +76,10 @@ def _get_tools_template_loader():
         Environment: Jinja2 environment with appropriate loader
     """
     # Try to use PackageLoader first (for installed packages), rooted at the
-    # pobi_prompts package so that tool templates and shared partials
+    # deadend_prompts package so that tool templates and shared partials
     # share the same include namespace.
     try:
-        return Environment(loader=PackageLoader("pobi_prompts", ""))
+        return Environment(loader=PackageLoader("deadend_prompts", ""))
     except (ImportError, OSError):
         # Fallback to FileSystemLoader for development, rooted at the package
         # directory (sibling of "tools" and "_shared").

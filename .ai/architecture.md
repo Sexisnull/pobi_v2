@@ -96,8 +96,10 @@ tasks/<task_id>/
 | `recon_sessions` | 任务会话元数据（target、objective、status、agent_session），`ensure_session` 幂等 |
 | `recon_facts` | 侦察事实（category：endpoint/technology/authentication/misc/credential…，含 confidence/source/sensitivity，FTS5 索引） |
 | `recon_endpoints` | 端点（path/method/status_code/auth_required/tech_stack/parameters/discovered_via） |
-| `recon_techniques` | 已测技术（endpoint/name/payload/result） |
+| `recon_techniques` | 已测技术/尝试足迹（name 含 endpoint 前缀、status、success_count/tested_count/last_result），2026-08-31 起由 `pw_send_payload` 工具层实时写入（成功/失败/connection reset 均记），供主控证据驱动收敛 |
 | `recon_threats` | 威胁（CVE、severity、status：suspected/confirmed/exploited） |
+
+> **足迹驱动收敛（2026-08-31）**：`RequesterDeps` 注入 `context`（TYPE_CHECKING）→ `pw_send_payload` 每次请求实时 upsert `recon_techniques`（name 幂等键 `"{endpoint} | {payload摘要} [{sha1:8}]"`）→ 接通 `was_already_attempted` 防重复 + `is_surface_dead(endpoint, threshold=10)` 死路硬护栏（BLOCKED 拒绝）→ supervisor 决策 / requester 委派前注入 `get_failed_footprint_summary()` 摘要。目的：不限攻击轮数，靠证据引导子 agent 在死路上转向（如 UNION 全被 connection reset → 切布尔盲注）。
 
 **B2 RAG 索引库 `rag/<agent_id>/<session_id>/<target>.db`（sqlite_connector）**
 `rag_manager.get_connector` + `batch_insert_code_chunks` 写入网页/代码 chunks + 向量，供 `webapp_code_rag` 语义检索；embedder 缺失时优雅降级引导改用 facts/shell。
