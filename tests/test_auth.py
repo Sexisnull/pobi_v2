@@ -1,6 +1,8 @@
 """M4 鉴权逻辑测试（不依赖 Postgres，覆盖安全原语与路由保护）。"""
 from __future__ import annotations
 
+import pytest
+
 from pobi_v2.core.security import (
     create_access_token,
     decode_access_token,
@@ -46,6 +48,34 @@ def test_jwt_tamper_rejected():
         pass
 
 
+def _pg_reachable() -> bool:
+    """检测配置的 PostgreSQL 目标是否可达。
+
+    项目 docker-compose 默认**不映射 PG 宿主端口**（仅 pobi_net 内部直连，
+    安全收敛），故宿主机跑 pytest 时默认不可达 → 此类走完整应用栈的集成测试
+    跳过；经 docker-compose override 映射端口、或在容器内运行 pytest、
+    或经 POBI_TEST_PG_URL / POBI_V2_DATABASE_URL 指向可达 PG 时才运行。
+    """
+    import socket
+
+    from pobi_v2.core.config import settings
+
+    netloc = settings.database_url.split("://", 1)[-1].split("@")[-1]
+    host, _, port_part = netloc.partition(":")
+    port = 5432
+    if port_part:
+        port = int(port_part.split("/")[0])
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(
+    not _pg_reachable(),
+    reason="需本地 PostgreSQL 才能运行（受保护路由走完整应用栈，lifespan 需 seed admin）",
+)
 def test_protected_route_requires_auth():
     from fastapi.testclient import TestClient
 

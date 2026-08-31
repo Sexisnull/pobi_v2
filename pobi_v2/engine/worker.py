@@ -17,14 +17,12 @@ from pobi_v2.core.config import settings
 from pobi_v2.engine.agent_adapter import install_event_hooks
 from pobi_v2.engine.executor import run_task
 from pobi_v2.engine.queue import REDIS_SETTINGS
+from pobi_v2.engine.reconcile import JOB_TIMEOUT
 
-# 统一日志格式（去 ANSI 颜色、带中国时区时间戳）；写文件到 /app/logs/worker.log
-LOG_DIR = Path("/app/logs")
+# 统一日志格式（去 ANSI 颜色、带中国时区时间戳）；写文件到 $POBI_V2_LOG_DIR/worker.log
+LOG_DIR = Path(settings.log_dir)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 setup_logging(level=logging.INFO, log_file=str(LOG_DIR / "worker.log"))
-
-# 任务执行超时（秒），供对账逻辑引用，避免魔法数字重复
-JOB_TIMEOUT = 60 * 60 * 6  # 6h，渗透任务可能较长
 
 
 async def _on_startup(_ctx: dict) -> None:
@@ -45,10 +43,11 @@ async def _auto_reconcile(_ctx: dict) -> None:
     最终只能手动调 ``POST /api/v1/system/task-reconcile`` 才终止。本 cron 每 5 分钟
     自动执行同样的对账逻辑，使取消请求在分钟级内自动生效，无需人工触发。
 
-    ``task_reconcile`` 是 FastAPI 端点函数，但其函数体不依赖 request/user，可直接调用。
+    ``task_reconcile`` 为 engine 层对账核心（router 端点与 Worker cron 统一调用），
+    函数体不依赖 request/user，可直接调用。
     """
     try:
-        from pobi_v2.routers.system import task_reconcile
+        from pobi_v2.engine.reconcile import task_reconcile
 
         await task_reconcile()
     except Exception:  # noqa: BLE001 — 对账失败不应影响 Worker 正常消费

@@ -3,6 +3,7 @@
 > 取自 `README.md` 待办、`docs/PROJECT_GOAL.md` §2.4/§2.5。以源码与 docs 为准。
 
 ## 已落地（本轮更新确认）
+- [x] **目标总览页（2026-08-31）**：`授权目标` 视图内左侧新增「目标列表 / 目标总览」标签页，点选目标卡片进入总览。后端在 `routers/targets.py` 新增 6 个 per-target 只读接口（`overview`/`tree`/`facts`/`threats`/`findings`/`artifacts`），跨 `recon_facts_agg` + `recon_endpoints_agg` + `recon_threats_agg` 与通用阶段表 `findings`/`artifacts`/`tasks` 聚合；树节点严重度按 `path_normalized` 匹配 `target_endpoint`（全等优先、回退子串）。隔离沿用首行 `Target.tenant_id` 校验，查询只走 `WHERE target_id`（不 JOIN tasks）。前端为 vanilla JS，无构建步骤。
 - [x] **PG 增量同步 + 资产聚合表（2026-08-31）**：本地三表加 `pg_synced_at` 脏标记列（旧库幂等补列），`upsert_to_pg` 只同步脏行、成功后打标，`_recon_emit_sync` 改 in-flight 合并防 create_task 堆积；收敛策略改"内容最新 wins + confidence GREATEST"。新增 PG 资产聚合表 `recon_endpoints_agg`（alembic 0017）支撑目标全景图资产视图，`seed_from_pg` 续扫灌入本地；新增 `GET /targets/{id}/assets` 接口。用户环境需 `alembic upgrade head` + 重建 worker/api 容器。
 - [x] **子 agent 死循环熔断 + 足迹驱动收敛（2026-08-31）**：修复任务 `535aee8e` requester 死磕 UNION SELECT 被 connection reset 拦截后 50 轮不收敛、30min 熔断 failed 的问题。落地：`pw_send_payload` 实时足迹写 `recon_techniques`（含 endpoint 前缀、成功/失败均记）→ 接通 `was_already_attempted` 防重复 → `is_surface_dead` 死路硬护栏（>=10 失败无成功即 BLOCKED）→ supervisor/requester prompt 注入 "Failed Attempt Footprints" 摘要证据引导转向 → 超时分支补错误描述。用户自行新建任务验证。
 - [x] **跨任务数据存储（Recon 双主轴）**：`docs/RECON_LOCAL_STORE_DESIGN.md` 描述，2026-08-19 三阶全合入：
@@ -31,7 +32,14 @@
   - 约束：所有模型仍经 LiteLLM 统一路由与计费；本地 `api_base` 走内网，凭证与云端隔离
 
 ## 待办
-- [ ] 工程治理（A1–A7，`docs/PROJECT_GOAL.md` §2.4）：分层倒置 / `python_scripts/` 失序 / `logs/` 入版本控制 / `llm/` 孤儿模块 / CORS 不安全 / `main.py:web_app` 分支矛盾 / `routers/system.py` 脆弱写法
+- [ ] 工程治理（A1–A7，`docs/PROJECT_GOAL.md` §2.4）：
+  - [x] **A1 分层倒置**（`routers/system.py` 脆弱写法 / engine→routers 反向依赖）——**2026-08-31 已修复**：`task_reconcile` 下沉 `engine/reconcile.py`（router 端点与 Worker cron 统一调用，`JOB_TIMEOUT`/`HEALTH_CHECK_KEY` 随迁）；`routers/tasks.py` 经 `engine/recon_access.py` 访问本地 recon 库与清理任务产物目录，不再直接 import `pobi_agent`
+  - [x] **A7 `routers/system.py` 脆弱写法**——**2026-08-31 已改善**：对账逻辑与辅助函数（`_job_in_queue`/`_worker_online`/`_ACTIVE_STATUSES`）移出后，端点变薄
+  - [x] **A3 `logs/` 入版本控制**——已通过 `.gitignore` 排除（`logs/`、`python_scripts/`、`scripts/` 均不入库）
+  - [ ] **A2 `python_scripts/` 失序**——一次性调试脚本已被 gitignore 排除，但未归档清理（保留本地）
+  - [x] **A4 `llm/` 孤儿模块**——**2026-08-31 已核实**：LLM 唯一入口落实，`pobi_agent` 内无 litellm 真实直连（仅 `models/registry.py` embedding 例外，属声明允许）
+  - [ ] **A5 生产 CORS 收敛**——dev 暂 `*`（`allow_credentials=True` 禁止与 `*` 同用），生产须收敛为具体 origin
+  - [x] **A6 `main.py:web_app` 分支矛盾**——**2026-08-31 已清理**：`index.exists()` 二次判断恒 False 的冗余分支去除，缺失时兜底返回 README 语义不变
 - [ ] 扫描内核优化（S1–S6，`docs/PROJECT_GOAL.md` §2.5）：侦查产物结构化与向量化 / 上下文按需检索 / 指纹识别能力 / 漏洞利用工具补全 / Supervisor prompt 去靶场假设 / LLM 决策与工具执行分工
 - [ ] **requester 抓页-重抓循环优化（2026-08-28 由任务 `535aee8e` 暴露）**：任务 23.5h 空转，requester 反复执行**同一** `run_python_file` 脚本抓取 DVWA sqli 整页 HTML 达 35 次，直到 iteration 44 才确认注入所需信息（security=low、`GET /vulnerabilities/sqli/` 的 `id` 参数），全程 0 次真实 SQLi 注入、0 findings。
   - 根因：`run_python_file` 输出整页 HTML 超长，`truncate_string` 截断至 20000 token，requester 每次"没看全"表单/认证细节 → 重抓重确认。
@@ -46,14 +54,15 @@
 - M9 模型路由需保持 token 用量真实、价格按内置表估算；本地 `ContentPolicyViolationError` 不入 payload Agent
 - 生产 CORS 须收敛为具体 origin，解除 `*`+credentials 同用风险
 
-## 阻塞项
-- [ ] **BUG：PG 侦察同步 upsert 失败（JSON vs JSONB 操作符不匹配）**
-  - 现象：`recon_sync_worker` 异步把本地库事实/威胁 upsert 到 PG 聚合层时失败，PG 聚合表（已通过 `alembic upgrade head` 创建于 2026-08-27）始终为空。
-  - 根因：`pobi_v2/db/recon_models.py` 中 `ReconFactAgg.source_tasks` / `ReconThreatAgg.source_tasks` 声明为 `JSON` 类型（`sa.JSON`），但 `pobi_agent/recon/store.py` 的 `upsert_to_pg` 用 `source_tasks.op("||")(stmt.excluded.source_tasks)` 做数组追加——`||` 连接器仅对 `jsonb` 有效，对 `json` 报 `operator does not exist: json || json`。
-  - 影响点：`store.py:756`（ReconFactAgg）、`store.py:778`（ReconThreatAgg）。
-  - 修复方案（待实施，二选一）：
-    - 方案 A（推荐）：将 `recon_models.py` 两处 `source_tasks` 由 `JSON` 改为 `JSONB`，新增 alembic 迁移 `0015_*.py`（`alter_column` type → `JSONB`，PG `USING source_tasks::jsonb`）。模型/同步代码无需改。
-    - 方案 B：不动表类型，改 `store.py` 合并逻辑——`source_tasks` 改为 `func.coalesce(ReconFactAgg.source_tasks, '[]'::json) || ...` 之类需 jsonb 的写法仍不可行；彻底绕过 `||`：冲突时以 `stmt.excluded.source_tasks` 整体覆盖（丢失跨任务累计），或用 `postgresql.insert` + `sqlalchemy.sql.expression.type_coerce` 转 jsonb。复杂度高于方案 A。
-  - 验证：修复后在 `docker-compose` 容器中 `alembic upgrade head`，重启 `worker`，观察 `recon_facts_agg`/`recon_threats_agg` 随任务落库填充。
+## 已解除的阻塞项
+- [x] ~~**BUG：PG 侦察同步 upsert 失败（JSON vs JSONB 操作符不匹配）**~~ **（2026-08-31 已解除）**
+  - 原根因：`recon_models.py` 的 `source_tasks` 为 `JSON` 类型，`upsert_to_pg` 用 `||` 追加时报
+    `operator does not exist: json || json`。
+  - 实际落地方案为**方案 B**（非原推荐的方案 A）：`store.py:816`（ReconFactAgg）与 `store.py:839`
+    （ReconThreatAgg）改为冲突时以 `stmt.excluded.source_tasks` 整体覆盖，不再做数组追加。
+    行收敛（同一事实唯一一行）仍成立，代价是不累计历史 `source_tasks`。
+  - **当前状态**：阻塞已解除，`recon_*_agg` 可正常落库。若后续需要跨任务来源累计，再走方案 A
+    （`JSON` → `JSONB` + 新迁移）并恢复 `||` 追加。
 
+## 阻塞项
 - 无明确阻塞（截至 2026-08）。历史监控报告 A–D 的基建阻塞均已修复（事件可观测性 / 认证死循环 / 结构性受阻 / 协作式取消 / AVFS 命名空间 / function-call 序列化）。

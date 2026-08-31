@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pobi_agent.logging import logger, setup_logging
 from pobi_v2.core.exceptions import register_exception_handlers
 from pobi_v2.core.seed import seed_admin_if_needed
+from pobi_v2.core.config import settings
 from pobi_v2.sandbox_bootstrap import ensure_shared_kali_ready
 from pobi_v2.db.session import Base, engine
 from pobi_v2.engine.agent_adapter import install_event_hooks
@@ -33,14 +34,15 @@ from pobi_v2.routers import (
     api_tokens,
 )
 
-# 统一日志格式（去 ANSI 颜色、带中国时区时间戳）；写文件到 /app/logs/api.log
-LOG_DIR = Path("/app/logs")
+# 统一日志格式（去 ANSI 颜色、带中国时区时间戳）；写文件到 $POBI_V2_LOG_DIR/api.log
+LOG_DIR = Path(settings.log_dir)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 setup_logging(level=logging.INFO, log_file=str(LOG_DIR / "api.log"))
 
-# 前端静态资源目录（M6 引入的纯静态 SPA）
+# 前端目录：React 构建产物经 Vite 输出到 web/spa，由 nginx 直接静态托管（/ 即控制台）。
+# FastAPI 仅保留 /app 路由作为容器内回退/兼容别名。
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
-WEB_STATIC_DIR = WEB_DIR / "static"
+WEB_SPA_DIR = WEB_DIR / "spa"
 
 
 @asynccontextmanager
@@ -75,9 +77,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 挂载前端静态资源（js / css / 资源）；目录为 web/static，对外暴露为 /static
-if WEB_STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(WEB_STATIC_DIR)), name="web-static")
+# React 构建产物（vite base=/）的 /app 兼容别名：挂载 assets 供 /app/ 反代回退使用。
+# 生产由 nginx 直接静态托管 web/spa，此挂载仅用于容器内 /app 路径兜底。
+if WEB_SPA_DIR.exists():
+    app.mount("/app/assets", StaticFiles(directory=str(WEB_SPA_DIR / "assets")), name="web-app-assets")
 
 app.include_router(auth.router)
 app.include_router(targets.router)
@@ -102,24 +105,28 @@ async def root() -> dict[str, str]:
     return {"service": "pobi-v2", "docs": "/docs"}
 
 
-# ---- M6 前端 SPA ----
+# ---- React 前端 SPA（/app 路径，托管 web/spa）----
 @app.get("/app", tags=["web"], include_in_schema=False)
 async def web_app() -> FileResponse:
-    """前端单页应用入口。"""
-    index = WEB_DIR / "index.html"
+    """React 前端单页应用入口（web/spa/index.html）。"""
+    index = WEB_SPA_DIR / "index.html"
     if not index.exists():
-        return FileResponse(index, status_code=200) if index.exists() else FileResponse(
-            Path(__file__).resolve().parent.parent / "README.md"
-        )
+        # 前端产物缺失（如未执行 webapp 构建）时兜底返回项目 README，避免 404。
+        return FileResponse(Path(__file__).resolve().parent.parent / "README.md")
     return FileResponse(index)
 
 
-@app.get("/web/{path:path}", tags=["web"], include_in_schema=False)
-async def web_static_fallback(path: str) -> FileResponse:
-    """SPA 静态资源兜底（js / css / 资源）。"""
-    candidate = WEB_DIR / path
-    if candidate.exists() and candidate.is_file():
+@app.get("/app/{path:path}", tags=["web"], include_in_schema=False)
+async def web_app_fallback(path: str) -> FileResponse:
+    """React 前端路由兜底：真实文件直接返回，其余回退 index.html 交由前端路由处理。"""
+    candidate = (WEB_SPA_DIR / path).resolve()
+    if candidate.is_file() and WEB_SPA_DIR.resolve() in candidate.parents:
         return FileResponse(candidate)
-    # 非资源请求回退到 index.html（前端路由用）
-    return FileResponse(WEB_DIR / "index.html")
+    index = WEB_SPA_DIR / "index.html"
+    if not index.exists():
+        return FileResponse(Path(__file__).resolve().parent.parent / "README.md")
+    return FileResponse(index)
+
+
+
 

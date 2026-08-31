@@ -113,3 +113,51 @@ class ReconListEnvelope(BaseModel):
 
     items: List[Any] = Field(default_factory=list)
     total: int = 0
+
+
+# ----------------------------------------------------------------------
+# 目标总览（per-target 跨任务全阶段聚合，数据源为 PG 聚合层 + 通用阶段表）
+# ----------------------------------------------------------------------
+# 与上方 per-task 本地 SQLite 查询面无继承关系：ReconSummaryOut 的
+# assets / techniques_count 依赖本地 derived_assets 与 recon_techniques 表，
+# PG 侧并不存在，继承会产生恒为默认值的死字段。
+
+
+class ReconTreeNode(BaseModel):
+    """页面树叶子：一个端点路径及其聚合状态。
+
+    threat_severity_max / threat_confidence 由后端按 path_normalized 匹配
+    ReconThreatAgg.target_endpoint 得出，前端不再做关联。
+    """
+
+    path: str = ""
+    method: Optional[str] = None
+    status_code: Optional[int] = None
+    auth_required: bool = False
+    tech_stack: List[str] = Field(default_factory=list)
+    threat_severity_max: str = "info"
+    threat_confidence: float = 0.0
+
+
+class ReconTreeHost(BaseModel):
+    """页面树分支：同一 host 下的所有端点路径。"""
+
+    host: str = ""
+    paths: List[ReconTreeNode] = Field(default_factory=list)
+
+
+class ReconTreeOut(BaseModel):
+    hosts: List[ReconTreeHost] = Field(default_factory=list)
+    total: int = 0
+
+
+class TargetOverviewSummaryOut(BaseModel):
+    """目标总览统计卡：仅含 PG 侧可真实计算的计数与峰值。"""
+
+    facts_count: int = 0
+    endpoints_count: int = 0
+    threats_count: int = 0
+    findings_count: int = 0
+    tasks_count: int = 0
+    severity_max: str = "info"
+    last_seen: Optional[str] = None

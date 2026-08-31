@@ -35,5 +35,6 @@ def test_event_bus_roundtrip():
         return evt
 
     evt = asyncio.run(_run())
+    # 统一事件信封（event_bus._wrap）：业务字段在 payload 内层
     assert evt["type"] == "agent_thought"
-    assert evt["thought"] == "hello"
+    assert evt["payload"]["thought"] == "hello"

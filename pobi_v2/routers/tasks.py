@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,7 +36,7 @@ from pobi_v2.engine.queue import enqueue_task
 from pobi_v2.engine.guardrails import check_scope
 from pobi_v2.engine.cancel_state import clear_cancel, request_cancel
 from pobi_v2.engine.event_bus import get_realtime_usage
-from pobi_agent.constants import TASKS_ROOT
+from pobi_v2.engine.recon_access import delete_task_local_data, task_recon_store
 from pobi_v2.schemas.recon import (
     ReconAssetsOut,
     ReconCoverageOut,
@@ -46,7 +45,6 @@ from pobi_v2.schemas.recon import (
     ReconSummaryOut,
     ReconThreatOut,
 )
-from pobi_agent.recon.store import ReconStore
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 
@@ -262,12 +260,7 @@ async def delete_task(
 
     # 清理本地缓存目录（TASKS_ROOT/<task_id>/），避免删除任务后残留孤儿目录。
     # 删除失败不影响 DB 记录已删除的结果，仅记日志。
-    try:
-        cache_dir = TASKS_ROOT / str(task_id)
-        if cache_dir.exists():
-            shutil.rmtree(cache_dir)
-    except Exception:
-        logger.exception("删除任务 %s 时清理本地缓存目录失败", task_id)
+    delete_task_local_data(task_id)
 
 
 @router.post("/{task_id}/cancel", response_model=TaskRead)
@@ -332,16 +325,6 @@ async def _load_or_404(session: AsyncSession, task_id: UUID, tenant_id) -> Task:
     return task
 
 
-def _recon_store(task) -> ReconStore:
-    """为指定任务构造本地 RECON 库 Store（路径约束在 TASKS_ROOT/<task_id> 内）。
-
-    本地库可能尚未物化（任务未启动/未产出侦察数据），由 Store 只读方法
-    内部旁路容错返回空结构，调用方无需预判文件存在性。
-    """
-    task_root = TASKS_ROOT / str(task.id)
-    return ReconStore.for_task(str(task.id), task_root=str(task_root))
-
-
 @router.get("/{task_id}/recon/summary", response_model=ReconSummaryOut)
 async def get_task_recon_summary(
     task_id: UUID,
@@ -350,7 +333,7 @@ async def get_task_recon_summary(
 ):
     """任务侦察总览：资产/事实/终端/技术/威胁计数 + 威胁状态与严重度分布。"""
     task = await _load_or_404(session, task_id, user.tenant_id)
-    return ReconSummaryOut(**_recon_store(task).get_summary(str(task.id)))
+    return ReconSummaryOut(**task_recon_store(task).get_summary(str(task.id)))
 
 
 @router.get("/{task_id}/recon/assets", response_model=ReconAssetsOut)
@@ -361,7 +344,7 @@ async def get_task_recon_assets(
 ):
     """派生资产视图：主机清单（来自攻击面终端）+ 服务/端口/子域类资产（来自事实）。"""
     task = await _load_or_404(session, task_id, user.tenant_id)
-    return ReconAssetsOut(**_recon_store(task).derived_assets(str(task.id)))
+    return ReconAssetsOut(**task_recon_store(task).derived_assets(str(task.id)))
 
 
 @router.get("/{task_id}/recon/endpoints", response_model=list[ReconEndpointOut])
@@ -373,7 +356,7 @@ async def get_task_recon_endpoints(
 ):
     """攻击面终端明细：host/path/method/状态码/鉴权/技术栈。"""
     task = await _load_or_404(session, task_id, user.tenant_id)
-    rows = _recon_store(task).list_endpoints(str(task.id), limit=limit)
+    rows = task_recon_store(task).list_endpoints(str(task.id), limit=limit)
     return [ReconEndpointOut(**r) for r in rows]
 
 
@@ -387,7 +370,7 @@ async def get_task_recon_facts(
 ):
     """侦察事实列表，可选按类目过滤（如 service/port/subdomain/tech/credential）。"""
     task = await _load_or_404(session, task_id, user.tenant_id)
-    rows = _recon_store(task).list_facts(str(task.id), category=category, limit=limit)
+    rows = task_recon_store(task).list_facts(str(task.id), category=category, limit=limit)
     return [ReconFactOut(**r) for r in rows]
 
 
@@ -402,7 +385,7 @@ async def get_task_recon_threats(
 ):
     """威胁态势列表（含状态机 status/严重度/CVSS/证据），可按状态/严重度过滤。"""
     task = await _load_or_404(session, task_id, user.tenant_id)
-    rows = _recon_store(task).list_threats(
+    rows = task_recon_store(task).list_threats(
         str(task.id), status=status, severity=severity, limit=limit
     )
     return [ReconThreatOut(**r) for r in rows]
@@ -417,7 +400,7 @@ async def get_task_recon_threat(
 ):
     """单威胁详情；cve_id 未命中返回 404。"""
     task = await _load_or_404(session, task_id, user.tenant_id)
-    row = _recon_store(task).get_threat(str(task.id), cve_id)
+    row = task_recon_store(task).get_threat(str(task.id), cve_id)
     if row is None:
         raise NotFoundError(f"威胁不存在: {cve_id}")
     return ReconThreatOut(**row)
@@ -431,7 +414,7 @@ async def get_task_recon_coverage(
 ):
     """增量续扫基线：已覆盖端点/技术栈/已确认威胁清单（历史任务沉淀，本轮跳过重复工作）。"""
     task = await _load_or_404(session, task_id, user.tenant_id)
-    cov = _recon_store(task).covered_assets(str(task.id))
+    cov = task_recon_store(task).covered_assets(str(task.id))
     return ReconCoverageOut(
         covered_endpoints=cov.covered_endpoints,
         covered_techniques=cov.covered_techniques,

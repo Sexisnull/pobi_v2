@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -47,6 +48,8 @@ async def test_seed_counts_new_and_covered(tmp_path):
     store.ensure_session("t")
 
     pg_session = AsyncMock()
+    result_e = MagicMock()
+    result_e.scalars.return_value.all.return_value = []  # recon_endpoints_agg：本轮无资产
     result_f = MagicMock()
     result_f.scalars.return_value.all.return_value = [
         _pg_agg_fact("endpoint", "/api/v1"),
@@ -56,10 +59,8 @@ async def test_seed_counts_new_and_covered(tmp_path):
     result_t.scalars.return_value.all.return_value = [
         _pg_agg_threat("CVE-2024-0001", status="confirmed"),
     ]
-    # 每次 seed_from_pg 调用都会依次执行两条 select：循环返回，避免第二次耗尽。
-    pg_session.execute.side_effect = lambda _stmt: (
-        result_f if pg_session.execute.call_count % 2 == 1 else result_t
-    )
+    # seed_from_pg 依次查询 endpoints → facts → threats 三张聚合表；cycle 保证二次 seed 复用同序。
+    pg_session.execute.side_effect = itertools.cycle([result_e, result_f, result_t])
 
     factory = MagicMock()
     factory.return_value.__aenter__.return_value = pg_session
@@ -87,13 +88,15 @@ async def test_seed_higher_confidence_overwrites(tmp_path):
     store.upsert_fact("t", "technology", "nginx", "old", confidence=0.4)
 
     pg_session = AsyncMock()
+    result_e = MagicMock()
+    result_e.scalars.return_value.all.return_value = []  # endpoints 聚合：空
     result_f = MagicMock()
     result_f.scalars.return_value.all.return_value = [
         _pg_agg_fact("technology", "nginx", value="new", confidence=0.95),
     ]
     result_t = MagicMock()
     result_t.scalars.return_value.all.return_value = []
-    pg_session.execute.side_effect = [result_f, result_t]
+    pg_session.execute.side_effect = itertools.cycle([result_e, result_f, result_t])
 
     factory = MagicMock()
     factory.return_value.__aenter__.return_value = pg_session

@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # ---- 应用 ----
     app_name: str = "Pobi v2"
     debug: bool = False
+    # 日志目录：容器内默认 /app/logs；宿主机开发/测试可经 POBI_V2_LOG_DIR 覆盖，
+    # 避免模块顶层硬编码容器路径导致本地无法 import 应用（历史问题）。
+    log_dir: str = "/app/logs"
 
     # ---- 数据库 ----
     database_url: str = "postgresql+psycopg://pobi:pobi@localhost:5432/pobi_v2"
@@ -78,7 +81,7 @@ class Settings(BaseSettings):
     kali_container_name: str = "pobi_kali"
 
     # ---- M4 鉴权 ----
-    jwt_secret: str = "dev-insecure-change-me"
+    jwt_secret: str = "dev-insecure-change-me-please-set-env-secret-32b-plus"
     # 注册开关：生产环境关闭开放注册
     allow_open_registration: bool = True
     # PAT 加密密钥（POBI_V2_TOKEN_ENCRYPTION_KEY）：用于持久化加密 API 令牌明文，

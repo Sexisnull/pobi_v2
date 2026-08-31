@@ -13,7 +13,32 @@
 ### 目标 `/api/v1/targets`
 - `GET /targets` 列出租户下授权目标
 - `POST /targets` 创建（`in_scope`/`out_of_scope` 以 JSONB 存储）
-- `GET/PUT/DELETE /targets/{target_id}` CRUD
+- `GET/PATCH/DELETE /targets/{target_id}` CRUD
+- `GET /targets/{target_id}/assets` 目标资产/端点全景（`recon_endpoints_agg`，limit 1000）
+
+### 目标总览 `/api/v1/targets/{target_id}`（per-target 跨任务全阶段只读聚合）
+> 前端「授权目标 → 目标总览」标签页数据源。全部接口首行校验
+> `Target.tenant_id == user.tenant_id`，越权返回 **404**（`NotFoundError`），scope 为 `targets:read`。
+
+- `GET /targets/{target_id}/overview` → `TargetOverviewSummaryOut`
+  `{facts_count, endpoints_count, threats_count, findings_count, tasks_count, severity_max, last_seen}`
+  - `severity_max` = max(威胁 severity 等级, finding severity 等级)，等级序 `critical>high>medium>low>info`
+  - `last_seen` = max(facts/threats/endpoints 的 `last_seen`，findings/artifacts/tasks 的 `created_at`)，无数据为 `null`
+- `GET /targets/{target_id}/tree` → `ReconTreeOut{hosts[],total}`
+  hosts 按 host 分组（升序），叶子 `ReconTreeNode{path,method,status_code,auth_required,tech_stack,threat_severity_max,threat_confidence}`
+  - `threat_severity_max`/`threat_confidence`：按 `path_normalized` 匹配 `ReconThreatAgg.target_endpoint`
+    得出，**优先全等**，无命中且 path 长度 > 1 时回退子串包含匹配（根路径 `/` 只参与全等，避免过宽泛）；
+    命中多条取最高 severity，同级取最大 confidence；无命中为 `info`/`0.0`
+  - 端点上限 500 条（`_MAX_ROWS`，`host + path_normalized` 排序）
+- `GET /targets/{target_id}/facts` → `{target_id,total,items[]}` 侦察事实，`category + key` 排序
+- `GET /targets/{target_id}/threats` → `{target_id,total,items[]}` 威胁，`confidence` 降序
+- `GET /targets/{target_id}/findings` → `{target_id,total,items[]}` 利用验证结果，`created_at` 降序
+- `GET /targets/{target_id}/artifacts` → `{target_id,total,items[]}` 产物，`created_at` 降序
+- 列表类接口 `limit` 默认 200、`ge=1`、`le=500`；空数据返回空数组而非 5xx
+
+**隔离约定**：`recon_*_agg` 表自带 `tenant_id`，`findings`/`artifacts`/`tasks` 自带 `target_id`
+（`Artifact.target_id` 可空）。因接口首行已校验 `Target` 归属，查询只走 `WHERE target_id = :tid`，
+**不 JOIN tasks 补 `tenant_id`**。
 
 ### 任务 `/api/v1/tasks`
 - `GET /tasks` 任务列表（含 token 三列）

@@ -78,11 +78,12 @@ def client(monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
     monkeypatch.setattr(main_mod, "persist_event_worker", _noop)
 
     monkeypatch.setattr(agent_constants, "TASKS_ROOT", tmp_path)
-    # tasks.py 在导入时以 `from ... import TASKS_ROOT` 绑定了常量副本，
-    # monkeypatch 模块属性无法穿透，需同步覆盖其模块级引用。
-    import pobi_v2.routers.tasks as tasks_mod
+    # recon_access 在导入时以 `from ... import TASKS_ROOT` 绑定了常量副本，
+    # monkeypatch 模块属性无法穿透，需同步覆盖其模块级引用（tasks 路由经
+    # engine.recon_access 间接访问本地库，不再直接持有 TASKS_ROOT）。
+    import pobi_v2.engine.recon_access as recon_access_mod
 
-    monkeypatch.setattr(tasks_mod, "TASKS_ROOT", tmp_path)
+    monkeypatch.setattr(recon_access_mod, "TASKS_ROOT", tmp_path)
 
     def _install(tenant_id: str = "tenant-test"):  # type: ignore[no-untyped-def]
         async def _fake_session():  # type: ignore[no-untyped-def]

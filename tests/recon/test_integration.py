@@ -235,8 +235,10 @@ def test_roundtrip_seed_reconcile_converge(tmp_path):
     store = ReconStore(tmp_path / "t.db")
     store.ensure_session("t")
 
-    # 第一轮 seed：新目标，全量灌入。
+    # 第一轮 seed：新目标，全量灌入。seed_from_pg 依次查询 endpoints→facts→threats，
+    # 故第一项为 recon_endpoints_agg 结果（本轮无资产，置空）。
     factory1 = _pg_session_factory(
+        _FakeScalars([]),
         _FakeScalars([_pg_agg_fact("endpoint", "/api/v1"),
                       _pg_agg_fact("technology", "nginx")]),
         _FakeScalars([_pg_agg_threat("CVE-2024-9001", status="confirmed")]),
@@ -251,6 +253,7 @@ def test_roundtrip_seed_reconcile_converge(tmp_path):
 
     # 第二轮 seed（新 factory）：已覆盖项不再重复灌入。
     factory2 = _pg_session_factory(
+        _FakeScalars([]),
         _FakeScalars([_pg_agg_fact("endpoint", "/api/v1"),
                       _pg_agg_fact("technology", "nginx"),
                       _pg_agg_fact("endpoint", "/admin")]),

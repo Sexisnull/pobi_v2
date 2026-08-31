@@ -315,33 +315,13 @@ class PobiV2EventHooks:
 
     # ──────────────────────────────────────────────────────────────────────
     # RECON 扩展事件（非 EventHooks Protocol 成员，仅 PobiV2EventHooks 提供）
-    # 供 ContextEngine 旁路写入本地库后，触发 PG 聚合层异步增量同步。
     #
-    # ⚠️ 弃用（2026-08-27）：原经内存事件总线推送 __recon_sync__，由 web 进程的
-    # recon_sync_worker 消费。但 agent 运行于 worker 进程、默认内存总线不跨进程，
+    # 注：原经内存事件总线推送 __recon_sync__、由 recon_sync_worker 消费的跨进程
+    # 同步路径已废弃（2026-08-27）：agent 运行于 worker 进程、默认内存总线不跨进程，
     # 事件丢失导致 PG 聚合层空表。现改为 ContextEngine 同进程直连 upsert_to_pg +
     # deadend_runner finally 兜底 flush（见 context_engine.py / deadend_runner.py）。
-    # 本方法保留仅作兼容空壳，不再被任何调用方使用。
+    # 历史空壳 emit_recon_upsert / recon_sync_worker 已清理，无调用方。
     # ──────────────────────────────────────────────────────────────────────
-    def emit_recon_upsert(
-        self,
-        session_id: str,
-        target_id: str,
-        tenant_id: str,
-        task_id: str,
-        source: str = "context_engine",
-    ) -> None:
-        """[弃用] 见类上方注释。保留空壳以避免潜在引用报错；新同步路径不依赖事件总线。"""
-        return
-        payload = _wrap(
-            "recon_upsert",
-            session_id,
-            target_id=target_id,
-            tenant_id=tenant_id,
-            task_id=task_id,
-            source=source,
-        )
-        asyncio.create_task(bus.publish("__recon_sync__", payload))
 
 
 async def persist_event_worker() -> None:
@@ -424,51 +404,14 @@ async def persist_event_worker() -> None:
 
 
 async def recon_sync_worker() -> None:
-    """[弃用] RECON 本地库 → PG 聚合层同步 worker（设计文档 §5，第二阶）。
+    """[已删除 2026-08-31] 原 RECON 本地库 → PG 聚合层同步 worker（设计文档 §5，第二阶）。
 
-    ⚠️ 弃用（2026-08-27）：原经内存事件总线订阅 ``__recon_sync__``，但 agent 运行
+    已废弃（2026-08-27 起）：原经内存事件总线订阅 ``__recon_sync__``，但 agent 运行
     于 worker 进程、默认内存总线不跨进程，web 进程订阅方永远收不到事件，导致 PG
     聚合层空表。现改为 ContextEngine 同进程直连 upsert_to_pg + deadend_runner
-    finally 兜底 flush。本函数保留为空壳，main.py 已停止启动它。
+    finally 兜底 flush。本函数保留为文档化占位，main.py 已停止启动、无调用方。
     """
     return
-    from pobi_agent.recon import ReconStore
-    from pobi_v2.db.session import AsyncSessionLocal
-
-    queue = await bus.subscribe("__recon_sync__")
-    while True:
-        try:
-            event = await queue.get()
-        except Exception:  # noqa: BLE001
-            continue
-        if event.get("type") != "recon_upsert":
-            continue
-        session_id = event.get("session_id")
-        target_id = event.get("target_id")
-        tenant_id = event.get("tenant_id")
-        task_id = event.get("task_id")
-        if not (session_id and target_id and tenant_id):
-            continue
-        try:
-            # 定位本地库：经 storage_context 取 task_root。
-            from pobi_agent.storage_context import get_task_root
-
-            task_root = get_task_root()
-            if task_root is None:
-                continue
-            db_path = task_root / f"{session_id}.db"
-            if not db_path.exists():
-                continue
-            store = ReconStore(db_path)
-            await store.upsert_to_pg(
-                target_id=target_id,
-                tenant_id=tenant_id,
-                task_id=task_id,
-                async_session_factory=AsyncSessionLocal,
-            )
-            store.close()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("RECON PG 同步失败（已忽略）: %s", exc)
 
 
 # ──────────────────────────────────────────────────────────────────────────
