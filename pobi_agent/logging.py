@@ -32,52 +32,63 @@ LOGGER_NAME = "pobi"
 # Create the package logger
 logger = logging.getLogger(LOGGER_NAME)
 
+# 统一日志格式：日期 时间(含毫秒) 时区 级别 模块:行号 消息
+# 时区由容器 TZ=Asia/Shanghai 决定，格式中 %(asctime)s 自动带中国时间。
+DEFAULT_FORMAT = "%(asctime)s %(levelname)-8s [%(name)s:%(lineno)d] %(message)s"
+DEFAULT_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
 
 def setup_logging(
     level: int = logging.INFO,
     log_file: Optional[str] = None,
     format_string: Optional[str] = None,
+    datefmt: Optional[str] = None,
 ) -> logging.Logger:
-    """Configure the package-wide logger.
+    """Configure the package-wide logger (and clean up third-party colored logs).
 
     Args:
-        level: Logging level (e.g., logging.DEBUG, logging.INFO).
-               Defaults to INFO.
-        log_file: Optional path to log file. If provided, logs will also
-                  be written to this file.
-        format_string: Custom format string for log messages.
-                       If not provided, uses a sensible default.
+        level: Logging level (e.g., logging.DEBUG, logging.INFO). Defaults to INFO.
+        log_file: Optional path to log file. If provided, logs are also written there.
+        format_string: Custom format. Falls back to a readable timestamped format.
+        datefmt: Custom date format.
 
     Returns:
         The configured logger instance.
     """
-    # Set the level on the package logger
+    fmt = format_string or DEFAULT_FORMAT
+    dfmt = datefmt or DEFAULT_DATEFMT
+    formatter = logging.Formatter(fmt, datefmt=dfmt)
+
+    # 强制重置 root logger：清除 arq / uvicorn / litellm 等第三方注入的
+    # 彩色 ANSI handler，避免日志里出现 \x1b[92m 等转义码导致不可读。
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    root.setLevel(level)
+    root.addHandler(logging.NullHandler())
+
     logger.setLevel(level)
-
-    # Default format
-    if format_string is None:
-        format_string = "[%(asctime)s] %(levelname)s [%(name)s] %(message)s"
-
-    formatter = logging.Formatter(format_string, datefmt="%Y-%m-%d %H:%M:%S")
-
-    # Clear existing handlers to avoid duplicates
     logger.handlers.clear()
 
-    # Console handler (stderr for daemon-friendly operation)
     console_handler = logging.StreamHandler(sys.stderr)
     console_handler.setLevel(level)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # Optional file handler
     if log_file:
-        file_handler = logging.FileHandler(log_file)
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setLevel(level)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
-    # Prevent propagation to root logger (avoids duplicate logs)
+    # 接管 root 传播：第三方库（arq/uvicorn/litellm）日志统一经本 formatter 输出，
+    # 确保全平台日志格式一致、无颜色码。
     logger.propagate = False
+    root.propagate = False
+    # 将 root 的消息导向我们的 formatter（第三方库走 root）
+    root.addHandler(console_handler)
+    if log_file:
+        root.addHandler(file_handler)
 
     return logger
 

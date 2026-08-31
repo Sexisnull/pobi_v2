@@ -92,6 +92,9 @@ services:
       # 宿主 AVFS 存储映射：agent 报告/记忆/ContextEngine 等均写入 /root/.pobi_v2
       # （由 POBI_HOME 指定），挂回宿主 ~/.pobi_v2 保证落盘到本机且跨容器重启保留。
       - ~/.pobi_v2:/root/.pobi_v2
+      # 应用日志持久化：容器内 /app/logs/{api,worker}.log 映射回宿主 ./logs，
+      # 使 docker compose logs 之外也能在宿主直接查阅统一格式的运行日志。
+      - ./logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
@@ -141,6 +144,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       # 宿主 AVFS 存储映射：与 api 一致，保证 worker 落盘到本机 ~/.pobi_v2
       - ~/.pobi_v2:/root/.pobi_v2
+      # 应用日志持久化：与 api 一致，容器内 /app/logs 映射回宿主 ./logs
+      - ./logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
@@ -148,6 +153,15 @@ services:
         condition: service_healthy
       kali:
         condition: service_healthy
+    # worker 跑 arq（非 uvicorn），无 HTTP 端口；覆盖镜像默认的 /health 探活。
+    # 容器内无 ps/pgrep/redis-cli，改用 python 检查：Redis 可达 且 arq 已在 Redis
+    # 注册（存在 arq: 前缀键，如 arq:queue:health-check），即可判定 worker 健康。
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import redis,sys; r=redis.Redis(host='redis',port=6379,socket_timeout=3); r.ping(); sys.exit(0 if r.keys('arq:*') else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     networks:
       - pobi_net
     restart: unless-stopped

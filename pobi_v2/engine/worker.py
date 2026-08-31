@@ -7,12 +7,21 @@ Worker 进程内直接调用 CoreAgent.run()，与原 pobi 的子进程 stdio �
 """
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 from arq import Worker, cron
 
+from pobi_agent.logging import setup_logging
 from pobi_v2.core.config import settings
 from pobi_v2.engine.agent_adapter import install_event_hooks
 from pobi_v2.engine.executor import run_task
 from pobi_v2.engine.queue import REDIS_SETTINGS
+
+# 统一日志格式（去 ANSI 颜色、带中国时区时间戳）；写文件到 /app/logs/worker.log
+LOG_DIR = Path("/app/logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+setup_logging(level=logging.INFO, log_file=str(LOG_DIR / "worker.log"))
 
 # 任务执行超时（秒），供对账逻辑引用，避免魔法数字重复
 JOB_TIMEOUT = 60 * 60 * 6  # 6h，渗透任务可能较长

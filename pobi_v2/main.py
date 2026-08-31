@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from pobi_agent.logging import logger, setup_logging
 from pobi_v2.core.exceptions import register_exception_handlers
 from pobi_v2.core.seed import seed_admin_if_needed
 from pobi_v2.sandbox_bootstrap import ensure_shared_kali_ready
@@ -30,6 +32,11 @@ from pobi_v2.routers import (
     pricing,
     api_tokens,
 )
+
+# 统一日志格式（去 ANSI 颜色、带中国时区时间戳）；写文件到 /app/logs/api.log
+LOG_DIR = Path("/app/logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+setup_logging(level=logging.INFO, log_file=str(LOG_DIR / "api.log"))
 
 # 前端静态资源目录（M6 引入的纯静态 SPA）
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"

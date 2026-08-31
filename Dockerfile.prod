@@ -10,6 +10,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /build
 
 # 系统级构建依赖（仅用于编译器阶段，运行时剔除）
+# 构建期换用国内镜像源以绕过 deb.debian.org 偶发 502
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+    || sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential gcc \
     && rm -rf /var/lib/apt/lists/*
@@ -36,14 +39,24 @@ WORKDIR /app
 #   复用宿主机 Docker daemon 连接全局共享 Kali 容器（无需容器内跑 daemon）
 # - ripgrep：ripgrepy 调用的系统二进制（AVFS 代码搜索能力，开箱即用）
 # - 浏览器系统依赖：Playwright / pydoll 浏览器自动化的 chromium 运行库（开箱即用）
+# 构建期换用国内镜像源（deb.debian.org 容器内访问偶发 502 Bad Gateway），
+# 确保 apt-get 稳定可用；运行时不再依赖源，无需还原。
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+    || sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        curl postgresql-client docker.io ripgrep \
+        curl postgresql-client docker.io ripgrep tzdata \
         libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
         libdrm2 libdbus-1-3 libxkbcommon0 libxcomposite1 libxdamage1 \
         libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 \
         libatspi2.0-0 fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
+
+# 时区统一为中国标准时间（Asia/Shanghai），使容器日志时间戳与本地一致
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone
 
 # 浏览器二进制固化进镜像：Playwright + pydoll 均依赖 chromium，随镜像预装，
 # 用户无需任何后装即获得完整浏览器自动化 / 认证解析 / Web 资源提取能力。
@@ -74,7 +87,7 @@ COPY web ./web
 
 # 健康检查（API 就绪）
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:8000/api/v1/health || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # 默认启动 API（worker 通过 command 覆盖）
 # 依赖仅含 uvicorn（无 gunicorn），直接用 uvicorn 拉起 ASGI 应用
