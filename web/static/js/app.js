@@ -1406,7 +1406,7 @@
           </div>
 
           ${
-            ut > 0
+            ut > 0 || ["running", "queued"].includes(detail.status)
               ? `<div class="console-tokens">
                   <div class="ctok ctok-send">
                     <span class="ctok-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg></span>
@@ -1794,6 +1794,9 @@
   function startConsoleStream(taskId) {
     closeStream();
     const onEvent = (ev) => {
+      // 实时 token 用量刷新（llm_response 事件附加 token_usage，增量更新 token 卡片）
+      const tu = (ev.payload || {}).token_usage;
+      if (tu) updateConsoleTokens(tu);
       // 任务终态推送：刷新徽章、按钮、禁用输入框，并关闭 SSE
       if (ev.type === "task_status_changed") {
         const newStatus = ev.new_status;
@@ -1880,6 +1883,18 @@
     } catch (err) {
       /* 实时流不可用时静默，initial 数据已展示 */
     }
+  }
+
+  /**
+   * 实时刷新控制台 token 卡片（发送 / 接收 / 总）。由 SSE llm_response 事件的
+   * token_usage 增量驱动；卡片未渲染（任务未开始时）时静默跳过。
+   */
+  function updateConsoleTokens(u) {
+    const nums = document.querySelectorAll(".console-tokens .ctok-num");
+    if (!nums || nums.length < 3) return;
+    nums[0].textContent = fmtNum(u.prompt_tokens || 0);
+    nums[1].textContent = fmtNum(u.completion_tokens || 0);
+    nums[2].textContent = fmtNum(u.total_tokens || 0);
   }
 
   /**
@@ -2297,7 +2312,7 @@
     const card = $("#last-probe-card");
     if (!card) return;
     try {
-      const tasks = await api("/tasks?limit=50");
+      const tasks = await api("/tasks?include_probe=true&limit=50");
       const probe = (tasks || []).filter((t) => t.kind === "probe").sort(
         (a, b) => new Date(b.created_at) - new Date(a.created_at)
       )[0];

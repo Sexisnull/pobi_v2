@@ -36,6 +36,7 @@ from pobi_v2.schemas.task import (
 from pobi_v2.engine.queue import enqueue_task
 from pobi_v2.engine.guardrails import check_scope
 from pobi_v2.engine.cancel_state import clear_cancel, request_cancel
+from pobi_v2.engine.event_bus import get_realtime_usage
 from pobi_agent.constants import TASKS_ROOT
 from pobi_v2.schemas.recon import (
     ReconAssetsOut,
@@ -127,10 +128,13 @@ async def list_tasks(
     user: User = Depends(require_scope("tasks:read")),
     target_id: UUID | None = Query(default=None),
     status_filter: TaskStatus | None = Query(default=None, alias="status"),
+    include_probe: bool = Query(default=False, description="默认隐藏 kind=probe 的链路测试任务，仅看板需要最近探针时可显式开启"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> list[Task]:
     stmt = select(Task).where(Task.tenant_id == user.tenant_id)
+    if not include_probe:
+        stmt = stmt.where(Task.kind != "probe")
     if target_id is not None:
         stmt = stmt.where(Task.target_id == target_id)
     if status_filter is not None:
@@ -195,18 +199,35 @@ async def task_usage(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(require_scope("tasks:read")),
 ) -> TaskUsage:
-    """单次任务的 token 用量明细（发送 / 接收 / 总计）。"""
+    """单次任务的 token 用量明细（发送 / 接收 / 总计）。
+
+    运行中 / 排队中的任务优先返回 Redis 实时累计（跨 worker 合并）；
+    终态 / 无实时数据时回退 DB 落库值。
+    """
     task = await session.get(Task, task_id)
     if task is None or task.tenant_id != user.tenant_id:
         raise NotFoundError("任务不存在")
+    prompt_tokens = task.prompt_tokens or 0
+    completion_tokens = task.completion_tokens or 0
+    total_tokens = task.total_tokens or 0
+    status = task.status.value if hasattr(task.status, "value") else str(task.status)
+    if status in ("running", "queued"):
+        try:
+            realtime = await get_realtime_usage(str(task_id))
+            if realtime and (realtime["prompt_tokens"] or realtime["completion_tokens"] or realtime["total_tokens"]):
+                prompt_tokens = realtime["prompt_tokens"]
+                completion_tokens = realtime["completion_tokens"]
+                total_tokens = realtime["total_tokens"]
+        except Exception:
+            pass
     return TaskUsage(
         task_id=str(task.id),
         name=task.name,
-        status=task.status.value if hasattr(task.status, "value") else str(task.status),
+        status=status,
         model=task.model,
-        prompt_tokens=task.prompt_tokens,
-        completion_tokens=task.completion_tokens,
-        total_tokens=task.total_tokens,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
     )
 
 

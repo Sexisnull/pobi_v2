@@ -299,6 +299,10 @@ class PobiV2EventHooks:
         }
         if thinking_text:
             payload["thinking_text"] = _truncate(thinking_text, 2000)
+        # 附加实时 token 累计，供前端经 SSE 增量刷新 token 卡片
+        store = _session_usage_store.get(session_id)
+        if store is not None:
+            payload["token_usage"] = store.as_dict()
         wrapped = _wrap("llm_response", session_id, **payload)
         asyncio.create_task(bus.publish(session_id, wrapped))
         asyncio.create_task(bus.publish("__plan_persist__", wrapped))
@@ -492,8 +496,50 @@ _session_usage_store: dict[str, _SessionUsage] = {}
 _session_usage_lock = asyncio.Lock()
 
 
+def _usage_redis_key(session_id: str) -> str:
+    """Redis 中会话级 token 实时累计的 key。"""
+    return f"pobi:usage:{session_id}"
+
+
+def _push_usage_to_redis(session_id: str, usage: Any) -> None:
+    """把单次 LLM usage 异步累加到 Redis（跨进程实时真源，供 api/SSE 读取）。
+
+    事件总线为 Redis 后端时生效；memory 后端（开发模式）跳过。
+    采用 HINCRBY 原子累加，多 worker 副本下各副本写入可正确合并。
+    """
+    redis_client = getattr(bus, "_redis", None)
+    if redis_client is None:
+        return
+    prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+    completion = int(getattr(usage, "completion_tokens", 0) or 0)
+    total = int(getattr(usage, "total_tokens", 0) or 0) or (prompt + completion)
+    if not (prompt or completion or total):
+        return
+
+    async def _incr() -> None:
+        try:
+            key = _usage_redis_key(session_id)
+            pipe = redis_client.pipeline()
+            pipe.hincrby(key, "prompt_tokens", prompt)
+            pipe.hincrby(key, "completion_tokens", completion)
+            pipe.hincrby(key, "total_tokens", total)
+            pipe.expire(key, 86400)  # 24h 兜底，避免孤儿 key 长期残留
+            await pipe.execute()
+        except Exception:
+            pass
+
+    try:
+        asyncio.create_task(_incr())
+    except Exception:
+        pass
+
+
 def _accumulate_session_usage(session_id: str, usage: Any) -> None:
-    """把单次 LLM 响应的 usage 累加到会话计数器（线程/协程安全，O(1)）。"""
+    """把单次 LLM 响应的 usage 累加到会话计数器（线程/协程安全，O(1)）。
+
+    内存累计供 executor 任务结束落库；同时异步写入 Redis 供 api 进程
+    实时读取（任务详情页 token 卡片 / SSE 增量推送）。
+    """
     prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
     completion = int(getattr(usage, "completion_tokens", 0) or 0)
     total = int(getattr(usage, "total_tokens", 0) or 0) or (prompt + completion)
@@ -501,16 +547,44 @@ def _accumulate_session_usage(session_id: str, usage: Any) -> None:
     store.prompt_tokens += prompt
     store.completion_tokens += completion
     store.total_tokens += total
+    _push_usage_to_redis(session_id, usage)
 
 
 async def get_session_usage(session_id: str) -> dict[str, int]:
-    """读取会话累计 token 用量。"""
+    """读取会话累计 token 用量（内存，executor 落库用）。"""
     async with _session_usage_lock:
         store = _session_usage_store.get(session_id)
         return store.as_dict() if store else _SessionUsage().as_dict()
+
+
+async def get_realtime_usage(session_id: str) -> dict[str, int]:
+    """读取会话实时 token 累计（api 进程侧）。
+
+    优先 Redis 跨进程真源（多 worker 合并后的累计）；无实时数据时回退
+    内存计数（同一进程内等价）。Redis 不可用或 key 不存在时返回全 0。
+    """
+    redis_client = getattr(bus, "_redis", None)
+    if redis_client is not None:
+        try:
+            data = await redis_client.hgetall(_usage_redis_key(session_id))
+            if data:
+                return {
+                    "prompt_tokens": int(data.get("prompt_tokens", 0) or 0),
+                    "completion_tokens": int(data.get("completion_tokens", 0) or 0),
+                    "total_tokens": int(data.get("total_tokens", 0) or 0),
+                }
+        except Exception:
+            pass
+    return await get_session_usage(session_id)
 
 
 async def reset_session_usage(session_id: str) -> None:
     """清空会话累计（任务启动时调用，避免跨任务污染）。"""
     async with _session_usage_lock:
         _session_usage_store.pop(session_id, None)
+    redis_client = getattr(bus, "_redis", None)
+    if redis_client is not None:
+        try:
+            await redis_client.delete(_usage_redis_key(session_id))
+        except Exception:
+            pass

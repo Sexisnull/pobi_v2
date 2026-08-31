@@ -42,6 +42,7 @@
 1. `POST /api/v1/tasks` 创建任务 → 护栏校验 scope → 状态 `queued` → 入队 ARQ。
 2. ARQ Worker 拉起 `engine/executor.py` → 分流 `deadend_runner`（M8 主路径，驱动 `DeadEndAgent`）或 `probe_runner`（probe 快路径，绕过 avfs/多智能体）。
 3. 运行期事件经 `pobi_agent.EventHooks` → `engine/event_bus.py` → 落库 `TaskEvent` + 会话级 token 累计；SSE 经 `routers/stream.py` 实时推送。
+   - **Token 实时统计链路（2026-08-28）**：统一层返回 `usage` → `emit_llm_response` 内存累计（executor 任务结束落库用）+ **异步 HINCRBY 写 Redis**（`pobi:usage:{tid}`，TTL 24h，跨 worker 合并的实时真源）→ `llm_response` 事件 payload 附加 `token_usage` 累计值 → SSE 推送前端实时刷新 token 卡片；`GET /tasks/{id}/usage` 对 running/queued 任务**优先读 Redis 实时值**，终态回退 DB。`reset_session_usage` 同时清内存与 Redis。
 4. **侦察/利用产物旁路落库**：supervisor 调用 requester/shell/webapp_analyzer（侦察与利用共用同一 `RequesterAgent`，仅提示词不同）后，在 `agents/components/executor.py` 的 `_add_agent_output_to_context` 内调用 `_persist_recon_facts`，解析 agent 输出文本中的端点 / 技术栈，经 `ContextEngine.add_discovered_fact`（落 `recon_facts`）与 `ContextEngine.add_recon_endpoint`（落 `recon_endpoints`）旁路写入本地 SQLite（`~/.pobi_v2/tasks/<task_id>/<task_id>.db`，`ReconStore.for_task` 任务级单一库，非 `recon/` 子目录）。该通道在 agent 运行期随跑随写、异常仅记 warning 不阻断主循环，**任务取消不影响已落库数据**；`ContextEngine.recon_store` 未注入时全部 no-op。正式 `findings`/`task_events` 仍仅在 `_persist_outcome` 的 `completed` 路径写入（取消分支跳过）。
 4. 高危工具调用 → `engine/approval.py` 创建 `ApprovalRequest`（checkpoint，失败关闭）→ 前端审批或 `auto_approve`。
 5. 完成 → 状态 `completed`/`failed`/`cancelled`，`result` 写入；报告经 `routers/report.py` 导出。
@@ -110,7 +111,7 @@ tasks/<task_id>/
 |---|---|
 | `agent_start`/`agent_end`/`agent_error` | 智能体启动/完成/失败（Agent 群卡片状态徽章） |
 | `agent_thought` | 主控思考 |
-| `llm_iteration`/`llm_input`/`llm_response` | LLM 迭代号/输入/响应（可折叠面板，含 thinking_text） |
+| `llm_iteration`/`llm_input`/`llm_response` | LLM 迭代号/输入/响应（可折叠面板，含 thinking_text，带 token_usage 实时累计） |
 | `tool_call_start`/`tool_call_end` | 工具调用与返回 |
 | `phase_changed` | 阶段流转（reconnaissance 等） |
 | `task_status_changed`/`confidence_update`/`validation_result` | 状态/置信度/验证 |
@@ -126,7 +127,7 @@ tasks/<task_id>/
 | `GET /tasks/{id}/live` | current_phase/current_agent/各 Agent 状态/recent_events/agent_work | 事件聚合 |
 | `GET /tasks/{id}/plan` | 执行计划步骤与进度 | 事件落库 |
 | `GET /tasks/{id}/findings` | 发现列表 | postgres findings |
-| `GET /tasks/{id}/usage` | 用量（终态回退 DB） | Redis + postgres |
+| `GET /tasks/{id}/usage` | 用量（running 读 Redis 实时值，终态回退 DB） | Redis + postgres |
 | `GET /tasks/{id}/recon/threats` | 威胁态势条（severity 分桶） | 本地 sqlite |
 | `GET /approvals?task_id=` | 待审批数 → 自主度仪表 | postgres |
 
