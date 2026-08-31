@@ -42,8 +42,11 @@ uv.lock
 # 本地临时验证脚本（dvwa/test/probe 等一次性调试产物）
 python_scripts/
 
-# IDE 规划缓存（CodeBuddy plans 非源码）
-.codebuddy/plans/
+# IDE 缓存（CodeBuddy 非源码，含 plans 等）
+.codebuddy/
+
+# 前端构建产物（Vite 产物，由 webapp/ npm run build 生成，非源码）
+web/spa/
 
 # 设计产物库（非源码，按需本地保留）
 .design_library/

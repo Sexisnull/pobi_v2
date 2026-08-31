@@ -43,15 +43,37 @@ else
   fi
 fi
 
-echo "==> [dev] 启动服务（源码挂载 + 热重载）"
+echo "==> [dev] 启动后端服务（源码挂载 + 热重载，不含 web 容器）"
 docker compose up -d
+
+# ---- 前端：宿主 Vite dev server（HMR，无需 build / 不进 Docker）----
+# 开发阶段前端不依赖 Docker 的 web 容器，直接在宿主起 Vite（端口 5173），
+# 其 /api 代理指向 127.0.0.1:8000（宿主映射的 api 容器），改完即时生效。
+WEBAPP_DIR="$(pwd)/webapp"
+VITE_PID=""
+if [ -d "$WEBAPP_DIR" ] && command -v npm >/dev/null 2>&1; then
+  if [ -d "$WEBAPP_DIR/node_modules" ]; then
+    echo "==> [dev] 后台启动前端 Vite dev server（http://127.0.0.1:5173）"
+    ( cd "$WEBAPP_DIR" && nohup npm run dev > /tmp/pobi_vite_dev.log 2>&1 & echo $! > /tmp/pobi_vite_dev.pid )
+    VITE_PID="$(cat /tmp/pobi_vite_dev.pid 2>/dev/null || true)"
+  else
+    echo "    [warn] webapp/node_modules 不存在，跳过自动启动 Vite。"
+    echo "           请先执行： cd webapp && npm install && npm run dev"
+  fi
+else
+  echo "    [warn] 未检测到 webapp/ 或 npm，前端请手动启动：cd webapp && npm run dev"
+fi
 
 echo ""
 echo "==> 开发模式已就绪。"
-echo "    前端入口：      http://127.0.0.1/"
+echo "    前端入口(HMR) : http://127.0.0.1:5173   （Vite 自动热更新，改完即生效）"
 echo "    后端直连：      http://127.0.0.1:8000/health"
-echo "    日志（跟随）：  docker compose logs -f api worker"
+echo "    前端日志：      tail -f /tmp/pobi_vite_dev.log"
+echo "    Docker 日志：   docker compose logs -f api worker"
 echo ""
-echo "    提示：修改 api（pobi_v2/）源码后 uvicorn --reload 自动生效；"
+echo "    提示：修改前端（webapp/）后 Vite HMR 自动生效，无需 build、无需重启 Docker；"
+echo "          修改 api（pobi_v2/）源码后 uvicorn --reload 自动生效；"
 echo "          修改 worker（pobi_agent/）源码后需手动 docker compose restart worker 生效。"
-echo "    若修改了依赖或 Dockerfile，请执行： ./start-dev.sh rebuild"
+echo "          若修改了依赖或 Dockerfile，请执行： ./start-dev.sh rebuild"
+echo ""
+echo "    停止：./stop-dev.sh   （会一并结束 Vite 进程）"

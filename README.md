@@ -25,7 +25,7 @@
 - **AVFS 命名空间修复**：`DeadEndAgent` 以 `agent_id` 命名空间挂载 memory 工作区，子 Agent（executor / MemoryAgent）统一以同一 `memory_session_id` 访问，规避「AVFS workspace 'memory' is not mounted」所致的任务阻塞。
 - **function-call steps 序列化防御**：`parse_browser_steps` 兼容模型在嵌套 function-call 中将 `steps` 字符串化（先 `json.loads` 解析、解包 `{"steps":[...]}`），避免 `'str' object has no attribute 'items'` 类失败。
 - **Token 用量统计**：会话级 token 累计落库，按每百万 token 单价估算成本。
-- **前端 SPA**：纯静态单页应用（vanilla JS + SSE），FastAPI 直接挂载 `web/`，零构建步骤。
+- **前端 SPA**：React 单页应用（`webapp/` 经 Vite 构建 → `web/spa/`，`base=/`），nginx 根目录静态托管，`/` 即控制台；开发阶段由宿主 Vite dev server（HMR）提供，不进 Docker。
 
 ## 记忆与缓存持久机制
 
@@ -66,7 +66,7 @@
 | M3 | 持久化与产物落库 / 取消与续跑 | ✅ |
 | M4 | 多租户鉴权（JWT + 资源隔离） | ✅ |
 | M5 | 审批护栏 + 结构化报告导出 | ✅ |
-| M6 | 前端 SPA（vanilla JS + SSE） | ✅ |
+| M6 | 前端 SPA（React + Vite，base=/，nginx 托管） | ✅ |
 | M7 | 轻量扫描工作流（`ScanWorkflow`，Docker 缺失时回退） | ✅ |
 | M8 | 完整复刻原 `DeadEndAgent` 多智能体系统（主路径） | ✅ |
 | M8+ | 运行指令通道 / 系统状态对账 / 统一 LLM 抽象层预留 / Token 用量统计 / 端到端链路验证（probe 快路径 + 健康检查页） | ✅ |
@@ -162,11 +162,11 @@ pobi_v2/
 ├── alembic/
 │   ├── env.py
 │   └── versions/
-├── web/                     # 前端 SPA（FastAPI 直接挂载，无需构建）
-│   ├── index.html
-│   └── static/
-│       ├── css/styles.css
-│       └── js/app.js
+├── webapp/                  # 前端源码（React + Vite，base=/）
+│   ├── vite.config.js        # base=/，outDir=../web/spa，/api 代理 127.0.0.1:8000
+│   └── src/                  # 页面 / 组件 / 路由（BrowserRouter basename="/"）
+├── web/                     # 前端构建产物（webapp build -> web/spa/），nginx 根目录托管
+│   └── spa/
 └── pobi_v2/
     ├── __init__.py
     ├── main.py              # FastAPI 入口（挂载 /static、/app、/web/*）
@@ -224,11 +224,35 @@ pobi_v2/
 
 ## 快速开始
 
+### 方式一：开发模式（推荐，前端 HMR 热更新）
+
+一条命令拉起 Docker 后端 + 自动后台启动前端 Vite dev server：
+
 ```bash
 # 在仓库根目录（uv workspace 已配置）
 uv sync
+cd webapp && npm install && cd ..   # 首次需安装前端依赖
 
-# 启动依赖
+./start-dev.sh
+#   - Docker 后端：api/worker/postgres/redis/kali（源码挂载 + uvicorn --reload）
+#   - web 容器默认不启动（profiles: [web]），前端由宿主 Vite 提供
+#   - 自动后台启动 Vite dev server（:5173，HMR）
+```
+
+- 前端入口（HMR）：**http://127.0.0.1:5173**（改完即时生效，无需 build / 重启 Docker）
+- 后端直连：http://127.0.0.1:8000/health ｜ API 文档：http://127.0.0.1:8000/docs
+- 前端日志：`tail -f /tmp/pobi_vite_dev.log`
+- Vite 的 `/api` 已代理到宿主 `127.0.0.1:8000`（api 容器映射端口），前后端联调照常
+- 停止：`./stop-dev.sh`（同时结束 Docker 服务与 Vite 进程）
+
+> 手动分步等价于上面：`docker compose up -d`（仅后端）+ `cd webapp && npm run dev`（前端 HMR）
+
+### 方式二：纯后端（无 Docker 前端，仅调试 API）
+
+```bash
+uv sync
+
+# 启动依赖（数据库 / 队列 / 沙箱）
 docker compose up -d
 
 # 初始化数据库
@@ -245,24 +269,18 @@ API 文档： http://localhost:8000/docs
 
 ### 前端访问
 
-纯静态前端 SPA 由后端直接托管，**无需 Node / 构建步骤**：
+前端为 React SPA（`webapp/` 经 Vite 构建 → `web/spa/`，`base=/`）。
 
-```bash
-# 后端启动后直接访问
-open http://localhost:8000/app
-```
+- **开发阶段**：访问 **http://127.0.0.1:5173**（Vite dev server，HMR，不进 Docker、不 build）。
+- **生产 / 联调 nginx 形态**：`cd webapp && npm run build` 后访问 http://<主机>/（nginx 根目录托管 `web/spa`，`/` 即控制台；`/app/` 为兼容别名）。
 
-- 登录页：邮箱 / 密码登录，或开放注册（默认开启，生产请置 `POBI_V2_ALLOW_OPEN_REGISTRATION=false`）。
-- 主界面左侧切换页面：
+主界面左侧切换页面：
   - **任务看板**：新建（校验授权范围 -> 入队）、查看详情、SSE 实时事件流、取消 / 重入队、报告导出；任务控制台内嵌 token 概览卡片。
   - **授权目标**：管理 `in_scope` / `out_of_scope`，护栏据此拒绝越权任务。
   - **审批**：高危工具调用待审批时，可一键批准 / 拒绝（fail-closed）。
   - **审计**：按时间倒序查看全局审计事件。
   - **健康检查**：聚合 Worker / Kali 沙箱 / 模型服务三段实时状态，可一键发起端到端链路探测并展示上一次探测结论。
   - **Token 用量**：全局汇总卡片 + 价格配置 + 任务明细表，按每百万 token 单价估算成本。
-- 静态资源挂载于 `/static`，SPA 路由走 `/web/*`（非资源回退 `index.html`）。
-
-> 仅做本地文件打开（`file://`）不可用，必须经过后端 `/app` 以携带同源 Cookie 与 CORS。
 
 ### 端到端流程
 

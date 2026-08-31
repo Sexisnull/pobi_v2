@@ -27,6 +27,7 @@ services:
       - ./pobi_agent:/app/pobi_agent
       - ./pobi_prompts:/app/pobi_prompts
       - ./alembic:/app/alembic
+      - ./web:/app/web:ro
       - ~/.pobi_v2:/root/.pobi_v2
     # 开发期关闭自动重启，避免 reload 与 restart 策略打架
     restart: "no"
@@ -43,6 +44,7 @@ services:
       - ./pobi_agent:/app/pobi_agent
       - ./pobi_prompts:/app/pobi_prompts
       - ./alembic:/app/alembic
+      - ./web:/app/web:ro
       - ~/.pobi_v2:/root/.pobi_v2
     restart: "no"
     # 注意：开发期 **不** 使用 arq --watch。--watch 会监听 /app 下任何文件变更
@@ -52,7 +54,13 @@ services:
     # 同理，api 的 uvicorn --reload 仅热重载 API 进程，不会触发 arq worker 重载。
     command: ["arq", "pobi_v2.engine.worker.WorkerSettings"]
 
+  # 开发模式默认不启动 web(nginx) 容器：前端由宿主 Vite dev server（webapp/，
+  # 端口 5173，自带 HMR）直接提供，改完即时生效，无需 build、无需重启 Docker。
+  # 仅当需联调「nginx 托管静态产物」形态时，显式拉起：
+  #   docker compose --profile web up -d web
+  # 此时请先 `cd webapp && npm run build` 生成 web/spa 产物。
   web:
+    profiles: [web]
     # 开发模式：用关闭静态缓存的 nginx 配置覆盖生产版
     # （生产 nginx.conf 有 /static/ expires 1d，浏览器强缓存导致改 JS 不生效）
     volumes:
