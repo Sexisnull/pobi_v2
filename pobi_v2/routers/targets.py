@@ -6,6 +6,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
+from pobi_agent.logging import logger
 from enum import Enum
 from typing import Any
 from uuid import UUID
@@ -13,6 +14,7 @@ from uuid import UUID
 from pobi_v2.core.deps import get_current_user, require_scope
 from pobi_v2.core.exceptions import ConflictError, NotFoundError
 from pobi_v2.db.models import Artifact, Finding, Target, Task, User
+from pobi_v2.engine.recon_access import delete_task_local_data
 from pobi_v2.db.recon_models import ReconEndpointAgg, ReconFactAgg, ReconThreatAgg
 from pobi_v2.db.session import get_session
 from pobi_v2.schemas.recon import (
@@ -457,5 +459,17 @@ async def delete_target(
     target = await session.get(Target, target_id, options=[joinedload(Target.tasks)])
     if target is None or target.tenant_id != user.tenant_id:
         raise NotFoundError("目标不存在")
+    # 先取任务 id：级联删除后 ORM 会清空关系，无法再取。
+    task_ids = [t.id for t in target.tasks]
     await session.delete(target)
     await session.commit()
+
+    # 清理各任务的本地缓存目录（TASKS_ROOT/<task_id>/）。
+    # 本地目录按 task_id 组织，不会随目标删除自动消失，须逐个清理，
+    # 否则与单任务删除（delete_task）不一致，遗留孤儿目录。
+    # 失败不影响 DB 记录已删除的结果。
+    for task_id in task_ids:
+        try:
+            delete_task_local_data(task_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("删除目标 %s 时清理任务 %s 本地缓存目录失败", target_id, task_id)

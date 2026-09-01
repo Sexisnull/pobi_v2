@@ -3,6 +3,15 @@
 > 取自 `README.md` 待办、`docs/PROJECT_GOAL.md` §2.4/§2.5。以源码与 docs 为准。
 
 ## 已落地（本轮更新确认）
+- [x] **任务认证前置 PreAuth（2026-09-01）**：任务创建阶段完成登录，为 L0 认证后爬取与 exploitation 提供会话。
+  - 数据模型：`Task` 新增 `auth_mode/auth_status/auth_username/auth_secret(Fernet 加密)/auth_login_url/auth_profile(默认 preauth)/auth_error/auth_updated_at`（alembic `0018_task_auth`）。
+  - 引擎层 `engine/preauth.py`：`run_auto_auth` 自动分支（复用原生 `authenticate_service`，无主控调度）+ `ManualAuthSession` 手动分支（`BrowserSession` 截图轮询 + navigate/click/fill/press/eval/wait 指令，10 分钟超时自动销毁）。
+  - API `routers/task_auth.py`：`GET /auth/status`、`POST /auth/auto`、`POST /auth/manual/start|action|capture|abort`、`GET /auth/manual/snapshot`。
+  - 会话落盘走原生 `AuthContextHandler` 三件套（`{profile}.json + {profile}.playwright.json + index.json`）；认证结果写 recon_facts（category=authentication）；**防覆盖靠 profile 名隔离**（`preauth` vs 原生自有 profile），authenticator 提示词注入"已有 preauth 会话优先 validate 复用"。
+  - 前端：`Tasks.jsx` 创建表单认证方式选择 + `AuthPanel.jsx` 手动登录远程控制面板（截图轮询 + 指令 + 捕获/销毁）。
+  - 测试：`tests/test_preauth.py` 10 passed。
+  - 说明：手动分支 `_MANUAL_SESSIONS` 为进程内注册表，仅 api 单 worker 有效（dev 可接受，多 worker 需 Redis）。
+- [x] **创建前凭据预检（2026-09-01 增量）**：任务创建时配置账号密码后先真实登录验证，凭据错误不允许发放任务。`POST /api/v1/tasks/verify-auth`（无 task_id 依赖）+ `engine/preauth.verify_credentials`（临时目录 + 唯一 `verify_<uuid>` profile 跑 `authenticate_service`，验证结束清理，不落盘、不污染熔断计数）；前端 Tasks.jsx 增加「验证凭据」按钮 + 结果徽标（成功绿/凭据错误红/需人工橙），auto 模式创建门禁（`failed` 拦截、MFA/aborted 放行走手动）。测试 `tests/test_preauth.py` 增至 16 passed。
 - [x] **目标总览页（2026-08-31）**：`授权目标` 视图内左侧新增「目标列表 / 目标总览」标签页，点选目标卡片进入总览。后端在 `routers/targets.py` 新增 6 个 per-target 只读接口（`overview`/`tree`/`facts`/`threats`/`findings`/`artifacts`），跨 `recon_facts_agg` + `recon_endpoints_agg` + `recon_threats_agg` 与通用阶段表 `findings`/`artifacts`/`tasks` 聚合；树节点严重度按 `path_normalized` 匹配 `target_endpoint`（全等优先、回退子串）。隔离沿用首行 `Target.tenant_id` 校验，查询只走 `WHERE target_id`（不 JOIN tasks）。前端为 vanilla JS，无构建步骤。
 - [x] **PG 增量同步 + 资产聚合表（2026-08-31）**：本地三表加 `pg_synced_at` 脏标记列（旧库幂等补列），`upsert_to_pg` 只同步脏行、成功后打标，`_recon_emit_sync` 改 in-flight 合并防 create_task 堆积；收敛策略改"内容最新 wins + confidence GREATEST"。新增 PG 资产聚合表 `recon_endpoints_agg`（alembic 0017）支撑目标全景图资产视图，`seed_from_pg` 续扫灌入本地；新增 `GET /targets/{id}/assets` 接口。用户环境需 `alembic upgrade head` + 重建 worker/api 容器。
 - [x] **子 agent 死循环熔断 + 足迹驱动收敛（2026-08-31）**：修复任务 `535aee8e` requester 死磕 UNION SELECT 被 connection reset 拦截后 50 轮不收敛、30min 熔断 failed 的问题。落地：`pw_send_payload` 实时足迹写 `recon_techniques`（含 endpoint 前缀、成功/失败均记）→ 接通 `was_already_attempted` 防重复 → `is_surface_dead` 死路硬护栏（>=10 失败无成功即 BLOCKED）→ supervisor/requester prompt 注入 "Failed Attempt Footprints" 摘要证据引导转向 → 超时分支补错误描述。用户自行新建任务验证。

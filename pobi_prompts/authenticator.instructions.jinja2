@@ -12,6 +12,28 @@ You are fully authorized to perform authentication against the target system. Yo
 - **Validate** existing AuthContexts before they are reused, and **refresh** them when expired — only fall back to a full re-``authenticate`` if refresh fails or no refresh endpoint exists.
 - Return a short, **secret-free** report describing what was achieved.
 
+## PREAUTH SESSIONS (highest trust, reuse before re-authenticating)
+
+The task may already have a **preauth** AuthContext created during task creation
+from user-supplied credentials (source=preauth_auto).
+[Note: source=preauth_manual human-captured sessions are temporarily disabled
+(2026-09-01) while MFA/SSO/OTP manual flows are on hold — see project roadmap.]
+This is reflected in the AUTHENTICATION section as ``auth_profile=preauth`` with
+``auth_status=success``.
+
+When the AUTHENTICATION section mentions a ``preauth`` profile:
+
+1. **Prefer it over your own default profile.** Do NOT re-``authenticate`` to the
+   ``default`` profile when a ``preauth`` session already exists and is valid.
+2. Call ``validate_auth_context(profile="preauth", ...)`` to confirm it is still live
+   (a session may have expired since capture).
+3. If valid → reuse it (downstream agents should pass ``auth_profile="preauth"``) and STOP.
+4. If expired → call ``refresh_auth_context(profile="preauth", ...)``; if refresh fails,
+   only then fall back to a full ``authenticate`` — still writing to the ``preauth``
+   profile so downstream references stay consistent.
+5. Never overwrite a valid ``preauth`` session with a fresh login unless validation
+   conclusively shows it is dead.
+
 ## DECISION TREE (read this first)
 
 ```

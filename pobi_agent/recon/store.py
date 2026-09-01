@@ -940,6 +940,16 @@ class ReconStore:
         ten = _UUID(str(tenant_id))
         tk = str(task_id)
         root = Path(task_root)
+        # 诊断：旧任务沉淀落库前，确认将要聚合的本地文件是否存在（供同步链路排查）。
+        _summaries_dir = root / "agent" / "memory" / "summaries"
+        _ctx_dest = root / "agent" / "run_context" / "context.txt"
+        _mtr_dest = root / "metrics" / "metrics.json"
+        _memory_files = sorted(p.name for p in _summaries_dir.glob("*.md")) if _summaries_dir.exists() else []
+        logger.info(
+            "[SEED-OUT] 旧任务沉淀开始落库 | source_task_id=%s | target_id=%s | "
+            "task_root=%s | memory摘要数=%d | context存在=%s | metrics存在=%s",
+            tk, str(tgt), str(root), len(_memory_files), _ctx_dest.exists(), _mtr_dest.exists(),
+        )
         now = _utcnow()
 
         # --- 读取本地文件（一次性，IO 可控） ---
@@ -1125,6 +1135,10 @@ class ReconStore:
 
         # 写回本地：memory 摘要 + context.txt（仅当本地尚无该内容时写入，避免覆盖新任务自身产出）
         root = Path(task_root)
+        logger.info(
+            "[SEED-IN] 命中 PG 历史沉淀：memory=%d / context=%s / metrics=%s | 写回根目录=%s",
+            len(mem_aggs), bool(ctx_aggs), bool(mtr_aggs), root,
+        )
         summaries_dir = root / "agent" / "memory" / "summaries"
         for m in mem_aggs:
             result["memory"][m.agent_role] = m.summary_text

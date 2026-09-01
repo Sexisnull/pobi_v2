@@ -4,11 +4,12 @@
 """
 from __future__ import annotations
 
-import logging
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -48,6 +49,63 @@ from pobi_v2.schemas.recon import (
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 
+# 凭据预检整体超时（秒）：浏览器导航+动作 + 冗余兜底
+VERIFY_AUTH_TIMEOUT_S = 45
+
+
+class VerifyAuthIn(BaseModel):
+    """创建任务前凭据预检请求体（明文凭据仅用于一次性验证，不落库）。"""
+
+    target_id: UUID
+    username: str = Field(..., max_length=255)
+    password: str = Field(..., max_length=4096)
+    login_url: str | None = Field(default=None, max_length=2048)
+    auth_flow: str = Field(default="form", pattern="^(form|http|json)$")
+
+
+@router.post("/verify-auth", status_code=status.HTTP_200_OK)
+async def verify_auth(
+    body: VerifyAuthIn,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_scope("tasks:write")),
+) -> dict:
+    """创建任务前预检凭据：真实登录一次并反馈通过/失败（不创建任务、不落盘会话）。
+
+    用于任务创建阶段"主动探测验证"——凭据错误（bad credential）时前端阻止发放任务。
+    """
+    target = await session.get(Target, body.target_id)
+    if target is None or target.tenant_id != user.tenant_id:
+        raise NotFoundError("关联的目标不存在")
+    allowed, reason = check_scope(target, target.url)
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"目标超出授权范围，拒绝验证: {reason}",
+        )
+    from pobi_v2.engine.preauth import verify_credentials
+
+    logger.info(
+        "[TASK-AUTH] 凭据预检请求 | target_id=%s | login_url=%s | username=%s | auth_flow=%s",
+        body.target_id, body.login_url, body.username, body.auth_flow,
+    )
+    try:
+        result = await asyncio.wait_for(
+            verify_credentials(
+                target=target.url,
+                login_url=body.login_url,
+                username=body.username,
+                password=body.password,
+                auth_flow=body.auth_flow,
+            ),
+            timeout=VERIFY_AUTH_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="凭据验证超时（超过 45 秒），请稍后重试或改用「手动登录」",
+        ) from exc
+    return result
+
 
 @router.post("", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
 async def create_task(
@@ -59,6 +117,10 @@ async def create_task(
     target = await session.get(Target, data.target_id)
     if target is None or target.tenant_id != user.tenant_id:
         raise NotFoundError("关联的目标不存在")
+    logger.info(
+        "[TASK-CREATE] 创建任务请求 | target_id=%s | url=%s | kind=%s | mode=%s | has_auth=%s",
+        data.target_id, target.url, data.kind, data.agent_mode, bool(data.auth_password),
+    )
     # 护栏：创建即校验目标 URL 是否在授权范围内（越权直接拒绝）
     allowed, reason = check_scope(target, target.url)
     if not allowed:
@@ -66,7 +128,13 @@ async def create_task(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"目标超出授权范围，拒绝创建任务: {reason}",
         )
-    task = Task(**data.model_dump())
+    # 认证前置（PreAuth）：分离凭据明文，密码经 Fernet 加密落库（auth_secret）
+    payload = data.model_dump(exclude={"auth_password"})
+    if data.auth_password:
+        from pobi_v2.core.security import encrypt_api_token
+
+        payload["auth_secret"] = encrypt_api_token(data.auth_password)
+    task = Task(**payload)
     task.tenant_id = user.tenant_id
     task.owner_id = user.id
     task.operator = user.email
@@ -77,10 +145,55 @@ async def create_task(
     # 入队异步执行
     try:
         await enqueue_task(str(task.id))
+        logger.info("[TASK-CREATE] 任务已入队 | task_id=%s | status=queued", task.id)
     except Exception:
         # 队列不可用时回退为 pending，便于后续手动触发
         task.status = TaskStatus.pending
         await session.commit()
+        logger.warning("[TASK-CREATE] 队列不可用，任务回退 pending | task_id=%s", task.id)
+    # 认证前置：auth_mode=auto 时后台触发自动认证（不阻塞任务创建响应）
+    if data.auth_mode == "auto" and data.auth_password and task.auth_secret:
+        from pobi_agent.constants import TASKS_ROOT
+        from pobi_v2.engine.preauth import run_auto_auth
+
+        task_root = TASKS_ROOT / str(task.id)
+        task_root.mkdir(parents=True, exist_ok=True)
+        task_id_str = str(task.id)
+        target_url = target.url
+        login_url = data.auth_login_url
+        username = data.auth_username or ""
+        password = data.auth_password
+
+        async def _background_auto_auth() -> None:
+            try:
+                from pobi_v2.db.session import AsyncSessionLocal
+                from pobi_v2.core.security import decrypt_api_token
+
+                result = await run_auto_auth(
+                    task_id=task_id_str,
+                    task_root=task_root,
+                    target=target_url,
+                    login_url=login_url,
+                    username=username,
+                    password=password,
+                    profile=data.auth_profile or "preauth",
+                )
+                async with AsyncSessionLocal() as s:
+                    t = await s.get(Task, task.id)
+                    if t is not None:
+                        t.auth_status = result["status"]
+                        t.auth_error = result.get("error")
+                        await s.commit()
+            except Exception:  # noqa: BLE001 — 后台认证失败不应影响任务主体
+                logger.exception("任务 %s 后台自动认证异常", task_id_str)
+
+        import asyncio
+
+        logger.info(
+            "[TASK-CREATE] 触发后台自动认证 | task_id=%s | profile=%s | username=%s",
+            task.id, data.auth_profile or "preauth", data.auth_username or "",
+        )
+        asyncio.create_task(_background_auto_auth())
     return task
 
 
@@ -255,6 +368,17 @@ async def delete_task(
     task = await session.get(Task, task_id)
     if task is None or task.tenant_id != user.tenant_id:
         raise NotFoundError("任务不存在")
+    # [DISABLED 2026-09-01] 手动登录分支搁置（MFA 人工流程暂缓），销毁逻辑一并停用
+    # 若该任务有运行中的手动登录浏览器，先销毁（避免删除后残留浏览器进程）
+    # try:
+    #     from pobi_v2.engine.preauth import get_manual_session, unregister_manual_session
+    #
+    #     manual = get_manual_session(str(task_id))
+    #     if manual is not None:
+    #         await manual.stop()
+    #         unregister_manual_session(str(task_id))
+    # except Exception:  # noqa: BLE001 — 清理失败不应阻断删除
+    #     logger.exception("删除任务 %s 时销毁手动浏览器会话失败", task_id)
     await session.delete(task)
     await session.commit()
 

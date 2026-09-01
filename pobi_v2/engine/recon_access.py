@@ -7,15 +7,13 @@ router 原本直接 import 它们（``routers/tasks.py``）构成边界穿透。
 """
 from __future__ import annotations
 
-import logging
 import shutil
 from pathlib import Path
 from typing import Any
 
 from pobi_agent.constants import TASKS_ROOT
+from pobi_agent.logging import logger
 from pobi_agent.recon.store import ReconStore
-
-logger = logging.getLogger(__name__)
 
 
 def task_root(task_id: Any) -> Path:

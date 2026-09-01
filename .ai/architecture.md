@@ -51,7 +51,7 @@
 |-----------|------|---------|---------|
 | `pobi_v2/main.py` | FastAPI 入口，挂载 /app（React 产物 web/spa 兼容别名）、/health、/docs，注册 lifespan（事件钩子/seed/admin/kali） | `/app`、`/health`、`/docs`、所有 router | 勿在入口写业务；CORS 生产须收敛（dev 暂 `*`，`allow_credentials=True` 禁止与 `*` 同用） |
 | `pobi_v2/routers/` | REST + SSE 接口层，租户隔离 | `/api/v1/*` | 禁止在 router 内直接调内核；经 `engine/` 适配 |
-| `pobi_v2/engine/` | 任务执行管线、事件总线、ARQ worker、审批引擎、护栏、报告；`reconcile.py` 对账核心（router 与 Worker cron 统一调用，消除 engine→routers 倒置）；`recon_access.py` router 访问本地 RECON 库的统一入口（router 不直接依赖内核） | 被 router 调用 | 禁止跨模块循环依赖；router 不得直接 import `pobi_agent`（经本层适配） |
+| `pobi_v2/engine/` | 任务执行管线、事件总线、ARQ worker、审批引擎、护栏、报告；`reconcile.py` 对账核心（router 与 Worker cron 统一调用，消除 engine→routers 倒置）；`recon_access.py` router 访问本地 RECON 库的统一入口（router 不直接依赖内核）；`preauth.py` 认证前置服务（2026-09-01 新增：auto 分支复用 `authenticate_service`，manual 分支封装 `BrowserSession` 远程控制，统一写原生 AuthContext 三件套 + recon_facts） | 被 router 调用 | 禁止跨模块循环依赖；router 不得直接 import `pobi_agent`（经本层适配） |
 | `pobi_v2/db/` | 模型定义、session、落库辅助 | ORM 模型 | 禁止在 model 写业务；持久化逻辑放 `persistence.py` |
 | `pobi_v2/core/` | 配置/异常/安全/鉴权依赖/seed | `get_current_user` 等 | 安全密钥走环境变量，禁止硬编码 |
 | `pobi_v2/llm/` | 统一 LLM 抽象层（**唯一 litellm 入口**） | `complete/complete_json/chat`、`ModelSpec` 解析、异常归一 | 所有 LLM 调用必须经此层；禁止在别处直连 litellm |
@@ -61,6 +61,7 @@
 ## 核心数据流
 
 1. `POST /api/v1/tasks` 创建任务 → 护栏校验 scope → 状态 `queued` → 入队 ARQ。
+   - 认证前置（2026-09-01）：`auth_mode=auto` 时后台 `asyncio.create_task` 触发 `preauth.run_auto_auth`（复用 `authenticate_service`），会话落 `tasks/<task_id>/agent/auth_context/{profile}.*`（原生 AuthContextHandler 三件套，profile=`preauth`）；`auth_mode=manual` 由前端经 `routers/task_auth.py` 启动一次性 BrowserSession 人工登录后捕获。结果写 recon_facts（category=authentication）供 L0/L1 注入。
 2. ARQ Worker 拉起 `engine/executor.py` → 分流 `deadend_runner`（M8 主路径，驱动 `DeadEndAgent`）或 `probe_runner`（probe 快路径，绕过 avfs/多智能体）。
 3. 运行期事件经 `pobi_agent.EventHooks` → `engine/event_bus.py` → 落库 `TaskEvent` + 会话级 token 累计；SSE 经 `routers/stream.py` 实时推送。
    - **Token 实时统计链路（2026-08-28）**：统一层返回 `usage` → `emit_llm_response` 内存累计（executor 任务结束落库用）+ **异步 HINCRBY 写 Redis**（`pobi:usage:{tid}`，TTL 24h，跨 worker 合并的实时真源）→ `llm_response` 事件 payload 附加 `token_usage` 累计值 → SSE 推送前端实时刷新 token 卡片；`GET /tasks/{id}/usage` 对 running/queued 任务**优先读 Redis 实时值**，终态回退 DB。`reset_session_usage` 同时清内存与 Redis。

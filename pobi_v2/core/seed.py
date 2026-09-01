@@ -1,7 +1,7 @@
 """启动时种子数据：当库内无任何用户时，自动创建 admin 账号与默认租户。"""
 from __future__ import annotations
 
-import logging
+from pobi_agent.logging import get_module_logger
 
 from sqlalchemy import select
 
@@ -10,7 +10,7 @@ from pobi_v2.core.security import hash_password
 from pobi_v2.db.models import Tenant, User
 from pobi_v2.db.session import AsyncSessionLocal
 
-logger = logging.getLogger("pobi.seed")
+logger = get_module_logger("pobi.seed")
 
 
 async def seed_admin_if_needed() -> None:

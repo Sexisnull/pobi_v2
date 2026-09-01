@@ -92,6 +92,17 @@ export default function Tasks() {
       }
     })
 
+  const onRerun = (task) =>
+    run(async () => {
+      try {
+        await tasksApi.enqueue(task.id)
+        toast('任务已重新入队', 'success')
+        reload()
+      } catch (e) {
+        toast(e.message, 'error')
+      }
+    })
+
   const onDelete = () =>
     run(async () => {
       try {
@@ -170,7 +181,7 @@ export default function Tasks() {
     {
       key: 'actions',
       title: '操作',
-      width: 132,
+      width: 200,
       render: (t) => (
         <div className="row" onClick={(e) => e.stopPropagation()}>
           <Button size="sm" variant="ghost" icon="terminal" onClick={() => navigate(`/tasks/${t.id}`)}>
@@ -178,6 +189,11 @@ export default function Tasks() {
           </Button>
           {(t.status === 'running' || t.status === 'queued') && (
             <Button size="sm" variant="ghost" icon="stop" onClick={() => onCancel(t)} title="取消任务" />
+          )}
+          {(t.status === 'failed' || t.status === 'cancelled') && (
+            <Button size="sm" variant="ghost" icon="play" onClick={() => onRerun(t)} title="重新入队（继续）">
+              继续
+            </Button>
           )}
           <Button size="sm" variant="ghost" icon="trash" onClick={() => setPendingDelete(t)} title="删除任务" />
         </div>
@@ -300,9 +316,41 @@ export function TaskCreateModal({ open, targets, onClose, onCreated, presetTarge
     agent_mode: 'hacker',
     is_range: false,
     flag_regex: '',
+    auth_mode: 'none',
+    auth_username: '',
+    auth_password: '',
+    auth_login_url: '',
   })
   const [busy, setBusy] = useState(false)
+  const [verifyState, setVerifyState] = useState({ status: 'idle', message: '' }) // idle/verifying/success/failed/mfa/aborted/error
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
+  const resetVerify = () => setVerifyState({ status: 'idle', message: '' })
+
+  // 凭据/登录地址变化时清除验证状态（避免旧验证结果误导）
+  const setAuthField = (k) => (e) => {
+    resetVerify()
+    setForm((f) => ({ ...f, [k]: e.target.value }))
+  }
+
+  const verify = async () => {
+    if (!form.target_id) return toast('请选择授权目标', 'warning')
+    if (!form.auth_username.trim() || !form.auth_password) {
+      return toast('请先填写账号与密码', 'warning')
+    }
+    setVerifyState({ status: 'verifying', message: '' })
+    try {
+      const payload = {
+        target_id: form.target_id,
+        username: form.auth_username.trim(),
+        password: form.auth_password,
+      }
+      if (form.auth_login_url.trim()) payload.login_url = form.auth_login_url.trim()
+      const res = await tasksApi.verifyAuth(payload)
+      setVerifyState({ status: res.status || 'error', message: res.message || '验证完成' })
+    } catch (e) {
+      setVerifyState({ status: 'error', message: e.message || '验证失败' })
+    }
+  }
 
   // 每次打开时重置表单并预填目标
   const [lastOpen, setLastOpen] = useState(false)
@@ -318,6 +366,10 @@ export function TaskCreateModal({ open, targets, onClose, onCreated, presetTarge
         agent_mode: 'hacker',
         is_range: false,
         flag_regex: '',
+        auth_mode: 'none',
+        auth_username: '',
+        auth_password: '',
+        auth_login_url: '',
       })
     }
   }
@@ -327,6 +379,21 @@ export function TaskCreateModal({ open, targets, onClose, onCreated, presetTarge
     if (!form.name.trim()) return toast('请填写任务名称', 'warning')
     if (!form.objective.trim()) return toast('请填写测试目标描述', 'warning')
     if (form.is_range && !form.flag_regex.trim()) return toast('靶场任务必须配置 Flag 正则', 'warning')
+    if (form.auth_mode === 'auto' && (!form.auth_username.trim() || !form.auth_password)) {
+      return toast('账号密码自动认证需填写用户名与密码', 'warning')
+    }
+    // 凭据验证门禁：auto 模式必须先验证，凭据错误不允许发放任务
+    if (form.auth_mode === 'auto' && form.auth_password) {
+      if (verifyState.status === 'idle') {
+        return toast('请先点击「验证凭据」，验证通过后才允许创建任务', 'warning')
+      }
+      if (verifyState.status === 'verifying') {
+        return toast('凭据正在验证中，请稍候', 'warning')
+      }
+      if (verifyState.status === 'failed') {
+        return toast('凭据验证未通过（账号或密码错误），请修正后重新验证', 'warning')
+      }
+    }
 
     setBusy(true)
     try {
@@ -337,9 +404,15 @@ export function TaskCreateModal({ open, targets, onClose, onCreated, presetTarge
         max_turns: Number(form.max_turns) || 50,
         agent_mode: form.agent_mode,
         is_range: form.is_range,
+        auth_mode: form.auth_mode,
       }
       if (form.model.trim()) payload.model = form.model.trim()
       if (form.is_range) payload.flag_regex = form.flag_regex.trim()
+      if (form.auth_mode === 'auto') {
+        payload.auth_username = form.auth_username.trim()
+        payload.auth_password = form.auth_password
+        if (form.auth_login_url.trim()) payload.auth_login_url = form.auth_login_url.trim()
+      }
       const task = await tasksApi.create(payload)
       onCreated?.(task)
     } catch (e) {
@@ -420,6 +493,75 @@ export function TaskCreateModal({ open, targets, onClose, onCreated, presetTarge
             <Input className="mono" value={form.flag_regex} onChange={set('flag_regex')} placeholder="flag\{[a-zA-Z0-9_-]+\}" />
           </Field>
         )}
+
+        <Field
+          label="登录认证（可选）"
+          hint="auto：后端自动登录并缓存会话，任务创建时先验证凭据。MFA/短信等需人工登录的场景暂缓支持（见演进计划）。"
+        >
+          <Select
+            value={form.auth_mode}
+            onChange={set('auth_mode')}
+            options={[
+              { value: 'none', label: '无需认证' },
+              { value: 'auto', label: '账号密码自动认证' },
+              // [DISABLED 2026-09-01] 手动登录分支搁置（MFA 人工流程暂缓，见 .ai/roadmap.md）
+              // { value: 'manual', label: '手动登录（MFA/验证码）' },
+            ]}
+          />
+        </Field>
+
+        {form.auth_mode === 'auto' && (
+          <>
+            <div className="form-grid form-grid--2">
+              <Field label="登录地址（可选）" hint="留空则使用目标 URL。">
+                <Input value={form.auth_login_url} onChange={setAuthField('auth_login_url')} placeholder="https://target/login" />
+              </Field>
+              <Field label="账号" required>
+                <Input value={form.auth_username} onChange={setAuthField('auth_username')} placeholder="登录用户名" />
+              </Field>
+              <Field label="密码" required>
+                <Input type="password" value={form.auth_password} onChange={setAuthField('auth_password')} placeholder="登录密码" />
+              </Field>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 }}>
+              <Button
+                variant="outline"
+                loading={verifyState.status === 'verifying'}
+                disabled={!form.auth_username.trim() || !form.auth_password}
+                onClick={verify}
+              >
+                验证凭据
+              </Button>
+              {verifyState.status !== 'idle' && verifyState.status !== 'verifying' && (
+                <span
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color:
+                      verifyState.status === 'success'
+                        ? 'var(--green-400)'
+                        : verifyState.status === 'mfa' || verifyState.status === 'aborted'
+                          ? 'var(--amber-400)'
+                          : 'var(--red-400)',
+                  }}
+                >
+                  {verifyState.status === 'success' ? '✓ ' : '✗ '}
+                  {verifyState.message}
+                </span>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* [DISABLED 2026-09-01] 手动登录分支搁置（MFA 人工流程暂缓，见 .ai/roadmap.md）
+        {form.auth_mode === 'manual' && (
+          <div className="form-grid">
+            <Field label="登录地址（可选）" hint="留空则使用目标 URL。创建任务后请在任务页点击「手动登录」完成 MFA/验证码流程。">
+              <Input value={form.auth_login_url} onChange={set('auth_login_url')} placeholder="https://target/login" />
+            </Field>
+          </div>
+        )}
+        */}
       </div>
     </Modal>
   )

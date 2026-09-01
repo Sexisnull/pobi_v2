@@ -23,6 +23,7 @@ from pobi_v2.engine.event_bus import persist_event_worker
 from pobi_v2.routers import (
     targets,
     tasks,
+    task_auth,
     stream,
     persistence,
     auth,
@@ -85,6 +86,7 @@ if WEB_SPA_DIR.exists():
 app.include_router(auth.router)
 app.include_router(targets.router)
 app.include_router(tasks.router)
+app.include_router(task_auth.router)
 app.include_router(instruction.router)
 app.include_router(stream.router)
 app.include_router(persistence.router)

@@ -39,7 +39,7 @@ async def task_stream(
             yield {
                 "event": "snapshot",
                 "data": json.dumps(
-                    {"task_id": task_id, "status": task.status.value},
+                    {"task_id": task_id_str, "status": task.status.value},
                     ensure_ascii=False,
                 ),
             }

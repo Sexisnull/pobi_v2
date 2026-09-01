@@ -15,11 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
-logger = logging.getLogger(__name__)
+from pobi_agent.logging import logger, task_logger
 
 from pobi_agent.hooks import get_event_hooks
 
@@ -121,6 +120,8 @@ async def run_task(ctx, task_id: str, **kwargs: object) -> dict:
     前端仍显示 running”的幽灵任务。
     """
     tid = UUID(task_id)
+    log = task_logger(tid)
+    log.info("[TASK-LIFECYCLE] arq 拉起任务")
     await clear_cancel(tid)  # 重置上次运行的中断标志
 
     try:
@@ -134,9 +135,11 @@ async def run_task(ctx, task_id: str, **kwargs: object) -> dict:
             if await is_cancelled(tid):
                 _status = TaskStatus.cancelled
                 _err = "任务已被用户取消"
+                log.warning("[TASK-LIFECYCLE] 任务被用户取消")
             else:
                 _status = TaskStatus.failed
                 _err = "任务被强制中断（超过 job_timeout 或 Worker 重启）"
+                log.error("[TASK-LIFECYCLE] 任务超时/中断（job_timeout 或 Worker 重启）")
         elif isinstance(exc, Exception):
             _status = TaskStatus.cancelled if (await is_cancelled(tid)) else TaskStatus.failed
             _err = str(exc)
@@ -169,7 +172,7 @@ async def run_task(ctx, task_id: str, **kwargs: object) -> dict:
         except Exception:
             # 兜底落库自身失败（如 PG 断连）时记录日志而非静默吞掉，
             # 否则任务仍停留在 running，需等 5 分钟对账才能收敛为幽灵任务。
-            logger.exception("兜底落库失败，任务 %s 终态可能未写回", tid)
+            log.exception("兜底落库失败，任务 %s 终态可能未写回", tid)
 
         await _publish_status_change(tid, _status)
         # CancelledError 继续向上传播；其余异常已处理，返回结果避免 ARQ 误判重试
@@ -222,6 +225,13 @@ async def _run_task_body(tid: UUID) -> dict:
         task, target = await _load_task(session, tid)
         task.attempts += 1
         await session.commit()
+        log = task_logger(tid)
+        log.info(
+            "[TASK-LIFECYCLE] 任务主体加载 | kind=%s | agent_mode=%s | "
+            "target=%s | attempts=%d | has_auth=%s",
+            task.kind, task.agent_mode, target.url, task.attempts,
+            bool(task.auth_username),
+        )
 
         # 护栏：校验目标 URL 在授权范围内
         try:
@@ -259,6 +269,7 @@ async def _run_task_body(tid: UUID) -> dict:
 
         # 分支：链路连通性探针走轻量快路径，不加载重型多智能体 / avfs / RAG。
         if task.kind == "probe":
+            log.info("[TASK-LIFECYCLE] 进入探针分支")
             outcome = await _run_probe_branch(tid, task, target, hooks, session)
         else:
             # 主路径：直接驱动原 pobi_agent.DeadEndAgent（完整 AI 自主渗透系统，
@@ -372,6 +383,10 @@ async def _run_task_body(tid: UUID) -> dict:
             meta={"confidence": outcome.get("confidence")},
         )
         await session.commit()
+        log.info(
+            "[TASK-LIFECYCLE] 任务正常完成 | confidence=%s | tokens=%d",
+            outcome.get("confidence"), usage["total_tokens"],
+        )
         await _publish_status_change(tid, TaskStatus.completed)
         return {"task_id": task_id, "status": "completed"}
 

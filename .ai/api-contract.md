@@ -53,6 +53,23 @@
 - `GET /tasks/usage/summary` 全部任务 token 汇总
 - `GET /tasks/{task_id}/usage` 单任务 token 明细
 
+### 任务认证前置 `/api/v1/tasks/{task_id}/auth`（2026-09-01 新增，PreAuth）
+- `GET /auth/status` 认证状态与已落盘会话情况
+- `POST /auth/auto` 触发自动认证（复用任务凭据或 body 覆盖：username/password/login_url）
+- `POST /auth/manual/start` 启动一次性手动登录浏览器（返回首帧截图 base64）
+- `GET /auth/manual/snapshot` 轮询取浏览器画面（base64 + url/title）
+- `POST /auth/manual/action` 交互指令：`navigate/click/fill/press/eval/wait`
+- `POST /auth/manual/capture` 完成捕获：导出 AuthContext 三件套并销毁浏览器
+- `POST /auth/manual/abort` 销毁手动浏览器
+- 会话落盘：`tasks/<task_id>/agent/auth_context/{profile}.json + {profile}.playwright.json + index.json`（原生 AuthContextHandler 格式，profile 默认 `preauth`）
+
+### 创建前凭据预检 `/api/v1/tasks/verify-auth`（2026-09-01 新增，PreAuth）
+- `POST /verify-auth` 创建任务前真实登录一次验证凭据（**无 task_id 依赖**，任务未创建）。
+  - 入参：`{target_id: UUID, username: str, password: str, login_url?: str, auth_flow?: form|http|json(默认 form)}`；明文密码仅存在于请求体，**不落库、不打日志**。
+  - 出参：`{ok, status, valid, message, error?, took_ms}`；`status ∈ success|failed|mfa|aborted|error`，`valid=true` 仅 success；`failed`=凭据错误（前端阻止创建）、`mfa/aborted`=需人工登录（放行创建走手动分支）、`error`=验证异常。
+  - 授权：`require_scope("tasks:write")` + `check_scope` 校验目标授权范围；整体超时 45s → 504。
+  - 实现：`engine/preauth.verify_credentials` 用一次性临时目录 + 唯一临时 profile（`verify_<uuid8>`）跑 `authenticate_service`，验证结束清理，不落盘会话、不污染熔断计数。
+
 ### 持久化查询 `/api/v1`
 - `GET /tasks/{task_id}/findings` 漏洞/风险点
 - `GET /tasks/{task_id}/artifacts` 产物（截图/PoC/报告/日志元数据）
@@ -94,6 +111,12 @@ Tenant / User / Target / Task / ApprovalRequest / Finding / AuditEvent / TaskEve
 - `Task.agent_mode`：`hacker`(默认) / `yolo`。
 - `Task.model`：任务级覆盖模型（`deadend_runner` 取 `task.model or settings.model`）。
 - `Target.scope`：JSONB 存 `in_scope`/`out_of_scope`，驱动 `ScopePolicy` 护栏。
+- `Task` 认证前置字段（迁移 0018_task_auth）：
+  - `auth_mode`：`none`(默认)/`auto`/`manual`
+  - `auth_status`：`none`/`pending`/`running`/`success`/`failed`/`mfa`
+  - `auth_username` / `auth_secret`(Fernet 加密) / `auth_login_url` / `auth_profile`(默认 `preauth`) / `auth_error` / `auth_updated_at`
+  - 创建入参 `auth_password`（明文）仅存在于 `TaskCreate`，落库前 `encrypt_api_token` 加密为 `auth_secret`，`TaskRead` 不回读明文。
+  - `auth_mode=auto` 创建任务时后台自动触发认证（`asyncio.create_task`，不阻塞创建响应）。
 
 ## 入参出参规则
 - 统一异常处理：`core/exceptions.py` 注册 HTTP 映射。

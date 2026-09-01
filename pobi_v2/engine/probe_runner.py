@@ -13,18 +13,20 @@
 2. **全程走 Kali**：网络访问全部在共享 Kali 容器内完成，不使用宿主机 requester。
 3. **必须很快结束**：默认 1 次 curl + 1 次 LLM 解读，max_turns 退化为固定 1 轮，
    调用方用 ``asyncio.wait_for`` 套硬超时（默认 90s），不继承渗透任务的 50 轮 / 6h。
+4. **不落本地产物**：探针只在 Kali 内 curl 并由 LLM 解读一次，结论写回
+   ``Task.result``，不产生需留存的本地文件，故运行结束时清理 ``tasks/<task_id>/``
+   目录，避免每次探连通都在磁盘留下空目录。
 """
 from __future__ import annotations
 
 import asyncio
-import logging
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from pobi_agent.logging import logger
 from pobi_v2.core.config import settings
 from pobi_v2.db.models import Task, Target
-
-logger = logging.getLogger(__name__)
 
 # 探针硬超时（秒）：整体（Kali curl + LLM 解读）超过即失败，绝不挂死。
 PROBE_HARD_TIMEOUT = 90
@@ -53,8 +55,10 @@ async def run_probe_agent(
     返回与 ``run_deadend_agent`` 兼容的产出字典（``summary`` / ``confidence`` /
     ``structured_report`` / ``findings``），使 ``executor.py`` 落库逻辑无需分支。
     """
-    # 目录契约：与 deadend_runner 保持一致，注入 task_root 防止未来扩展触达
-    # SessionMetrics / ContextEngine 等 get_task_root() 散落点时回退旧废弃目录。
+    # 目录契约：仍注入 task_root，防止未来扩展触达 SessionMetrics / ContextEngine
+    # 等 get_task_root() 散落点时回退旧废弃目录。但探针是一次性连通探测，
+    # 不产出需留存的产物（结论写回 Task.result），故结束后即清理该目录，
+    # 避免每次探测在 tasks/ 下留下空目录。详见 _cleanup_probe_task_root。
     from pobi_agent.constants import TASKS_ROOT
     from pobi_agent.storage_context import set_task_root, clear_task_root
 
@@ -65,6 +69,29 @@ async def run_probe_agent(
         return await _run_probe_body(task=task, target=target, task_id=task_id)
     finally:
         clear_task_root(task_root_token)
+        _cleanup_probe_task_root(task_root, task_id)
+
+
+def _cleanup_probe_task_root(task_root: Path, task_id: UUID) -> None:
+    """探针结束后移除其任务目录（仅空目录），避免一次性探测留下空目录残留。
+
+    探针路径只在共享 Kali 内执行一次 curl + 一次 LLM 解读，不落盘任何产物；
+    所有 ``get_task_root()`` 写入点（python_interpreter / browser_automation /
+    context_engine / session_metrics / auth_resolver）都属 DeadEndAgent 主路径，
+    探针不触达，故正常情况下目录为空、直接移除。
+
+    若目录非空，说明有意料之外的写入（未来扩展触达了上述散落点）：此时保留
+    并记 warning，避免静默丢弃数据，同时为排查留下线索。
+    """
+    try:
+        if not task_root.exists():
+            return
+        if any(task_root.iterdir()):
+            logger.warning("[probe %s] 任务目录非空，已保留待排查：%s", task_id, task_root)
+            return
+        task_root.rmdir()
+    except Exception:  # noqa: BLE001 — 清理失败不影响探针结论
+        logger.exception("[probe %s] 清理任务目录失败：%s", task_id, task_root)
 
 
 async def _run_probe_body(

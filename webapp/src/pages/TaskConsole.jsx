@@ -16,6 +16,7 @@ import {
 import Icon from '../components/Icons.jsx'
 import { useAction, useApi, usePolling } from '../hooks.js'
 import { approvalsApi, openTaskStream, tasksApi } from '../api.js'
+import AuthPanel from '../components/AuthPanel.jsx'
 import { categoryOf, describeEvent, eventTone, EVENT_CATEGORY, typeLabel } from '../events.js'
 import { TASK_STATUS, ago, duration, dt, num, statusOf, truncate } from '../format.js'
 
@@ -101,6 +102,17 @@ export default function TaskConsole() {
       try {
         await tasksApi.cancel(taskId)
         toast('已发送取消请求', 'success')
+        reloadTask()
+      } catch (e) {
+        toast(e.message, 'error')
+      }
+    })
+
+  const onRerun = () =>
+    run(async () => {
+      try {
+        await tasksApi.enqueue(taskId)
+        toast('任务已重新入队', 'success')
         reloadTask()
       } catch (e) {
         toast(e.message, 'error')
@@ -207,8 +219,17 @@ export default function TaskConsole() {
               取消任务
             </Button>
           )}
+          {!active && (task.status === 'failed' || task.status === 'cancelled') && (
+            <Button size="sm" variant="primary" icon="play" onClick={onRerun} disabled={pending}>
+              继续任务
+            </Button>
+          )}
         </div>
       </div>
+
+      {task?.auth_mode && task.auth_mode !== 'none' && (
+        <AuthPanel taskId={taskId} />
+      )}
 
       <div className="console" style={{ flex: 1, minHeight: 0 }}>
         {/* 左栏：执行计划 */}

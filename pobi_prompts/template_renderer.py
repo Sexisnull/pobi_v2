@@ -61,13 +61,12 @@ def _get_template_loader():
     """
     # Try to use PackageLoader first (for installed packages)
     try:
-        return Environment(loader=PackageLoader("deadend_prompts", ""))
+        return Environment(loader=PackageLoader("pobi_prompts", ""))
     except (ImportError, OSError):
-        # Fallback to FileSystemLoader for development
+        # Fallback to FileSystemLoader for development, rooted at the package
+        # directory itself (templates/tools/_shared all live under it).
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        # Go up one level to the package root
-        package_root = os.path.dirname(current_dir)
-        return Environment(loader=FileSystemLoader(package_root))
+        return Environment(loader=FileSystemLoader(current_dir))
 
 def _get_tools_template_loader():
     """Get the appropriate template loader for tools templates.
@@ -76,16 +75,15 @@ def _get_tools_template_loader():
         Environment: Jinja2 environment with appropriate loader
     """
     # Try to use PackageLoader first (for installed packages), rooted at the
-    # deadend_prompts package so that tool templates and shared partials
+    # pobi_prompts package so that tool templates and shared partials
     # share the same include namespace.
     try:
-        return Environment(loader=PackageLoader("deadend_prompts", ""))
+        return Environment(loader=PackageLoader("pobi_prompts", ""))
     except (ImportError, OSError):
         # Fallback to FileSystemLoader for development, rooted at the package
         # directory (sibling of "tools" and "_shared").
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        package_root = os.path.dirname(current_dir)
-        return Environment(loader=FileSystemLoader(package_root))
+        return Environment(loader=FileSystemLoader(current_dir))
 
 def render_agent_instructions(agent_name: str, tools: Dict[str, str], **kwargs):
     env = _get_template_loader()

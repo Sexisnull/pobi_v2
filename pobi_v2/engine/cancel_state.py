@@ -13,11 +13,9 @@ memory 后端内部用同步集合，redis 后端用异步客户端。
 from __future__ import annotations
 
 import asyncio
-import logging
 
+from pobi_agent.logging import logger
 from pobi_v2.core.config import settings
-
-logger = logging.getLogger(__name__)
 
 
 class _MemoryCancelStore:

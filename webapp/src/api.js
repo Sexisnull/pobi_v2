@@ -120,6 +120,7 @@ export const targetsApi = {
 export const tasksApi = {
   list: (signal) => request('/tasks', { signal }),
   create: (data) => request('/tasks', { method: 'POST', body: data }),
+  verifyAuth: (data) => request('/tasks/verify-auth', { method: 'POST', body: data }),
   get: (id, signal) => request(`/tasks/${id}`, { signal }),
   update: (id, data) => request(`/tasks/${id}`, { method: 'PATCH', body: data }),
   remove: (id) => request(`/tasks/${id}`, { method: 'DELETE' }),
@@ -137,6 +138,19 @@ export const tasksApi = {
   instruct: (id, instruction) =>
     request(`/tasks/${id}/instructions`, { method: 'POST', body: { instruction } }),
   reconThreats: (id, signal) => request(`/tasks/${id}/recon/threats`, { signal }),
+}
+
+// ---------------------------------------------------------------- 认证前置（PreAuth）
+
+export const taskAuthApi = {
+  status: (id, signal) => request(`/tasks/${id}/auth/status`, { signal }),
+  auto: (id, body) => request(`/tasks/${id}/auth/auto`, { method: 'POST', body: body || {} }),
+  // [DISABLED 2026-09-01] 手动登录分支搁置（MFA 人工流程暂缓，见 .ai/roadmap.md）
+  // manualStart: (id) => request(`/tasks/${id}/auth/manual/start`, { method: 'POST' }),
+  // manualSnapshot: (id, signal) => request(`/tasks/${id}/auth/manual/snapshot`, { signal }),
+  // manualAction: (id, action) => request(`/tasks/${id}/auth/manual/action`, { method: 'POST', body: action }),
+  // manualCapture: (id) => request(`/tasks/${id}/auth/manual/capture`, { method: 'POST' }),
+  // manualAbort: (id) => request(`/tasks/${id}/auth/manual/abort`, { method: 'POST' }),
 }
 
 // ---------------------------------------------------------------- 审批 / 审计

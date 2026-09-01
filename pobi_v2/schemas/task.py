@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field, model_validator
 
 from pobi_v2.db.models import TaskStatus
 
+# 认证前置模式（PreAuth）
+AUTH_MODES = ("none", "auto", "manual")
+AUTH_STATUSES = ("none", "pending", "running", "success", "failed", "mfa")
+
 
 class TaskCreate(BaseModel):
     target_id: UUID
@@ -25,11 +29,20 @@ class TaskCreate(BaseModel):
     validation_format: str | None = Field(default=None, max_length=64)
     confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     max_tree_depth: int | None = Field(default=None, ge=1, le=16)
+    # 认证前置（PreAuth）：任务创建阶段完成登录，为 L0 认证后爬取提供会话
+    auth_mode: str = Field(default="none", pattern="^(none|auto|manual)$")
+    auth_username: str | None = Field(default=None, max_length=255)
+    # 明文密码仅存在于创建请求，落库前用 Fernet 加密，TaskRead 不回读
+    auth_password: str | None = Field(default=None, max_length=4096)
+    auth_login_url: str | None = Field(default=None, max_length=2048)
+    auth_profile: str = Field(default="preauth", max_length=64)
 
     @model_validator(mode="after")
-    def _check_range_flag(self) -> "TaskCreate":
+    def _check_auth_config(self) -> "TaskCreate":
         if self.is_range and not self.flag_regex:
             raise ValueError("靶场（is_range）任务必须配置 flag_regex 供验证 Agent 验收")
+        if self.auth_mode == "auto" and not (self.auth_username and self.auth_password):
+            raise ValueError("账号密码自动认证（auth_mode=auto）必须提供 auth_username 与 auth_password")
         return self
 
 
@@ -46,12 +59,20 @@ class TaskUpdate(BaseModel):
     validation_format: str | None = Field(default=None, max_length=64)
     confidence_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     max_tree_depth: int | None = Field(default=None, ge=1, le=16)
+    # 认证前置（PreAuth）更新：密码仅在变更凭据时提交，落库前加密
+    auth_mode: str | None = Field(default=None, pattern="^(none|auto|manual)$")
+    auth_username: str | None = Field(default=None, max_length=255)
+    auth_password: str | None = Field(default=None, max_length=4096)
+    auth_login_url: str | None = Field(default=None, max_length=2048)
+    auth_profile: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def _check_range_flag_update(self) -> "TaskUpdate":
         # 显式声明为靶场却未配 flag_regex 时拦截
         if self.is_range is True and not self.flag_regex:
             raise ValueError("靶场（is_range）任务必须配置 flag_regex 供验证 Agent 验收")
+        if self.auth_mode == "auto" and not (self.auth_username and self.auth_password):
+            raise ValueError("账号密码自动认证（auth_mode=auto）必须提供 auth_username 与 auth_password")
         return self
 
 
@@ -74,6 +95,14 @@ class TaskRead(BaseModel):
     validation_format: str | None = None
     confidence_threshold: float | None = None
     max_tree_depth: int | None = None
+    # 认证前置（PreAuth）：回读配置与状态，不回读加密凭据
+    auth_mode: str = "none"
+    auth_status: str = "none"
+    auth_username: str | None = None
+    auth_login_url: str | None = None
+    auth_profile: str = "preauth"
+    auth_error: str | None = None
+    auth_updated_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     started_at: datetime | None

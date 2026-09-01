@@ -995,6 +995,10 @@ IMPORTANT:
             try:
                 from pobi_v2.db.session import AsyncSessionLocal
 
+                logger.info(
+                    "[SEED-IN] 新任务启动基线续扫预热 | target_id=%s | tenant_id=%s | local_db=%s",
+                    self.target_id, self.tenant_id, self.recon_store.db_path,
+                )
                 seed_result = await self.recon_store.seed_from_pg(
                     target_id=str(self.target_id),
                     tenant_id=str(self.tenant_id),
@@ -1002,14 +1006,21 @@ IMPORTANT:
                 )
                 if seed_result and seed_result.seeded_count:
                     logger.info(
-                        "RECON 基线续扫预热完成，灌入 %d 条历史资产（已覆盖跳过 %d 条）",
+                        "[SEED-IN] RECON 基线续扫预热完成，灌入 %d 条历史资产（已覆盖跳过 %d 条）| target_id=%s",
                         seed_result.seeded_count,
                         seed_result.already_covered_count,
+                        self.target_id,
                     )
                 elif seed_result and seed_result.already_covered_count:
                     logger.info(
-                        "RECON 基线续扫：无新增，历史已覆盖 %d 条资产，本轮跳过",
+                        "[SEED-IN] RECON 基线续扫：无新增，历史已覆盖 %d 条资产，本轮跳过 | target_id=%s",
                         seed_result.already_covered_count,
+                        self.target_id,
+                    )
+                else:
+                    logger.warning(
+                        "[SEED-IN] RECON 基线续扫：PG 聚合层无该 target 历史资产，新任务未继承任何旧数据 | target_id=%s",
+                        self.target_id,
                     )
                 # 本地文件沉淀层复用（设计文档 §本地文件沉淀层落库到 PG）：
                 # 从 PG 聚合层按 target_id 拉取历史经验（memory/context/metrics），
@@ -1018,18 +1029,26 @@ IMPORTANT:
                 try:
                     from pathlib import Path as _Path
 
+                    _seed_task_root = _Path(self.recon_store.db_path).parent
                     artifact_seed = await self.recon_store.seed_local_artifacts(
-                        task_root=_Path(self.recon_store.db_path).parent,
+                        task_root=_seed_task_root,
                         target_id=str(self.target_id),
                         tenant_id=str(self.tenant_id),
                         async_session_factory=AsyncSessionLocal,
                     )
                     if artifact_seed and artifact_seed.get("seeded"):
                         logger.info(
-                            "本地文件沉淀层复用完成：memory %d 项 / context %d 字符 / metrics %s",
+                            "[SEED-IN] 本地文件沉淀层复用完成：写回目录=%s | memory %d 项 / context %d 字符 / metrics %s",
+                            _seed_task_root,
                             len(artifact_seed.get("memory", {})),
                             len(artifact_seed.get("context", "")),
                             "有" if artifact_seed.get("metrics") else "无",
+                        )
+                    else:
+                        logger.warning(
+                            "[SEED-IN] 本地文件沉淀层：PG 无该 target 历史 memory/context/metrics，"
+                            "新任务未继承旧文件沉淀 | target_id=%s | 写回目录=%s",
+                            self.target_id, _seed_task_root,
                         )
                 except Exception as exc:  # noqa: BLE001
                     logging.warning("本地文件沉淀层复用失败（已忽略）: %s", exc)

@@ -22,6 +22,7 @@ Flow dispatch table:
 from __future__ import annotations
 
 import asyncio
+import json
 import ssl
 import uuid
 from collections.abc import Mapping, Sequence
@@ -241,6 +242,141 @@ def _persist_and_summarise(
 # ---------------------------------------------------------------------------
 
 
+# 自动登录填表脚本：在页面内定位账号/密码输入框并填充、提交表单。
+# Pydoll 的 execute_script 仅支持多语句 + return（返回对象会退化为 objectId 无法取值），
+# 故统一以 JSON 字符串返回，由 _auto_submit_login 解析。用户名/密码经 json.dumps
+# 生成 JS 字符串字面量嵌入（{username}/{password} 占位），避免注入。
+_AUTO_SUBMIT_FILL_JS_TMPL = r"""
+const __u = {username};
+const __p = {password};
+const setVal = (el, val) => {{
+  const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+  if (desc && desc.set) desc.set.call(el, val); else el.value = val;
+  el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+  el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+}};
+const inputs = Array.from(document.querySelectorAll('input'));
+const pw = inputs.find((i) => (i.type || '').toLowerCase() === 'password');
+const usr = inputs.find((i) => {{
+  const t = (i.type || '').toLowerCase();
+  if (['password', 'hidden', 'checkbox', 'radio', 'submit', 'button', 'file', 'image'].includes(t)) return false;
+  const meta = ((i.name || '') + ' ' + (i.id || '') + ' ' + (i.placeholder || '') + ' ' + (i.autocomplete || '')).toLowerCase();
+  if (t === 'email' || /user|login|email|account|name/.test(meta)) return true;
+  return false;
+}}) || inputs.find((i) => (i.type || '') === 'text') || inputs[0];
+if (!usr || !pw) return JSON.stringify({{ ok: false, reason: 'no-fields' }});
+setVal(usr, __u);
+setVal(pw, __p);
+const form = usr.form || pw.form || document.querySelector('form');
+if (form) {{
+  const btn = Array.from(form.querySelectorAll('button[type=submit], input[type=submit], button:not([type])'))[0];
+  if (btn) {{ btn.click(); return JSON.stringify({{ ok: true, method: 'click' }}); }}
+  if (form.requestSubmit) {{ form.requestSubmit(); return JSON.stringify({{ ok: true, method: 'requestSubmit' }}); }}
+  form.submit(); return JSON.stringify({{ ok: true, method: 'submit' }});
+}}
+return JSON.stringify({{ ok: false, reason: 'no-form' }});
+"""
+
+# 登录错误提示检测脚本：返回首个匹配常见错误文案的元素文本（供失败归类）。
+_AUTO_LOGIN_ERROR_JS = r"""
+const els = document.querySelectorAll('.error, .alert, .alert-danger, .alert-error, .login-error, [class*="error"], [class*="invalid"], [class*="failed"]');
+for (const el of els) {
+  const t = (el.textContent || '').trim();
+  if (t && /invalid|incorrect|error|wrong|failed|denied|not found|不存在|错误|失败|无效|不正确|密码/i.test(t)) {
+    return t.slice(0, 160);
+  }
+}
+return null;
+"""
+
+# 页面是否仍为登录页（存在密码输入框）判定。
+_AUTO_STILL_LOGIN_JS = r"""
+return !!document.querySelector('input[type=password]');
+"""
+
+
+async def _detect_login_error_hint(browser: BrowserSession, page: Any) -> str | None:
+    """在页面中探测登录错误提示文案（.error/.alert 等），无则返回 None。"""
+    try:
+        hint = await browser.execute_script(_AUTO_LOGIN_ERROR_JS, page=page)
+    except Exception:  # noqa: BLE001 — 探测失败不阻断判定
+        return None
+    return hint if isinstance(hint, str) and hint.strip() else None
+
+
+async def _auto_submit_login(
+    *,
+    browser: BrowserSession,
+    page: Any,
+    username: str,
+    password: str,
+    before_url: str,
+    before_cookies: set[str],
+    navigation_timeout_ms: float | None,
+    post_login_wait_ms: int,
+) -> dict[str, Any]:
+    """自动发现登录表单、填充账号密码并提交，随后按启发式判定登录成功与否。
+
+    用于无 LLM steps 的自动化登录（前置认证 verify/auto 分支）。成功判定：
+    - URL 离开登录页（与提交前不同）且页面不再存在 password 输入框；
+    - 出现提交前不存在的新 cookie（会话建立迹象）。
+    失败判定：
+    - 仍停留登录页且出现错误提示文案；
+    - 超时仍停留登录页。
+
+    返回 {success, matched, url_after, error}，供调用方统一走失败 / 持久化分支。
+    """
+    timeout_s = (navigation_timeout_ms or 30_000) / 1000.0
+    script = _AUTO_SUBMIT_FILL_JS_TMPL.format(
+        username=json.dumps(username),
+        password=json.dumps(password),
+    )
+    try:
+        injected_raw = await browser.execute_script(script, page=page)
+    except Exception as exc:  # noqa: BLE001 — 填表失败归类为认证失败
+        return {"success": False, "error": f"自动填表执行失败: {exc}"}
+    injected = None
+    if isinstance(injected_raw, str):
+        try:
+            injected = json.loads(injected_raw)
+        except Exception:  # noqa: BLE001 — 解析失败按非 dict 处理
+            injected = None
+    if not (isinstance(injected, dict) and injected.get("ok")):
+        reason = injected.get("reason") if isinstance(injected, dict) else "unknown"
+        return {"success": False, "error": f"无法定位登录表单自动提交（{reason}）"}
+
+    await asyncio.sleep(min(max(post_login_wait_ms, 500), 4000) / 1000.0)
+    end = asyncio.get_event_loop().time() + timeout_s
+    while asyncio.get_event_loop().time() < end:
+        after_url = await browser.get_url(page=page)
+        after_cookies = {c.get("name") for c in await browser.get_cookies(page=page)}
+        new_cookies = sorted(after_cookies - before_cookies)
+        url_left = after_url != before_url
+        if url_left and new_cookies:
+            return {"success": True, "matched": ["url-changed", "new-cookie"], "url_after": after_url}
+        if url_left:
+            # URL 变了但可能跳到带 error 参数的登录页：结合页面特征再判定
+            still_login = False
+            try:
+                still_login = bool(await browser.execute_script(_AUTO_STILL_LOGIN_JS, page=page))
+            except Exception:  # noqa: BLE001 — 探测失败按非登录页处理
+                pass
+            if not still_login:
+                return {"success": True, "matched": ["url-changed"], "url_after": after_url}
+        if new_cookies:
+            return {"success": True, "matched": ["new-cookie"], "url_after": after_url}
+        hint = await _detect_login_error_hint(browser, page)
+        if hint:
+            return {"success": False, "error": hint, "url_after": after_url}
+        await asyncio.sleep(0.5)
+    after_url = await browser.get_url(page=page)
+    return {
+        "success": False,
+        "error": "自动登录超时：提交后未能确认登录成功（可能凭据错误或登录形态特殊）",
+        "url_after": after_url,
+    }
+
+
 async def _authenticate_via_browser(
     *,
     handler: AuthContextHandler,
@@ -271,6 +407,7 @@ async def _authenticate_via_browser(
     proxy_url: str | None,
     navigation_timeout_ms: float | None,
     action_timeout_ms: float | None,
+    auto_submit: bool = False,
 ) -> dict[str, Any]:
     parsed_steps = parse_browser_steps(steps)
     internal_steps: list[InteractionStep] = [browser_step_to_interaction(s) for s in parsed_steps]
@@ -330,28 +467,51 @@ async def _authenticate_via_browser(
                         timeout_ms=navigation_timeout_ms,
                     )
                 await main_page.bring_to_front()
-            else:
-                await browser.run_steps(
-                    internal_steps,
-                    run_context,
-                    timeout_ms=action_timeout_ms,
+                auth_success = await browser.wait_for_auth_success(
+                    success_url_contains=success_url_contains,
+                    success_selector=success_selector,
+                    success_cookie_names=success_cookie_names,
+                    success_storage_keys=success_storage_keys,
+                    timeout_ms=navigation_timeout_ms,
                     page=main_page,
                 )
-                if callback_url_contains:
-                    callback_observed = await browser.wait_for_url(
-                        callback_url_contains,
+            else:
+                if auto_submit and not internal_steps:
+                    # 无 LLM steps 的自动化登录：自动填表提交 + 启发式成功判定。
+                    before_url = await browser.get_url(page=main_page)
+                    before_cookies = {c.get("name") for c in await browser.get_cookies(page=main_page)}
+                    run_creds = run_context or {}
+                    auth_success = await _auto_submit_login(
+                        browser=browser,
+                        page=main_page,
+                        username=str(run_creds.get("username") or override_username or ""),
+                        password=str(run_creds.get("password") or override_password or ""),
+                        before_url=before_url,
+                        before_cookies=before_cookies,
+                        navigation_timeout_ms=navigation_timeout_ms,
+                        post_login_wait_ms=post_login_wait_ms,
+                    )
+                else:
+                    await browser.run_steps(
+                        internal_steps,
+                        run_context,
+                        timeout_ms=action_timeout_ms,
+                        page=main_page,
+                    )
+                    if callback_url_contains:
+                        callback_observed = await browser.wait_for_url(
+                            callback_url_contains,
+                            timeout_ms=navigation_timeout_ms,
+                            page=main_page,
+                        )
+                    auth_success = await browser.wait_for_auth_success(
+                        success_url_contains=success_url_contains,
+                        success_selector=success_selector,
+                        success_cookie_names=success_cookie_names,
+                        success_storage_keys=success_storage_keys,
                         timeout_ms=navigation_timeout_ms,
                         page=main_page,
                     )
-
-            auth_success = await browser.wait_for_auth_success(
-                success_url_contains=success_url_contains,
-                success_selector=success_selector,
-                success_cookie_names=success_cookie_names,
-                success_storage_keys=success_storage_keys,
-                timeout_ms=navigation_timeout_ms,
-                page=main_page,
-            )
             if not auth_success.get("success"):
                 return _failure(
                     target=target,
@@ -788,6 +948,7 @@ async def authenticate_service(
     token_header_name: str = "Authorization",
     token_header_format: str = "Bearer {token}",
     capture_cookies: bool = True,
+    auto_submit: bool = False,
 ) -> dict[str, Any]:
     """Internal dispatcher: pick a flow based on ``auth_flow`` and persist the result."""
     # 熔断检查：同一 target+profile 连续失败达上限时，不再把球踢回 LLM 重试，
@@ -907,6 +1068,7 @@ async def authenticate_service(
         proxy_url=proxy_url,
         navigation_timeout_ms=navigation_timeout_ms,
         action_timeout_ms=action_timeout_ms,
+        auto_submit=auto_submit,
     )
     _auth_update_counter(target, profile, result)
     return result

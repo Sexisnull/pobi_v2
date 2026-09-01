@@ -12,7 +12,7 @@ from pathlib import Path
 
 from arq import Worker, cron
 
-from pobi_agent.logging import setup_logging
+from pobi_agent.logging import logger, setup_logging
 from pobi_v2.core.config import settings
 from pobi_v2.engine.agent_adapter import install_event_hooks
 from pobi_v2.engine.executor import run_task
@@ -24,6 +24,11 @@ LOG_DIR = Path(settings.log_dir)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 setup_logging(level=logging.INFO, log_file=str(LOG_DIR / "worker.log"))
 
+# arq 框架每隔 5 分钟打印 cron 心跳（→/← _auto_reconcile）与健康检查
+# （recording health: j_complete=...），参考价值低且刷屏。将其自身 logger
+# 级别提到 WARNING，cron 对账仍照常执行，仅不再输出这些 INFO 行。
+logging.getLogger("arq").setLevel(logging.WARNING)
+
 
 async def _on_startup(_ctx: dict) -> None:
     """Worker 进程启动时安装事件钩子。
@@ -34,6 +39,10 @@ async def _on_startup(_ctx: dict) -> None:
     等方法，会导致 run_task 在驱动 DeadEndAgent 时立即抛 AttributeError。
     """
     install_event_hooks()
+    logger.info(
+        "[WORKER] arq Worker 进程启动 | job_timeout=%s | max_jobs=%s | retry_jobs=%s",
+        JOB_TIMEOUT, settings.worker_max_jobs, False,
+    )
 
 
 async def _auto_reconcile(_ctx: dict) -> None:

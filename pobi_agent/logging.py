@@ -32,6 +32,29 @@ LOGGER_NAME = "pobi"
 # Create the package logger
 logger = logging.getLogger(LOGGER_NAME)
 
+
+class _TaskLoggerAdapter(logging.LoggerAdapter):
+    """把 task_id 自动拼进每条日志 message 前缀，不改全局 formatter。"""
+
+    def process(self, msg, kwargs):
+        tid = self.extra.get("task_id") if self.extra else None
+        if tid is not None:
+            return f"(task_id={tid}) {msg}", kwargs
+        return msg, kwargs
+
+
+def task_logger(task_id) -> logging.LoggerAdapter:
+    """返回带 task_id 上下文的 logger adapter。
+
+    用法：
+        log = task_logger(tid)
+        log.info("任务主体加载 | kind=%s", kind)
+    → 输出: ... [pobi:LINE] (task_id=xxx) 任务主体加载 | kind=probe
+
+    通过拼前缀方式注入，保持全局 formatter 不变，旧日志格式兼容。
+    """
+    return _TaskLoggerAdapter(logger, {"task_id": task_id})
+
 # 统一日志格式：日期 时间(含毫秒) 时区 级别 模块:行号 消息
 # 时区由容器 TZ=Asia/Shanghai 决定，格式中 %(asctime)s 自动带中国时间。
 DEFAULT_FORMAT = "%(asctime)s %(levelname)-8s [%(name)s:%(lineno)d] %(message)s"

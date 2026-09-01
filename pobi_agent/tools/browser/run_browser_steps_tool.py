@@ -13,6 +13,7 @@ from pobi_agent.tools.tool_wrappers import with_tool_events
 from pobi_agent.utils.structures import RequesterDeps
 from pobi_agent.auth_resolver import AuthContextHandler, browser_state_from_auth_context
 from pobi_agent.tools.browser.validate_refresh import auto_validate_before_consume
+from pobi_agent.logging import logger
 
 
 # --- LLM / tool-call surface: JSON-serializable steps (discriminated by `action`) ---
@@ -368,6 +369,16 @@ async def browser_run_steps(
             verify_ssl=verify_ssl,
         )
         if validation_failure is not None:
+            logger.warning(
+                "[AUTH-CONSUME] 认证校验未通过，下游拒绝消费 | target=%s | agent_id=%s | "
+                "profile=%s | expired=%s | expired_reason=%s | error=%s",
+                ctx.deps.target,
+                ctx.deps.agent_id,
+                auth_profile,
+                validation_failure.get("expired"),
+                validation_failure.get("expired_reason"),
+                validation_failure.get("error"),
+            )
             return {
                 "success": False,
                 "authenticated": False,
@@ -381,6 +392,12 @@ async def browser_run_steps(
                     or f"Saved auth_profile {auth_profile!r} is no longer valid"
                 ),
             }
+        logger.info(
+            "[AUTH-CONSUME] 认证校验通过，下游开始消费凭据 | target=%s | agent_id=%s | profile=%s",
+            ctx.deps.target,
+            ctx.deps.agent_id,
+            auth_profile,
+        )
         handler = AuthContextHandler(ctx.deps.target, ctx.deps.agent_id, ctx.deps.session_id)
         auth_context = handler.load_context(auth_profile)
         if auth_context is None:

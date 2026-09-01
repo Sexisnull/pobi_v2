@@ -201,6 +201,19 @@ class Task(Base):
     validation_format: Mapped[str | None] = mapped_column(String(64), nullable=True)
     confidence_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
     max_tree_depth: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 认证前置配置（PreAuth）：任务创建阶段完成登录，为 L0 认证后爬取与 exploitation 提供会话
+    # auth_mode：none=无需认证 / auto=账号密码自动认证 / manual=人工浏览器捕获
+    auth_mode: Mapped[str] = mapped_column(String(16), default="none", nullable=False)
+    # auth_status：none / pending / running / success / failed / mfa（MFA 拦截）
+    auth_status: Mapped[str] = mapped_column(String(24), default="none", nullable=False)
+    # 凭据（secret 用 Fernet 加密落库，绝不明文存储；明文仅存在于创建请求中）
+    auth_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    auth_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auth_login_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    # 会话落盘使用的 AuthContext profile 名（默认 preauth，与原生 AuthAgent 自有 profile 隔离）
+    auth_profile: Mapped[str] = mapped_column(String(64), default="preauth", nullable=False)
+    auth_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auth_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # 结果（M3 结构化落库，result 存最终摘要/报告引用）
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
