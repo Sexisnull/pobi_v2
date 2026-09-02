@@ -2,9 +2,12 @@
 
 前后端分离的 AI 渗透测试 Web 平台，重构自 `pobi`。
 
-本目录是一个**独立项目**，通过 uv workspace 复用父仓库 `pobi/pobi_agent`
-（`CoreAgent` 决策内核、`DeadEndAgent` 编排、`EventHooks` 事件总线、
-工具链与置信度护栏），但拥有独立的前后端架构、独立依赖与独立运行方式。
+本仓库是一个**独立项目**：`pobi_agent/`（AI 引擎）与 `pobi_prompts/`（提示词模板）为
+**仓库根目录下的内嵌子包**，随本项目一同构建分发（见 `pyproject.toml` 的
+`[tool.hatch.build.targets.wheel] packages`），并非外部安装的依赖包。
+
+平台复用内核的 `CoreAgent` 决策内核、`DeadEndAgent` 编排、`EventHooks` 事件总线、
+工具链与置信度护栏，并在其之上叠加独立的前后端架构、持久化、多租户与审批护栏。
 
 ## 核心能力
 
@@ -24,7 +27,11 @@
 - **协作式取消可靠性**：取消标志写入后主动从 ARQ 队列移除幽灵 job；子 Agent 执行包 `asyncio.wait_for` 子超时（不误判取消）；Worker 每 5 分钟自动对账（`task-reconcile`）收敛残留运行态。
 - **AVFS 命名空间修复**：`DeadEndAgent` 以 `agent_id` 命名空间挂载 memory 工作区，子 Agent（executor / MemoryAgent）统一以同一 `memory_session_id` 访问，规避「AVFS workspace 'memory' is not mounted」所致的任务阻塞。
 - **function-call steps 序列化防御**：`parse_browser_steps` 兼容模型在嵌套 function-call 中将 `steps` 字符串化（先 `json.loads` 解析、解包 `{"steps":[...]}`），避免 `'str' object has no attribute 'items'` 类失败。
-- **Token 用量统计**：会话级 token 累计落库，按每百万 token 单价估算成本。
+- **Token 用量统计**：会话级 token 累计落库，按每百万 token 单价估算成本；运行中经 Redis 实时累计并随 SSE 增量推送。
+- **前置侦查 pre_recon**：任务启动后、智能体侦查前由平台层自动执行指纹识别 + WAF 识别并落本地 `recon_fingerprints` 表，agent 直接复用结论（该能力已从 requester 工具收敛为平台自动通道）。
+- **认证前置 PreAuth**：任务创建阶段完成登录，为认证后爬取与利用阶段提供会话；支持创建前凭据预检（`POST /api/v1/tasks/verify-auth`），凭据错误不放行。**手动登录分支已搁置**。
+- **跨任务沉淀与续扫**：任务本地 sqlite（recon 五表 + 指纹明细）运行期随跑随写，终态增量同步至 PG 聚合层（按 `target_id` 收敛历史），新任务启动时 `seed_from_pg` 预热复用。
+- **目标总览与资产聚合**：按目标聚合跨任务的侦察事实 / 端点 / 威胁 / 发现，提供总览、端点树、资产清单等只读视图。
 - **前端 SPA**：React 单页应用（`webapp/` 经 Vite 构建 → `web/spa/`，`base=/`），nginx 根目录静态托管，`/` 即控制台；开发阶段由宿主 Vite dev server（HMR）提供，不进 Docker。
 
 ## 记忆与缓存持久机制
@@ -33,29 +40,31 @@
 
 ### 两层持久架构
 
-| 层 | 根路径（容器内默认） | AVFS 命名空间 | 内容 | 写入方 |
-|----|----------------------|---------------|------|--------|
-| **运行时缓存 (Cache)** | `POBI_CACHE_HOME=/root/.pobi_v2/cache` | 全局（无 session） | `logs/*.jsonl`、`metrics/`、`scope.*.yaml`、`traces/` | executor / 工具层 |
-| **记忆工作区 (Memory)** | `ROOT_DEADEND_PATH/agents/<agent_id>/<task_id>/memory` | **`agent_id`** | `target_*.md`（侦察目标）、`summaries/*.md`（子 Agent 完成摘要） | supervisor / 子 Agent |
+| 层 | 根路径（容器内默认） | 命名空间 | 内容 | 写入方 |
+|----|----------------------|----------|------|--------|
+| **运行时缓存 (Cache)** | `POBI_CACHE_HOME` = `/root/.pobi_v2/cache` | 全局（无 session） | 运行时中间产物（`traces/`、`tool_results/`、`agents/` 等） | executor / 工具层 |
+| **任务工作区 (Task Root)** | `POBI_HOME/tasks/<task_id>/` | 按 `task_id` | `agent/`（memory / workspace / run_context / auth_context）、`<task_id>.db`（本地 recon 库）、`rag/`、`logs/`、`metrics/` | 平台注入 + 内核各写入点 |
 
-- 两个根均由环境变量覆盖：`POBI_HOME`（默认 `~/.pobi_v2`，容器设为 `/root/.pobi_v2`，并与宿主 `~/.pobi_v2` 挂载对齐以保证跨重启保留）；`POBI_CACHE_HOME`（默认落在 `POBI_HOME/cache`）。定义见 `pobi_agent/constants.py:31-46`。
-- 路径拼接由 `DeadEndAgent._prepare_memory_workspace()`（`pobi_agent.py:260-265`）完成：`DEADEND_AGENTS_PATH / <agent_id> / <task_id> / "memory"`。
+- 两个根均由环境变量覆盖：`POBI_HOME`（默认 `~/.pobi_v2`，容器设为 `/root/.pobi_v2`，并与宿主 `~/.pobi_v2` 挂载对齐以保证跨重启保留）；`POBI_CACHE_HOME`（默认落在 `POBI_HOME/cache`）。定义见 `pobi_agent/constants.py:55-74`。
+- **任务根路径由平台层注入**：`pobi_v2/engine/deadend_runner.py` 以 `TASKS_ROOT/<task_id>` 构造 `task_root`，经 `storage_context.set_task_root()`（ContextVar，协程级隔离）分发；内核新增写入点一律用 `storage_context.get_task_root()` 取路径，**不得**再拼 `DEADEND_AGENTS_PATH` / `CACHE_DEADEND_LOGS` / `CACHE_METRICS_PATH`——`constants.py:43-47` 已明确这些旧根废弃。
+- **产物目录已扁平化**：`tasks/<task_id>/agent/` 下不再有 `<agent_id>/<session_id>` 嵌套层。
 
 ### Memory 工作区：子 Agent 共享读取的来源
 
-- 挂载：在 `DeadEndAgent.__init__` 中以 `session_id=str(self.agent_id)`、`workspace="memory"` 挂载到 AVFS（`pobi_agent.py:135-139`）。
-- 读取：所有子 Agent（MemoryAgent / scanner / requester / shell / python-interpreter 等）通过 `MemoryWorkspaceDeps(session_id=self.memory_session_id)` 统一以 `agent_id` 命名空间访问（`executor.py:322-324`、`:428-429`），故**同一次任务的所有子 Agent 共享同一 memory 命名空间**，前序子 Agent 写入的 `target_*.md` 与 `summaries/*.md` 可被后续子 Agent 读取。
-- 写入：`_persist_agent_summary()`（`executor.py:531-538`）在每个子 Agent 完成时以 `summaries/{agent_name}.md`（`append=True`）落盘其确定性摘要，供后续子 Agent 收敛上下文。
+- 路径：由 `DeadEndAgent._prepare_memory_workspace()`（`pobi_agent.py:311-321`）拼 `agents_storage_root / "memory"`；`agents_storage_root` 由 `deadend_runner` 注入为 `task_root / "agent"`（`Config.agents_storage_root` 默认 `None`，刻意避免回退旧散落路径）。**最终实路径**：`tasks/<task_id>/agent/memory`。
+- 挂载：在 `DeadEndAgent.__init__` 中以 `session_id=str(self.agent_id)`、`workspace="memory"` 挂载到 AVFS（`pobi_agent.py:168-172`）。注意 `agent_id` 此处只是 **AVFS 命名空间键**，不再参与目录层级。
+- 读取：所有子 Agent（MemoryAgent / requester / shell / python-interpreter / webapp_analyzer 等）通过 `MemoryWorkspaceDeps(session_id=self.memory_session_id)` 统一以 `agent_id` 命名空间访问（`executor.py:439-442`、`:549-551`），故**同一次任务的所有子 Agent 共享同一 memory 命名空间**，前序子 Agent 写入的摘要可被后续子 Agent 读取。
+- 写入：`_persist_agent_summary()`（`executor.py:655-670`）在每个子 Agent 完成时以 `summaries/{agent_name}.md`（`append=True`）落盘其确定性摘要，供后续子 Agent 收敛上下文。
 
 ### AVFS 命名空间护栏（重要）
 
 - AVFS 按 `session_id` × `workspace` 二维建表（`avfs.mount` → `_session_states`）。`avfs.resolve` 严格按传入 `session_id` 查表，未挂载时**主动抛 `RuntimeError: AVFS workspace 'memory' is not mounted`**（`avfs.py:143-147`）——这是设计正确的护栏，不是缺陷。
-- 因此 memory 的读写**必须使用同一命名空间（`agent_id`）**。调用方务必传入 `memory_session_id` 而非 `session_id`（task_id），否则写入点找不到挂载 → 抛 `not mounted` → 该次写入失败回滚。**历史曾累计因此阻塞 131 次**，故 `executor.py:113-115`、`:157` 与 `pobi_agent.py:438-440` 均有显式注释警示。
+- 因此 memory 的读写**必须使用同一命名空间（`agent_id`）**。调用方务必传入 `memory_session_id` 而非 `session_id`（task_id），否则写入点找不到挂载 → 抛 `not mounted` → 该次写入失败回滚。**历史曾累计因此阻塞 131 次**，故 `executor.py:218-220`、`:261-262` 均有显式注释警示。
 
 ### 已知坑位与排障
 
-- **`summaries/*.md` 缺失 ≠ 整层缓存失效**：若仅子 Agent 摘要未落盘，通常是 `_persist_agent_summary` 写入点误用 `session_id`(task_id) 而非 `memory_session_id`(agent_id) 所致；此时 cache 层、`target_*.md`、以及所有子 Agent 读取均正常，仅「前序结论链」断裂。修复：将写入点改为 `session_id=self.memory_session_id`（`executor.py:536`）。
-- **确认落盘**：任务进行中可检查容器内 `ls -laR /root/.pobi_v2/cache` 与 `/root/.pobi_v2/agents/<agent_id>/<task_id>/`（含 `memory/target_*.md`、`run_context/context.txt`、`auth_context/`）。若时间戳持续刷新，说明 worker 与缓存写入均健康。
+- **`summaries/*.md` 缺失 ≠ 整层缓存失效**：若仅子 Agent 摘要未落盘，通常是 `_persist_agent_summary` 写入点误用 `session_id`(task_id) 而非 `memory_session_id`(agent_id) 所致；此时任务本地库、run_context、以及所有子 Agent 读取均正常，仅「前序结论链」断裂。修复：写入点用 `session_id=self.memory_session_id`（`executor.py:668`）。
+- **确认落盘**：任务进行中可检查容器内 `ls -laR /root/.pobi_v2/tasks/<task_id>/`（含 `agent/memory/summaries/`、`agent/run_context/context.txt`、`agent/auth_context/`、`metrics/metrics.json` 与 `<task_id>.db`）。若时间戳持续刷新，说明 worker 与写入链路健康。
 
 ## 里程碑进度
 
@@ -80,10 +89,11 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/auth/register` | 注册用户（归属租户 slug），返回 JWT；开放注册模式下租户不存在则自动创建 |
 | POST | `/auth/login` | 邮箱 / 密码登录，返回 JWT |
 | GET | `/auth/me` | 当前登录用户信息 |
 | POST | `/auth/tenants` | 创建租户 |
+
+> **无注册端点**：`routers/auth.py` 未实现 `/auth/register`，账号创建不经 HTTP 开放入口。
 
 ### 目标（`/api/v1/targets`）
 
@@ -91,7 +101,23 @@
 |------|------|------|
 | GET | `/targets` | 列出租户下的授权目标 |
 | POST | `/targets` | 创建目标（`in_scope` / `out_of_scope` 以 JSONB 存储） |
-| GET/PUT/DELETE | `/targets/{target_id}` | 目标 CRUD |
+| GET | `/targets/{target_id}` | 目标详情 |
+| PATCH | `/targets/{target_id}` | 更新目标 |
+| DELETE | `/targets/{target_id}` | 删除目标（同步清理其下任务的本地产物目录） |
+| GET | `/targets/{target_id}/assets` | 目标资产 / 端点清单（数据源 `recon_endpoints_agg`，limit 1000） |
+
+### 目标总览（`/api/v1/targets/{target_id}`，per-target 跨任务只读聚合）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/targets/{target_id}/overview` | 汇总计数（facts / endpoints / threats / findings / tasks）+ `severity_max` + `last_seen` |
+| GET | `/targets/{target_id}/tree` | 按 host 分组的端点树（叶子含 `threat_severity_max` / `threat_confidence`，端点上限 500） |
+| GET | `/targets/{target_id}/facts` | 侦察事实（`category + key` 排序） |
+| GET | `/targets/{target_id}/threats` | 威胁（`confidence` 降序） |
+| GET | `/targets/{target_id}/findings` | 利用验证结果（`created_at` 降序） |
+| GET | `/targets/{target_id}/artifacts` | 产物（`created_at` 降序） |
+
+> 以上接口首行校验 `Target.tenant_id`，越权返回 **404**；列表类 `limit` 默认 200（取值 `1–500`），空数据返回空数组。
 
 ### 任务（`/api/v1/tasks`）
 
@@ -100,23 +126,57 @@
 | GET | `/tasks` | 任务列表（含 token 三列） |
 | POST | `/tasks` | 创建任务 -> 护栏校验 -> 状态 `queued` -> 入队 ARQ |
 | GET | `/tasks/{task_id}` | 任务详情（含 findings / artifacts / 事件计数） |
+| PATCH | `/tasks/{task_id}` | 更新任务 |
+| DELETE | `/tasks/{task_id}` | 删除任务（同步清理本地产物目录） |
 | POST | `/tasks/{task_id}/enqueue` | 重新入队 pending / failed / cancelled 任务 |
 | POST | `/tasks/{task_id}/cancel` | 协作式取消运行 / 排队中的任务 |
 | GET | `/tasks/{task_id}/stream` | SSE 实时事件流（思考 / 工具调用 / 置信度 / 状态） |
 | GET | `/tasks/{task_id}/live` | 实时态聚合（当前阶段 / 智能体 / 计划 / 待生效指令 / 最近事件 / 各 Agent 工作片段 `agent_work` / `last_event_at`） |
 | GET | `/tasks/{task_id}/events` | 运行轨迹回放：按 `type` 过滤、`after_seq` 游标分页，`limit` 默认 100，返回 `EventReplay{events,total,next_after_seq}`，弥补 SSE 断连即丢 |
+| GET | `/tasks/{task_id}/plan` | 执行计划步骤与进度（`PlanSummary`） |
 | POST | `/tasks/{task_id}/instructions` | 向运行中任务追加指令，协作式检查点消费注入上下文 |
 | GET | `/tasks/usage/summary` | 全部任务 token 用量汇总（含已完成任务拆分） |
-| GET | `/tasks/{task_id}/usage` | 单任务 token 用量明细 |
+| GET | `/tasks/{task_id}/usage` | 单任务 token 用量明细（运行中优先读 Redis 实时值，终态回退 DB） |
+
+### 本地 RECON 只读查询（`/api/v1/tasks/{task_id}/recon/*`，直读任务本地 sqlite）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `recon/summary` | 侦察结果汇总 |
+| GET | `recon/assets` | 资产清单 |
+| GET | `recon/endpoints` | 端点列表 |
+| GET | `recon/facts` | 侦察事实列表 |
+| GET | `recon/threats` | 威胁态势（任务控制台的态势条消费此接口） |
+| GET | `recon/threats/{cve_id}` | 单个威胁详情 |
+| GET | `recon/coverage` | 已覆盖端点 / 技术栈 / 已确认威胁（续扫去重基线） |
+
+### 任务认证前置（`/api/v1/tasks/{task_id}/auth`，PreAuth）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/auth/status` | 认证状态与已落盘会话情况 |
+| POST | `/auth/auto` | 触发自动认证（复用任务凭据，或用 body 覆盖 username / password / login_url） |
+
+> 会话落盘于 `tasks/<task_id>/agent/auth_context/{profile}.*`（原生 `AuthContextHandler` 三件套，profile 默认 `preauth`）。
+> **手动登录分支（manual）已搁置**：原 `manual/start` / `manual/snapshot` / `manual/action` / `manual/capture` / `manual/abort` 五个端点已从 `routers/task_auth.py` 移除，`engine/preauth.py` 的 `ManualAuthSession` 整体注释保留。
+
+### 创建前凭据预检（`/api/v1/tasks/verify-auth`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/tasks/verify-auth` | 创建任务前真实登录一次以验证凭据（**不依赖 task_id**）；返回 `status ∈ success / failed / mfa / aborted / error`，`failed` 即凭据错误 |
+
+> 使用一次性临时目录 + 唯一临时 profile 执行，验证结束即清理：**不落盘会话、明文密码不打日志、不污染熔断计数**；整体超时 45s。
 
 ### 持久化查询（`/api/v1`）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/tasks/{task_id}/events` | 有序运行轨迹（可回放） |
 | GET | `/tasks/{task_id}/findings` | 该任务发现的漏洞 / 风险点 |
 | GET | `/tasks/{task_id}/artifacts` | 该任务的产物（截图 / PoC / 报告 / 日志元数据） |
 | GET | `/audit` | 全局结构化审计日志（可按 task / target / action 过滤） |
+
+> `routers/persistence.py` 另注册了 `GET /api/v1/tasks/{task_id}` 与 `GET /api/v1/tasks/{task_id}/events`，与 `routers/tasks.py` 的同名路径重复；因 `main.py` 中 `tasks` 先于 `persistence` 注册（:88 / :92），**实际生效的是 `tasks.py` 的实现**，此处同名定义不命中。
 
 ### 审批（`/api/v1/approvals`）
 
@@ -151,25 +211,43 @@
 | GET | `/pricing` | 读取全局价格配置（单条 upsert，id 固定 `default`） |
 | PUT | `/pricing` | 更新输入 / 输出每百万 token 单价与币种 |
 
+### API Token（PAT）（`/api/v1/tokens`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/tokens` | 创建令牌（**明文仅此一次返回**） |
+| GET | `/tokens` | 令牌列表 |
+| POST | `/tokens/{token_id}/reveal` | 再次揭示明文 |
+| DELETE | `/tokens/{token_id}` | 删除令牌 |
+
+> 令牌由 `generate_api_token()` 产出 `(plaintext, prefix, token_hash)`：**明文不落库**，仅存 `token_hash` 与展示用 `prefix`。
+
 ## 目录结构
 
 ```
-pobi_v2/
+.                            # 仓库根
 ├── pyproject.toml
+├── uv.toml                  # uv 依赖解析源（清华镜像为主，官方 PyPI 回退）
 ├── README.md
-├── docker-compose.yml
+├── docker-compose.yml / docker-compose.override.yml
+├── Dockerfile.prod
 ├── alembic.ini
 ├── alembic/
 │   ├── env.py
-│   └── versions/
+│   └── versions/            # 18 个迁移，最新 0018_task_auth
+├── pobi_agent/              # AI 引擎（仓库根内嵌子包，随本仓库一同构建分发）
+├── pobi_prompts/            # 提示词模板（仓库根内嵌子包）
+├── tests/
 ├── webapp/                  # 前端源码（React + Vite，base=/）
 │   ├── vite.config.js        # base=/，outDir=../web/spa，/api 代理 127.0.0.1:8000
 │   └── src/                  # 页面 / 组件 / 路由（BrowserRouter basename="/"）
 ├── web/                     # 前端构建产物（webapp build -> web/spa/），nginx 根目录托管
-│   └── spa/
+│   └── spa/                 # 仅此一项：零构建版（index.html + static/）已移除
 └── pobi_v2/
     ├── __init__.py
-    ├── main.py              # FastAPI 入口（挂载 /static、/app、/web/*）
+    ├── main.py              # FastAPI 入口：注册 12 个 router + /health + /docs；/app 为容器内 SPA 回退别名
+    ├── sandbox_bootstrap.py # Kali 沙箱就绪引导
+    ├── benchmark/           # TSec Benchmark 评测（可选依赖组 `benchmark`），不参与主链路
     ├── core/
     │   ├── config.py        # 配置（pydantic-settings）
     │   ├── exceptions.py    # 统一异常与 HTTP 映射
@@ -179,6 +257,7 @@ pobi_v2/
     ├── db/
     │   ├── session.py       # engine / session / Base
     │   ├── models.py        # Tenant/User/Target/Task/ApprovalRequest/Finding/AuditEvent/TaskEvent/Artifact/PricingConfig
+    │   ├── recon_models.py  # PG 聚合表（recon_facts_agg / recon_threats_agg / recon_endpoints_agg / task_*_agg）
     │   └── persistence.py   # 落库辅助（事件/发现/审计/产物）
     ├── schemas/
     │   ├── target.py
@@ -186,19 +265,23 @@ pobi_v2/
     │   ├── persistence.py   # 查询返回 Schema
     │   ├── auth.py          # 用户/租户/令牌 Schema
     │   ├── approval.py      # 审批请求 Schema
-    │   └── pricing.py       # 价格配置 Schema
+    │   ├── pricing.py       # 价格配置 Schema
+    │   ├── recon.py         # 本地 recon 查询 / 目标总览 Schema
+    │   └── token.py         # API Token Schema
     ├── routers/
-    │   ├── auth.py          # 注册/登录/me/租户
-    │   ├── targets.py       # 租户隔离
-    │   ├── tasks.py         # 任务 CRUD / cancel / live / usage，租户隔离
+    │   ├── auth.py          # 登录/me/租户（无注册端点）
+    │   ├── targets.py       # 目标 CRUD + 目标总览聚合 + assets，租户隔离
+    │   ├── tasks.py         # 任务 CRUD / cancel / enqueue / live / plan / usage / recon 查询，租户隔离
+    │   ├── task_auth.py     # 认证前置 PreAuth（仅 /auth/status、/auth/auto）
     │   ├── instruction.py   # 运行指令追加（M8+）
     │   ├── stream.py        # SSE，租户隔离
-    │   ├── persistence.py   # findings/events/artifacts/audit，租户隔离
+    │   ├── persistence.py   # findings/artifacts/audit，租户隔离
     │   ├── approval.py      # 审批请求列表/决策
     │   ├── report.py        # 报告导出
     │   ├── pricing.py       # LLM 价格配置 GET/PUT
-    │   └── system.py        # Worker 状态 + 任务对账（M8+）
-    ├── llm/                 # 统一 LLM 抽象层（LiteLLM+Instructor），预留未接入消费方
+    │   ├── api_tokens.py    # API Token（PAT）`/api/v1/tokens`
+    │   └── system.py        # Worker/Kali/LLM 状态 + probe + 任务对账（M8+）
+    ├── llm/                 # 统一 LLM 抽象层（LiteLLM+Instructor）：内核与平台的唯一 LLM 入口
     │   ├── __init__.py
     │   ├── client.py        # complete / complete_json / chat
     │   ├── config.py        # 多供应商模型规格解析（本地优先）
@@ -217,10 +300,14 @@ pobi_v2/
         ├── worker.py              # ARQ WorkerSettings
         ├── cancel_state.py        # 取消标志存储（memory/redis）
         ├── approval.py            # M5 审批引擎（判定/决策/回调）
-        └── report.py              # M5 结构化报告渲染
+        ├── report.py              # M5 结构化报告渲染
+        ├── reconcile.py           # 任务状态对账（router 端点与 Worker cron 统一调用）
+        ├── recon_access.py        # router 访问任务本地 recon 库的统一入口（router 不直接依赖内核）
+        ├── preauth.py             # 认证前置：自动分支 + 凭据预检（手动分支已搁置）
+        └── pre_recon.py           # 前置侦查：任务启动后自动执行指纹 + WAF 识别并落库
 ```
 
-> **注**：`pobi_agent/`（内嵌 AI 引擎）位于**仓库根目录**，非 `pobi_v2/pobi_v2/` 子包；通过 uv workspace 复用。
+> **注**：`pobi_agent/` 与 `pobi_prompts/` 是**仓库根目录下的内嵌子包**（`pyproject.toml` 的 wheel packages 已包含二者），非 `pobi_v2/` 下的子包，也不是外部安装依赖。
 
 ## 快速开始
 
@@ -229,7 +316,7 @@ pobi_v2/
 一条命令拉起 Docker 后端 + 自动后台启动前端 Vite dev server：
 
 ```bash
-# 在仓库根目录（uv workspace 已配置）
+# 在仓库根目录（uv 依赖解析源见 uv.toml，默认清华镜像）
 uv sync
 cd webapp && npm install && cd ..   # 首次需安装前端依赖
 
@@ -321,7 +408,6 @@ POBI_V2_DB_NAME=pobi_v2
 
 # ---- 安全 ----
 POBI_V2_JWT_SECRET=<32 字节以上随机串，务必替换 dev 默认值>
-POBI_V2_ALLOW_OPEN_REGISTRATION=false   # 生产关闭开放注册
 POBI_V2_CORS_ORIGINS=https://your-domain  # 生产收敛 CORS（dev 放行 *，禁止与 credentials 同用 *）
 
 # ---- LLM（透传给 pobi_agent.CoreAgent）----
@@ -388,10 +474,13 @@ docker compose exec api alembic upgrade head
 
 ## 待办
 
-工程治理与扫描内核优化方向详见 `docs/PROJECT_GOAL.md`：
+> 早期本节引用 `docs/PROJECT_GOAL.md` 的 §2.4 / §2.5，**该文件已不存在**。完整清单与逐项状态见 `.ai/roadmap.md`，此处仅列未收敛项。
 
-- **§ 2.4 工程治理待办（A1–A7）**：分层倒置 / `python_scripts/` 失序 / `logs/` 入版本控制 / `llm/` 孤儿模块 / CORS 不安全 / `main.py:web_app` 分支矛盾 / `routers/system.py` 脆弱写法。
-- **§ 2.5 扫描内核优化方向（S1–S6）**：侦查产物结构化与向量化 / 上下文按需检索 / 指纹识别能力 / 漏洞利用工具补全 / Supervisor prompt 去靶场假设 / LLM 决策与工具执行分工。
+- **工程治理（A2 / A5 未收敛）**：A2 `python_scripts/` 一次性调试脚本已由 gitignore 排除但未归档清理；A5 生产 CORS 须收敛为具体 origin（dev 暂 `*`）。
+  - 已修复：A1 分层倒置、A3 `logs/` 入版本控制、A4 `llm/` 孤儿模块、A6 `main.py:web_app` 分支矛盾、A7 `routers/system.py` 脆弱写法。
+- **扫描内核优化（S1–S6）**：侦查产物结构化与向量化 / 上下文按需检索 / ~~指纹识别能力~~（已落地为平台层 `pre_recon` 自动通道）/ 漏洞利用工具补全 / Supervisor prompt 去靶场假设 / LLM 决策与工具执行分工。
+- **requester 抓页-重抓循环优化（R1–R3）** 与 **探索过程可检索化（P1–P4）**：当前优先级最高，详见 `.ai/roadmap.md`。
+- **manual 认证分支残留清理**：手动登录分支已搁置，`webapp/src/pages/Tasks.jsx` 与 `components/AuthPanel.jsx` 等残留待清理。
 
 ### 已收敛的监控遗留项（历史监控报告 A–D）
 
