@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import gzip
 import logging
 import os
 import re
@@ -35,6 +36,8 @@ from .sqlite_models import (
     ReconCategory,
     ReconEndpoint,
     ReconFact,
+    ReconFingerprint,
+    ReconHttpTransaction,
     ReconSession,
     ReconTechnique,
     ReconThreat,
@@ -64,8 +67,17 @@ _WAL_PRAGMAS = (
     "PRAGMA busy_timeout=5000;",
 )
 
-# 大文本外置阈值（>100KB 摘要入库，原文写 blobs/）。
+# 响应体分层存储阈值（2026-09-02）：
+# - <100KB：full（明文全量落库）
+# - 100KB–1MB：compressed（gzip 压缩存 body_compressed BLOB）
+# - >1MB：digest（仅存前 _DIGEST_PREFIX_BYTES 字符摘要，不写外置）
+# - json/xml API 响应例外：即使大也全量保留（≥100KB 走 compressed 压缩存储）。
 _BLOB_THRESHOLD_BYTES = 100 * 1024
+_COMPRESS_MAX_BYTES = 1024 * 1024
+_DIGEST_PREFIX_BYTES = 2048
+_PREVIEW_BYTES = 200
+# API 响应判定：content-type 命中 json/xml（含 +json/+xml 变体）。
+_API_CONTENT_TYPE_RE = re.compile(r"(?:json|xml)", re.IGNORECASE)
 
 
 class ReconStoreError(Exception):
@@ -202,8 +214,12 @@ class ReconStore:
         # 幂等加列：PG 增量同步游标 pg_synced_at（旧库缺列时 ALTER TABLE 补齐）。
         for table in ("recon_facts", "recon_endpoints", "recon_threats"):
             self._ensure_column(table, "pg_synced_at")
+        # 分层存储列（2026-09-02）：历史 recon_http_transactions 库补齐。
+        self._ensure_column("recon_http_transactions", "pg_synced_at", "DATETIME")
+        self._ensure_column("recon_http_transactions", "storage_strategy", "VARCHAR(16)")
+        self._ensure_column("recon_http_transactions", "body_compressed", "BLOB")
 
-    def _ensure_column(self, table: str, column: str) -> None:
+    def _ensure_column(self, table: str, column: str, col_type: str = "DATETIME") -> None:
         """检查表是否存在指定列，缺失则 ALTER TABLE ADD COLUMN（幂等）。
 
         新库经 ``metadata.create_all`` 已含全部列；仅历史库需要补齐。
@@ -212,7 +228,7 @@ class ReconStore:
             rows = conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
             if column not in {r[1] for r in rows}:
                 conn.exec_driver_sql(
-                    f"ALTER TABLE {table} ADD COLUMN {column} DATETIME"
+                    f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
                 )
                 conn.commit()
 
@@ -652,6 +668,12 @@ class ReconStore:
             if hosts:
                 l0_lines.append(f"- 已知主机: {', '.join(hosts)}")
         sections.append("\n".join(l0_lines))
+        logger.info(
+            "[RECON-L0] task=%s | facts_total=%d high_conf_shown=%d hosts=%s | injected_lines=%d block_len=%d",
+            task_id, len(facts), len(high_conf[:15]),
+            sorted({e.host for e in endpoints if e.host}),
+            len(l0_lines), len(sections[-1]),
+        )
 
         # ---- L1: 相关端点/技术栈（≤500 tokens）----
         l1_lines = ["## L1 端点与技术栈 (recon)"]
@@ -661,10 +683,17 @@ class ReconStore:
                 line += " [auth]"
             if ep.tech_stack:
                 line += f" tech={ep.tech_stack}"
+            if ep.discovered_via:
+                line += f" via={ep.discovered_via}"
             l1_lines.append(line)
         l1_block = self._fit_budget("\n".join(l1_lines), L1_TOKEN_BUDGET)
         if l1_block:
             sections.append(l1_block)
+            logger.info(
+                "[RECON-L1] task=%s | endpoints_total=%d shown=%d (cap=20) | budget=%d used_tokens=%d injected_lines=%d",
+                task_id, len(endpoints), len(l1_lines) - 1,
+                L1_TOKEN_BUDGET, num_tokens_from_string(l1_block), len(l1_block.splitlines()),
+            )
 
         # ---- L2: 历史成功利用复用（≤1500 tokens）----
         l2_lines = ["## L2 可复用利用经验 (recon)"]
@@ -687,8 +716,19 @@ class ReconStore:
         l2_block = self._fit_budget("\n".join(l2_lines), L2_TOKEN_BUDGET)
         if l2_block:
             sections.append(l2_block)
+            logger.info(
+                "[RECON-L2] task=%s | threats_total=%d confirmed_shown=%d techniques_success=%d | budget=%d used_tokens=%d injected_lines=%d",
+                task_id, len(threats), len(confirmed[:10]),
+                sum(1 for t in techniques if t.success_count > 0),
+                L2_TOKEN_BUDGET, num_tokens_from_string(l2_block), len(l2_block.splitlines()),
+            )
 
-        return "\n\n".join(sections)
+        full = "\n\n".join(sections)
+        logger.info(
+            "[RECON-INDEX] task=%s | total_sections=%d total_block_len=%d total_tokens=%d",
+            task_id, len(sections), len(full), num_tokens_from_string(full),
+        )
+        return full
 
     # ------------------------------------------------------------------
     # PG 聚合层同步（第二阶）
@@ -721,6 +761,7 @@ class ReconStore:
         from pobi_v2.db.recon_models import (
             ReconEndpointAgg,
             ReconFactAgg,
+            ReconHttpTransactionAgg,
             ReconThreatAgg,
             ReconThreatEvidenceLink,
         )
@@ -744,6 +785,12 @@ class ReconStore:
             endpoints = session.execute(
                 select(ReconEndpoint).where(
                     ReconEndpoint.task_id == tk, ReconEndpoint.pg_synced_at.is_(None)
+                )
+            ).scalars().all()
+            tx_rows_raw = session.execute(
+                select(ReconHttpTransaction).where(
+                    ReconHttpTransaction.task_id == tk,
+                    ReconHttpTransaction.pg_synced_at.is_(None),
                 )
             ).scalars().all()
 
@@ -795,6 +842,32 @@ class ReconStore:
                 "source_tasks": [tk],
             }
             for e in endpoints
+        ]
+        # HTTP 事务（2026-09-02）：url 维度收敛，同一 url 只留最新（含分层存储 body）。
+        tx_rows = [
+            {
+                "target_id": tgt,
+                "tenant_id": ten,
+                "host": x.host,
+                "path_normalized": x.path_normalized,
+                "url": x.url,
+                "method": x.method,
+                "status_code": x.status_code,
+                "source": x.source,
+                "response_title": x.response_title,
+                "content_type": x.content_type,
+                "response_size": x.response_size,
+                "response_time_ms": x.response_time_ms,
+                "tech_stack": x.tech_stack or [],
+                "parameters": x.detected_params or [],
+                "auth_used": x.auth_used,
+                "auth_required": x.auth_required,
+                "storage_strategy": x.storage_strategy,
+                "response_body": x.response_body or "",
+                "body_compressed": x.body_compressed,
+                "source_tasks": [tk],
+            }
+            for x in tx_rows_raw
         ]
 
         async with async_session_factory() as pg:
@@ -865,10 +938,35 @@ class ReconStore:
                     },
                 )
                 await pg.execute(stmt)
+            if tx_rows:
+                stmt = pg_insert(ReconHttpTransactionAgg).values(tx_rows)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["target_id", "tenant_id", "method", "url"],
+                    set_={
+                        "host": stmt.excluded.host,
+                        "path_normalized": stmt.excluded.path_normalized,
+                        "status_code": stmt.excluded.status_code,
+                        "source": stmt.excluded.source,
+                        "response_title": stmt.excluded.response_title,
+                        "content_type": stmt.excluded.content_type,
+                        "response_size": stmt.excluded.response_size,
+                        "response_time_ms": stmt.excluded.response_time_ms,
+                        "tech_stack": stmt.excluded.tech_stack,
+                        "parameters": stmt.excluded.parameters,
+                        "auth_used": stmt.excluded.auth_used,
+                        "auth_required": stmt.excluded.auth_required,
+                        "storage_strategy": stmt.excluded.storage_strategy,
+                        "response_body": stmt.excluded.response_body,
+                        "body_compressed": stmt.excluded.body_compressed,
+                        "source_tasks": stmt.excluded.source_tasks,
+                        "last_seen": _utcnow(),
+                    },
+                )
+                await pg.execute(stmt)
             await pg.commit()
 
         # 增量打标：仅 PG 提交成功后，将本次成功同步的行标记为已同步（下次跳过）。
-        if fact_rows or threat_rows or endpoint_rows:
+        if fact_rows or threat_rows or endpoint_rows or tx_rows:
             now = _utcnow()
             with self._session_factory() as session:
                 if fact_rows:
@@ -895,6 +993,15 @@ class ReconStore:
                         .where(
                             ReconEndpoint.task_id == tk,
                             ReconEndpoint.id.in_([e.id for e in endpoints]),
+                        )
+                        .values(pg_synced_at=now)
+                    )
+                if tx_rows:
+                    session.execute(
+                        update(ReconHttpTransaction)
+                        .where(
+                            ReconHttpTransaction.task_id == tk,
+                            ReconHttpTransaction.id.in_([x.id for x in tx_rows_raw]),
                         )
                         .values(pg_synced_at=now)
                     )
@@ -1186,6 +1293,7 @@ class ReconStore:
         from pobi_v2.db.recon_models import (
             ReconEndpointAgg,
             ReconFactAgg,
+            ReconHttpTransactionAgg,
             ReconThreatAgg,
         )
 
@@ -1197,6 +1305,16 @@ class ReconStore:
                     select(ReconEndpointAgg).where(
                         ReconEndpointAgg.target_id == tgt,
                         ReconEndpointAgg.tenant_id == ten,
+                    )
+                )
+            ).scalars().all()
+            # 目标级 HTTP 事务骨架（2026-09-02）：新任务 seed 已抓 url，
+            # covered_block / L1 增量提示避免重复枚举。
+            tx_aggs = (
+                await pg.execute(
+                    select(ReconHttpTransactionAgg).where(
+                        ReconHttpTransactionAgg.target_id == tgt,
+                        ReconHttpTransactionAgg.tenant_id == ten,
                     )
                 )
             ).scalars().all()
@@ -1273,6 +1391,29 @@ class ReconStore:
             )
             if ea.path_normalized not in result.covered_endpoints:
                 result.covered_endpoints.append(ea.path_normalized)
+
+        # 灌入目标级 HTTP 事务骨架（2026-09-02）：url 级最新状态并入端点树，
+        # 供 covered_block / L1 增量提示（同目标新任务不重复枚举已抓 url）。
+        for ta in tx_aggs:
+            if ta.path_normalized in local_endpoints:
+                result.already_covered_count += 1
+            else:
+                result.seeded_count += 1
+                local_endpoints.add(ta.path_normalized)
+            self.upsert_endpoint(
+                task_id,
+                path_normalized=ta.path_normalized,
+                host=ta.host,
+                method=ta.method,
+                status_code=ta.status_code,
+                auth_required=ta.auth_required,
+                tech_stack=ta.tech_stack or [],
+                parameters=ta.parameters or [],
+                discovered_via=f"{ta.source}:seed",
+                confidence=0.6,
+            )
+            if ta.path_normalized not in result.covered_endpoints:
+                result.covered_endpoints.append(ta.path_normalized)
 
         # 灌入事实（含端点类 category 映射为端点，便于 L1 挂载）。
         for fa in fact_aggs:
@@ -1691,6 +1832,8 @@ class ReconStore:
                             "status_code": e.status_code,
                             "auth_required": e.auth_required,
                             "tech_stack": list(e.tech_stack or []),
+                            "parameters": list(e.parameters or []),
+                            "discovered_via": e.discovered_via,
                             "confidence": e.confidence,
                         }
                     )
@@ -1728,6 +1871,297 @@ class ReconStore:
         except Exception as exc:  # noqa: BLE001
             logger.warning("RECON 读取足迹失败（返回空列表）: %s", exc)
         return out
+
+    # ------------------------------------------------------------------
+    # 指纹识别明细（recon_fingerprints，前置侦查专用）
+    # ------------------------------------------------------------------
+
+    def upsert_fingerprint(
+        self,
+        task_id: str,
+        target_url: str,
+        *,
+        host: str = "",
+        status_code: Optional[int] = None,
+        favicon_hash: Optional[int] = None,
+        auth_mode: str = "external_only",
+        fingerprint: Optional[Dict[str, Any]] = None,
+        matched_count: int = 0,
+        rule_count: int = 0,
+        source: str = "pre_recon",
+        session_id: Optional[int] = None,
+    ) -> None:
+        """幂等写入 recon_fingerprints，冲突键 (task_id, target_url)。
+
+        同 host 二次扫描仅更新时间与结果，不产生重复行。
+        """
+        if session_id is None:
+            session_id = self.ensure_session(task_id)
+        with self._session_factory() as session:
+            existing = session.execute(
+                select(ReconFingerprint).where(
+                    ReconFingerprint.task_id == task_id,
+                    ReconFingerprint.target_url == target_url,
+                )
+            ).scalar_one_or_none()
+            if existing:
+                existing.pg_synced_at = None
+                existing.host = host or existing.host
+                if status_code is not None:
+                    existing.status_code = status_code
+                if favicon_hash is not None:
+                    existing.favicon_hash = favicon_hash
+                existing.auth_mode = auth_mode or existing.auth_mode
+                existing.fingerprint_json = fingerprint or existing.fingerprint_json
+                existing.matched_count = matched_count
+                existing.rule_count = rule_count
+                existing.source = source or existing.source
+                existing.updated_at = _utcnow()
+            else:
+                session.add(
+                    ReconFingerprint(
+                        session_id=session_id,
+                        task_id=task_id,
+                        target_url=target_url,
+                        host=host,
+                        status_code=status_code,
+                        favicon_hash=favicon_hash,
+                        auth_mode=auth_mode,
+                        fingerprint_json=fingerprint or {},
+                        matched_count=matched_count,
+                        rule_count=rule_count,
+                        source=source,
+                    )
+                )
+            session.commit()
+
+    def insert_http_transaction(
+        self,
+        task_id: str,
+        *,
+        host: str = "",
+        path_normalized: str = "",
+        url: str = "",
+        method: str = "GET",
+        status_code: Optional[int] = None,
+        source: str = "sitemap:katana",
+        request_headers: Optional[Dict[str, Any]] = None,
+        request_body: str = "",
+        response_headers: Optional[Dict[str, Any]] = None,
+        response_body: str = "",
+        response_title: str = "",
+        content_type: str = "",
+        response_size: int = 0,
+        response_time_ms: Optional[int] = None,
+        tech_stack: Optional[List[str]] = None,
+        detected_params: Optional[List[str]] = None,
+        detected_forms: Optional[List[Dict[str, Any]]] = None,
+        auth_used: bool = False,
+        auth_required: bool = False,
+        session_id: Optional[int] = None,
+    ) -> None:
+        """追加一条 HTTP 请求/响应事务（流水表，无幂等键，保留历史可对比）。
+
+        响应体分层存储（2026-09-02）：
+        - <100KB → full：明文全量落库 response_body；
+        - 100KB–1MB（非 API）→ compressed：gzip 压缩存 body_compressed，
+          response_body 仅存 ``_PREVIEW_BYTES`` 字符预览；
+        - >1MB（非 API）→ digest：仅存前 ``_DIGEST_PREFIX_BYTES`` 字符摘要；
+        - json/xml API 响应例外：即使大也全量保留（≥100KB 走 compressed 压缩存储）。
+        完整内容经 ``get_transaction_body`` 按需解压/取全文。
+        """
+        if session_id is None:
+            session_id = self.ensure_session(task_id)
+        stored_body = response_body or ""
+        strategy = "full"
+        compressed: Optional[bytes] = None
+        if stored_body:
+            size = len(stored_body.encode("utf-8"))
+            is_api = bool(_API_CONTENT_TYPE_RE.search((content_type or "")))
+            if is_api:
+                # API 响应全量保留：≥100KB 压缩存 BLOB，<100KB 明文。
+                if size >= _BLOB_THRESHOLD_BYTES:
+                    strategy = "compressed"
+                    compressed = gzip.compress(stored_body.encode("utf-8"))
+                    stored_body = stored_body[:_PREVIEW_BYTES]
+            elif size >= _BLOB_THRESHOLD_BYTES:
+                if size <= _COMPRESS_MAX_BYTES:
+                    strategy = "compressed"
+                    compressed = gzip.compress(stored_body.encode("utf-8"))
+                    stored_body = stored_body[:_PREVIEW_BYTES]
+                else:
+                    strategy = "digest"
+                    stored_body = stored_body[:_DIGEST_PREFIX_BYTES]
+        try:
+            with self._session_factory() as session:
+                session.add(
+                    ReconHttpTransaction(
+                        session_id=session_id,
+                        task_id=task_id,
+                        host=host,
+                        path_normalized=path_normalized,
+                        url=url,
+                        method=method,
+                        status_code=status_code,
+                        source=source,
+                        request_headers=request_headers or {},
+                        request_body=request_body or "",
+                        response_headers=response_headers or {},
+                        response_body=stored_body,
+                        storage_strategy=strategy,
+                        body_compressed=compressed,
+                        response_title=response_title,
+                        content_type=content_type,
+                        response_size=int(response_size or 0),
+                        response_time_ms=response_time_ms,
+                        tech_stack=tech_stack or [],
+                        detected_params=detected_params or [],
+                        detected_forms=detected_forms or [],
+                        auth_used=auth_used,
+                        auth_required=auth_required,
+                    )
+                )
+                session.commit()
+        except Exception as exc:  # noqa: BLE001 - 事务写入失败不阻断主流程
+            logger.warning("RECON 事务写入失败（已忽略）: %s", exc)
+
+    def list_http_transactions(
+        self,
+        task_id: str,
+        host: Optional[str] = None,
+        path_normalized: Optional[str] = None,
+        source: Optional[str] = None,
+        limit: int = 500,
+    ) -> List[Dict[str, object]]:
+        """返回 HTTP 事务流水（站点地图按端点聚合查询的读面）。
+
+        骨架视图：不拖大 body（>100KB 均为 compressed/digest，response_body 仅含
+        预览/摘要），完整内容由站点地图经 ``get_transaction_body`` 按需取全文。
+        """
+        out: List[Dict[str, object]] = []
+        try:
+            with self._session_factory() as session:
+                stmt = select(ReconHttpTransaction).where(
+                    ReconHttpTransaction.task_id == task_id
+                )
+                if host:
+                    stmt = stmt.where(ReconHttpTransaction.host == host)
+                if path_normalized:
+                    stmt = stmt.where(
+                        ReconHttpTransaction.path_normalized == path_normalized
+                    )
+                if source:
+                    stmt = stmt.where(ReconHttpTransaction.source == source)
+                stmt = stmt.order_by(ReconHttpTransaction.created_at.asc()).limit(limit)
+                for t in session.execute(stmt).scalars().all():
+                    out.append(self._http_tx_to_dict(t))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RECON 读取事务失败（返回空列表）: %s", exc)
+        return out
+
+    def get_transaction_body(self, task_id: str, tx_id: int) -> str:
+        """按需取完整响应体（compressed 自动解压；digest 仅返回摘要）。
+
+        供站点地图「点开单条事务查看完整响应」使用；不存在或读取失败返回空串。
+        """
+        try:
+            with self._session_factory() as session:
+                t = session.execute(
+                    select(ReconHttpTransaction).where(
+                        ReconHttpTransaction.id == tx_id,
+                        ReconHttpTransaction.task_id == task_id,
+                    )
+                ).scalars().first()
+                if t is None:
+                    return ""
+                if t.storage_strategy == "compressed" and t.body_compressed:
+                    return gzip.decompress(t.body_compressed).decode(
+                        "utf-8", errors="replace"
+                    )
+                return t.response_body or ""
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RECON 读取事务 body 失败: %s", exc)
+            return ""
+
+    def _http_tx_to_dict(self, t: "ReconHttpTransaction") -> Dict[str, object]:
+        return {
+            "id": t.id,
+            "host": t.host,
+            "path_normalized": t.path_normalized,
+            "url": t.url,
+            "method": t.method,
+            "status_code": t.status_code,
+            "source": t.source,
+            "request_headers": t.request_headers,
+            "request_body": t.request_body,
+            "response_headers": t.response_headers,
+            "response_body": t.response_body,
+            "storage_strategy": t.storage_strategy,
+            "body_available": t.storage_strategy in ("full", "compressed"),
+            "body_blob_ref": t.body_blob_ref,
+            "response_title": t.response_title,
+            "content_type": t.content_type,
+            "response_size": t.response_size,
+            "response_time_ms": t.response_time_ms,
+            "tech_stack": t.tech_stack,
+            "detected_params": t.detected_params,
+            "detected_forms": t.detected_forms,
+            "auth_used": t.auth_used,
+            "auth_required": t.auth_required,
+            "created_at": _iso(t.created_at),
+        }
+
+    def list_fingerprints(
+        self, task_id: str, limit: int = 200
+    ) -> List[Dict[str, object]]:
+        """返回指纹识别明细列表（前置侦查产物，四层结构化结果）。"""
+        out: List[Dict[str, object]] = []
+        try:
+            with self._session_factory() as session:
+                stmt = (
+                    select(ReconFingerprint)
+                    .where(ReconFingerprint.task_id == task_id)
+                    .order_by(ReconFingerprint.updated_at.desc())
+                    .limit(limit)
+                )
+                for f in session.execute(stmt).scalars().all():
+                    out.append(self._fingerprint_to_dict(f))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RECON 读取指纹失败（返回空列表）: %s", exc)
+        return out
+
+    def get_fingerprint(
+        self, task_id: str, target_url: str
+    ) -> Optional[Dict[str, object]]:
+        """按目标 URL 精确读取一条指纹记录。"""
+        try:
+            with self._session_factory() as session:
+                row = session.execute(
+                    select(ReconFingerprint).where(
+                        ReconFingerprint.task_id == task_id,
+                        ReconFingerprint.target_url == target_url,
+                    )
+                ).scalar_one_or_none()
+                return self._fingerprint_to_dict(row) if row else None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RECON 读取指纹失败（返回 None）: %s", exc)
+            return None
+
+    def _fingerprint_to_dict(self, f: "ReconFingerprint") -> Dict[str, object]:
+        return {
+            "id": f.id,
+            "target_url": f.target_url,
+            "host": f.host,
+            "status_code": f.status_code,
+            "favicon_hash": f.favicon_hash,
+            "auth_mode": f.auth_mode,
+            "fingerprint": f.fingerprint_json,
+            "matched_count": f.matched_count,
+            "rule_count": f.rule_count,
+            "source": f.source,
+            "created_at": _iso(f.created_at),
+            "updated_at": _iso(f.updated_at),
+        }
 
     def list_threats(
         self,

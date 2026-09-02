@@ -1121,7 +1121,12 @@ class ContextEngine:
         if self.recon_store is None:
             return ""
         try:
-            return self.recon_store.build_index_view(task_id=self._recon_task_id())
+            block = self.recon_store.build_index_view(task_id=self._recon_task_id())
+            logger.info(
+                "[CTX-RECON] recon_block assembled | nonempty=%s len=%d (挂载到统一上下文前部)",
+                bool(block), len(block) if block else 0,
+            )
+            return block
         except Exception as exc:  # noqa: BLE001 - 注入失败不阻断主上下文
             logger.warning("RECON 分层索引构建失败（已跳过）: %s", exc)
             return ""
@@ -1675,6 +1680,66 @@ class ContextEngine:
             self._recon_emit_sync()
         except Exception as exc:  # noqa: BLE001 - 旁路写入失败不应影响推理
             logger.warning("RECON 旁路 technique 写入失败（已忽略）: %s", exc)
+
+    def add_recon_http_transaction(
+        self,
+        *,
+        host: str = "",
+        path_normalized: str = "",
+        url: str = "",
+        method: str = "GET",
+        status_code: int | None = None,
+        source: str = "agent:requester",
+        request_headers: Dict[str, Any] | None = None,
+        request_body: str = "",
+        response_headers: Dict[str, Any] | None = None,
+        response_body: str = "",
+        response_title: str = "",
+        content_type: str = "",
+        response_size: int = 0,
+        response_time_ms: int | None = None,
+        tech_stack: list[str] | None = None,
+        detected_params: list[str] | None = None,
+        detected_forms: list[Dict[str, Any]] | None = None,
+        auth_used: bool = False,
+        auth_required: bool = False,
+        session_id: int | None = None,
+    ) -> None:
+        """旁路写入 recon_http_transactions（HTTP 请求/响应事务流水）。
+
+        由 requester 工具（pw_send_payload）在每次请求后调用，与 sitemap:katana
+        来源共用同一 schema（站点地图数据对齐）；recon_store 未注入时安全跳过，
+        异常仅记 warning 不阻断主循环（语义对齐 _recon_bypass_*）。
+        """
+        if self.recon_store is None:
+            return
+        try:
+            self.recon_store.insert_http_transaction(
+                task_id=self._recon_task_id(),
+                host=host,
+                path_normalized=path_normalized,
+                url=url,
+                method=method,
+                status_code=status_code,
+                source=source,
+                request_headers=request_headers,
+                request_body=request_body,
+                response_headers=response_headers,
+                response_body=response_body,
+                response_title=response_title,
+                content_type=content_type,
+                response_size=response_size,
+                response_time_ms=response_time_ms,
+                tech_stack=tech_stack,
+                detected_params=detected_params,
+                detected_forms=detected_forms,
+                auth_used=auth_used,
+                auth_required=auth_required,
+                session_id=session_id,
+            )
+            self._recon_emit_sync()
+        except Exception as exc:  # noqa: BLE001 - 旁路写入失败不应影响推理
+            logger.warning("RECON 旁路 transaction 写入失败（已忽略）: %s", exc)
 
     def was_already_attempted(self, payload: str, task: str) -> bool:
         """Check if a similar attempt was already made and failed.
