@@ -587,7 +587,19 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 .timeline__item:last-child { border-bottom: none; }
-.timeline__marker { display: flex; justify-content: center; padding-top: 4px; }
+.timeline__marker {
+  display: flex;
+  justify-content: center;
+  padding-top: 4px;
+  background: none;
+  border: none;
+  padding: 2px;
+  margin: -2px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.timeline__marker:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.timeline__marker:hover { background: var(--bg-overlay); }
 .timeline__body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .timeline__head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .timeline__type {
@@ -597,7 +609,12 @@
   letter-spacing: var(--tracking-wide);
   text-transform: uppercase;
   color: var(--text-tertiary);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
 }
+.timeline__type:hover { color: var(--accent); text-decoration: underline; }
 .timeline__time { font-family: var(--font-mono); font-size: 10px; color: var(--text-disabled); }
 .timeline__text {
   font-family: var(--font-mono);
@@ -607,6 +624,7 @@
   white-space: pre-wrap;
   line-height: var(--lh-snug);
 }
+.timeline__item .code-block { margin-top: var(--sp-1); }
 
 /* ------------------------------ 进度条 ------------------------------ */
 

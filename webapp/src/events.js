@@ -85,7 +85,7 @@ function conf(v) {
 export function describeEvent(type, p = {}) {
   switch (type) {
     case 'agent_start':
-      return `启动智能体 ${p.agent_name || '?'}（${p.role || 'agent'}）→ ${clip(p.task, 120)}`
+      return `启动智能体 ${p.agent_name || '?'}（${p.role || 'agent'}）→ ${clip(p.task, 1200)}`
     case 'agent_end':
       return `智能体 ${p.agent_name || '?'} 完成，置信度 ${conf(p.confidence_score)}${p.notes ? ` · ${clip(p.notes, 160)}` : ''}`
     case 'agent_error':

@@ -314,35 +314,9 @@ export default function TaskConsole() {
               <LoadingBlock />
             ) : events.length ? (
               <div className="timeline">
-                {events.map((e) => {
-                  const tone = eventTone(e.type, e.payload)
-                  return (
-                    <div className="timeline__item" key={e.key}>
-                      <span className="timeline__marker">
-                        <Icon
-                          name={tone === 'danger' ? 'alert' : 'chevronRight'}
-                          size={11}
-                          style={{ color: tone === 'danger' ? 'var(--danger)' : 'var(--text-disabled)' }}
-                        />
-                      </span>
-                      <div className="timeline__body">
-                        <div className="timeline__head">
-                          <span
-                            className="timeline__type"
-                            style={tone === 'danger' ? { color: 'var(--danger)' } : tone === 'accent' ? { color: 'var(--accent)' } : undefined}
-                          >
-                            {typeLabel(e.type)}
-                          </span>
-                          {e.payload?.agent_name && (
-                            <span className="timeline__time">{e.payload.agent_name}</span>
-                          )}
-                          <span className="timeline__time">{e.ts ? ago(e.ts) : ''}</span>
-                        </div>
-                        <div className="timeline__text">{describeEvent(e.type, e.payload)}</div>
-                      </div>
-                    </div>
-                  )
-                })}
+                {events.map((e) => (
+                  <EventRow key={e.key} event={e} />
+                ))}
               </div>
             ) : (
               <EmptyState
@@ -425,6 +399,55 @@ export default function TaskConsole() {
             </div>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+function EventRow({ event }) {
+  const { type, payload, ts } = event
+  const tone = eventTone(type, payload)
+  const [open, setOpen] = useState(false)
+  const summary = describeEvent(type, payload)
+
+  return (
+    <div className={`timeline__item ${open ? 'timeline__item--open' : ''}`}>
+      <button
+        type="button"
+        className="timeline__marker"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-label={open ? '收起事件详情' : '展开事件详情'}
+      >
+        <Icon
+          name={open ? 'chevronDown' : tone === 'danger' ? 'alert' : 'chevronRight'}
+          size={11}
+          style={{ color: tone === 'danger' ? 'var(--danger)' : open ? 'var(--accent)' : 'var(--text-disabled)' }}
+        />
+      </button>
+      <div className="timeline__body">
+        <div className="timeline__head">
+          <button
+            type="button"
+            className="timeline__type"
+            onClick={() => setOpen((v) => !v)}
+            style={
+              tone === 'danger'
+                ? { color: 'var(--danger)' }
+                : tone === 'accent'
+                  ? { color: 'var(--accent)' }
+                  : undefined
+            }
+          >
+            {typeLabel(type)}
+          </button>
+          {payload?.agent_name && <span className="timeline__time">{payload.agent_name}</span>}
+          <span className="timeline__time">{ts ? ago(ts) : ''}</span>
+        </div>
+        <div className="timeline__text">{summary}</div>
+        {open && (
+          <CodeBlock maxHeight={320}>{JSON.stringify(payload, null, 2)}</CodeBlock>
+        )}
       </div>
     </div>
   )
