@@ -1,0 +1,6889 @@
+{
+ "version": "1.0",
+ "source": "EASY233/Finger (library/finger.json) + 基础 WAF 规则",
+ "rule_count": {
+  "cms": 648,
+  "waf": 28
+ },
+ "rules": [
+  {
+   "name": "seeyon",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/seeyon/USER-DATA/IMAGES/LOGIN/login.gif"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "seeyon",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/seeyon/common/"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "微三云管理系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "WSY_logo",
+    "管理系统 MANAGEMENT SYSTEM"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Weblogic",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<TITLE>Error 404--Not Found</TITLE>",
+    "<i>Hypertext Transfer Protocol -- HTTP/1.1</i>"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Weblogic",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/console/framework/skins/wlsconsole/images/login_WebLogic_branding.png"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Weblogic",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "Welcome to Weblogic Application Server"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Weblogic",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<title>Oracle WebLogic Server 管理控制台</title>"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Sangfor SSL VPN",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/por/login_psw.csp"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Sangfor SSL VPN",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "loginPageSP/loginPrivacy.js"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "e-mobile",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "weaver,e-mobile"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "ecology",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "ecology_JSessionid"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Shiro",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "rememberMe="
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Shiro",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "=deleteMe"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "泛微云桥 e-Bridge",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "content=\"泛微云桥e-Bridge,http://wx.weaver.com.cn\""
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "泛微-协同办公OA",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "cloudstore/resource/pc/polyfill/polyfill.min.js"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "泛微-协同办公OA",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "wui/theme/ecology8/page/images/login/username_wev8.png"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "泛微-协同办公OA",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/wui/index.html#/?logintype=1"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Swagger UI",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/swagger-ui.css",
+    "swagger-ui-bundle.js",
+    "swagger-ui-standalone-preset.js"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Ruijie",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "4008 111 000"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Huawei SMC",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "Script/SmcScript.js?version="
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "H3C Router",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/wnm/ssl/web/frame/login.html"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Cisco SSLVPN",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/+CSCOE+/logon.html"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "通达OA",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/images/tongda.ico"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "深信服 waf",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "rsa.js",
+    "commonFunction.js"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "深信服 waf",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "Redirect to...",
+    "/LogInOut.php"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "网御 vpn",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/vpn/common/js/leadsec.js",
+    "/vpn/user/common/custom/auth_home.css"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "启明星辰天清汉马USG防火墙",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/cgi-bin/webui?op=get_product_model"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "蓝凌 OA",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "sys/ui/extend/theme/default/style/icon.css",
+    "sys/ui/extend/theme/default/style/profile.css"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "深信服上网行为管理系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "utccjfaewjb = function(str, key)"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "深信服上网行为管理系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "document.write(WRFWWCSFBXMIGKRKHXFJ"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "深信服应用交付报表系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/reportCenter/index.php?cls_mode=cluster_mode_others"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "金蝶云星空",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "HTML5/content/themes/kdcss.min.css"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "金蝶云星空",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/ClientBin/Kingdee.BOS.XPF.App.xap"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "CoreMail",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "coremail/common"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "启明星辰天清汉马USG防火墙",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<title>天清汉马USG防火墙</title>"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Jboss",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "jboss.css"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Gitlab",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "assets/gitlab_logo"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "宝塔-BT.cn",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<title>入口校验失败</title>",
+    "href=\"http://www.bt.cn/bbs\""
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "宝塔-BT.cn",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "扫码登录更安全",
+    "bt.cn",
+    "/login"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "宝塔-BT.cn",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "站点创建成功",
+    "bt.cn"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "禅道",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "self.location",
+    "Lw=="
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "禅道",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/theme/default/images/main/zt-logo.png"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "禅道",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "zentaosid"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "金合OA",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "Jhsoft.Web.login",
+    "PassWord.aspx"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "用友软件",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "UFIDA Software CO.LTD all rights reserved"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "用友软件",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "logo/images/ufida_ehr_disable.png",
+    "logo/images/ufida_ehr.png",
+    "logo/images/ufida_ebs_disable.png"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "YONYOU NC",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "uclient.yonyou.com",
+    "UClient"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "YONYOU NC",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "YONYOU NC",
+    "img/logo_small.ico"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "RabbitMQ",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<title>RabbitMQ Management</title>"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Zabbix",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "zabbix",
+    "Zabbix SIA"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "联软准入",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "网络准入",
+    "leagsoft",
+    "redirect"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "列目录",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "Index of /"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "列目录",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    " - /</title>"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "浪潮服务器IPMI管理口",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "img/inspur_logo.png",
+    "Management System"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "RegentApi_v2.0",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "RegentApi_v2.0"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Tomcat默认页面",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/manager/status",
+    "/manager/html"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "slack-instance",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "99395752"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "spring-boot",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "116323821"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Jenkins",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "81586312"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Cnservers LLC",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-235701012"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Atlassian",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "743365239"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Chainpoint",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2128230701"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "LaCie",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1277814690"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Parse",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "246145559"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Atlassian",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "628535358"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "JIRA",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "855273746"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Avigilon",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1318124267"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Atlassian – Confluence",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-305179312"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "OpenStack",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "786533217"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Pi Star",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "432733105"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Atlassian",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "705143395"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Angular IO (AngularJS)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1255347784"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "XAMPP",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1275226814"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "React",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2009722838"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Atlassian – JIRA",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "981867722"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "OpenStack",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-923088984"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Aplikasi",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "494866796"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Ubiquiti Aircube",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1249285083"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Atlassian – Bamboo",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1379982221"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Exostar – Managed Access Gateway",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "420473080"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Atlassian – Confluence",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1642532491"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Cisco Meraki",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "163842882"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Archivematica",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1378182799"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "TCN",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-702384832"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "CX",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-532394952"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Ace",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-183163807"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Atlassian – JIRA",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "552727997"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "NetData",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1302486561"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "OpenGeo Suite",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-609520537"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Dgraph Ratel",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1961046099"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Atlassian – JIRA",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1581907337"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Material Dashboard",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1913538826"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Form.io",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1319699698"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Kubeflow",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1203021870"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "netdata dashboard",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-182423204"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "CapRover",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "988422585"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "WiJungle",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2113497004"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Onera",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1234311970"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "SmartPing",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "430582574"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "OpenStack",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1232596212"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "netdata dashboard",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1585145626"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "FRITZ!Box",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-219752612"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Ubiquiti – AirOS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-697231354"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Fortinet – Forticlient",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "945408572"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Outlook Web Application",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1768726119"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Huawei – Claro",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2109473187"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ASUS AiCloud",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "552592949"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "SonicWALL",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "631108382"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Google",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "708578229"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Plesk",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-134375033"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Dahua Storm (IP Camera)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2019488876"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Huawei – ADSL/Router",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1395400951"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Sophos Cyberoam (appliance)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1601194732"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "LANCOM Systems",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-325082670"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Plesk",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1050786453"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "TilginAB (HomeGateway)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1346447358"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Supermicro Intelligent Management (IPMI)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1410610129"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Zyxel ZyWALL",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-440644339"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Dell SonicWALL",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "363324987"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Ubiquiti Login Portals",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1446794564"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Sophos User Portal/VPN Portal",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1045696447"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Apache Tomcat",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-297069493"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "OpenVPN",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "396533629"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Cyberoam",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1462981117"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ASP.net favicon",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1772087922"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Technicolor",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1594377337"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Vodafone (Technicolor)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "165976831"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "UBNT Router UI",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1677255344"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Intelbras Wireless",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-359621743"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Kerio Connect (Webmail)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-677167908"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "BIG-IP",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "878647854"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Microsoft OWA",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "442749392"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "pfSense",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1405460984"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "iKuai Networks",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-271448102"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Dlink Webcam",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "31972968"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "3CX Phone System",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "970132176"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Bluehost",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1119613926"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Sangfor",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "123821839"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ZTE Corporation (Gateway/Appliance)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "459900502"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Ruckus Wireless",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2069844696"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Bitnami",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1607644090"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Juniper Device Manager",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2141724739"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Technicolor Gateway",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1835479497"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Gitlab",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1278323681"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "NETASQ - Secure / Stormshield",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1929912510"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "VMware Horizon",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1255992602"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "VMware Horizon",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1895360511"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "VMware Horizon",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-991123252"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Vmware Secure File Transfer",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1642701741"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "SAP Netweaver",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-266008933"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "VMware vCenter",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "VMware",
+    "ID_VISDK",
+    "download"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "网心云设备",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "网心云设备",
+    "favicon.png"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "SAP ID Service: Log On",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1967743928"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "SAP Conversational AI",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1347937389"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Palo Alto Login Portal",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "602431586"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Palo Alto Networks",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-318947884"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Outlook Web Application",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1356662359"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Webmin",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1453890729"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Docker",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1814887000"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Docker",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1937209448"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Amazon",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1544605732"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Amazon",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "716989053"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "phpMyAdmin",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1010568750"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Zhejiang Uniview Technologies Co.",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1240222446"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ISP Manager",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-986678507"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "AXIS (network cameras)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1616143106"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Roundcube Webmail",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-976235259"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "UniFi Video Controller (airVision)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "768816037"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "pfSense",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1015545776"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Freebox OS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1838417872"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Keenetic",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "547282364"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Sierra Wireless Ace Manager (Airlink)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1571472432"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Synology DiskStation",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "149371702"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "INSTAR IP Cameras",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1169314298"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Webmin",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1038557304"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Octoprint (3D printer)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1307375944"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Webmin",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1280907310"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Vesta Hosting Control Panel",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1954835352"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Farming Simulator Dedicated Server",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "509789953"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Residential Gateway",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1933493443"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "cPanel Login",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1993518473"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Arris",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1477563858"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "PLEX Server",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-895890586"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Dlink Webcam",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1354933624"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Deluge",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "944969688"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Webmin",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "479413330"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Cambium Networks",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-435817905"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Plesk",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-981606721"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Dahua Storm (IP Camera)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "833190513"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Parallels Plesk Panel",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-652508439"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Fireware Watchguard",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-569941107"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Shock&Innovation!! netis setup",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1326164945"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "cacaoweb",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1738184811"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Loxone (Automation)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "904434662"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "HP Printer / Server",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "905744673"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Netflix",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "902521196"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Linksys Smart Wi-Fi",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2063036701"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "lwIP (A Lightweight TCP/IP stack)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1205024243"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Hitron Technologies",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "607846949"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Dahua Storm (DVR)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1281253102"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "MOBOTIX Camera",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "661332347"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Blue Iris (Webcam)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-520888198"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Vigor Router",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "104189364"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Alibaba Cloud (Block Page)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1227052603"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "DD WRT (DD-WRT milli_httpd)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "252728887"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Mitel Networks (MiCollab End User Portal)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1922044295"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Dlink Webcam",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1221759509"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Dlink Router",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1037387972"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "PRTG Network Monitor",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-655683626"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Elastic (Database)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1611729805"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Dlink Webcam",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1144925962"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Wildfly",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1666561833"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Cisco Meraki Dashboard",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "804949239"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Workday",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-459291760"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "JustHost",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1734609466"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Baidu (IP error page)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1507567067"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Intelbras SA",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2006716043"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Yii PHP Framework (Default Favicon)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1298108480"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "truVision NVR (interlogix)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1782271534"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Redmine",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "603314"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "phpMyAdmin",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-476231906"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Cisco (eg:Conference Room Login Page)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-646322113"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Jetty 404",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-629047854"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Luma Surveillance",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1351901211"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Parallels Plesk Panel",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-519765377"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "HP Printer / Server",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2144363468"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Metasploit",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-127886975"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Metasploit",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1139788073"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Metasploit",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1235192469"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ALIBI NVR",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1876585825"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Sangfor",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1810847295"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Websockets test page (eg: port 5900)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-291579889"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "macOS Server (Apple)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1629518721"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "OpenRG",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-986816620"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Cisco Router",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-299287097"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Sangfor",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1926484046"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "HeroSpeed Digital Technology Co. (NVR/IPC/XVR)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-873627015"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Nomadix Access Gateway",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2071993228"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Gitlab",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "516963061"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Magento",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-38580010"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "MK-AUTH",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1490343308"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Shoutcast Server",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-632583950"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "FireEye",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "95271369"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "FireEye",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1476335317"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "FireEye",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-842192932"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "FireEye",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "105083909"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "FireEye",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "240606739"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "FireEye",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2121539357"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Adobe Campaign Classic",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-333791179"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "XAMPP",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1437701105"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Niagara Web Server",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-676077969"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Technicolor",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2138771289"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Hitron Technologies Inc.",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "711742418"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "IBM Notes",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "728788645"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Barracuda",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1436966696"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ServiceNow",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "86919334"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Openfire Admin Console",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1211608009"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "HP iLO",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2059618623"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Sunny WebBox",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1975413433"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ZyXEL",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "943925975"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Huawei",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "281559989"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Tenda Web Master",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2145085239"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Prometheus Time Series Collection and Processing Server",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1399433489"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "wdCP cloud host management system",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1786752597"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Domoticz (Home Automation)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "90680708"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Tableau",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1441956789"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "openWRT Luci",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-675839242"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Ubiquiti – AirOS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1020814938"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "MDaemon Webmail",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-766957661"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Teltonika",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "119741608"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Entrolink",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1973665246"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "WindRiver-WebServer",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "74935566"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Microhard Systems",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1723752240"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Skype",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1807411396"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Teltonika",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1612496354"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Eltex (Router)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1877797890"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "bintec elmeg",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-375623619"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "SyncThru Web Service (Printers)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1483097076"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "BoaServer",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1169183049"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Securepoint",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1051648103"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Moodle",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-438482901"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "RADIX",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1492966240"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "CradlePoint Technology (Router)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1466912879"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Drupal",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-167656799"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Blackboard",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1593651747"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Jupyter Notebook",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-895963602"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "HostMonster - Web hosting",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-972810761"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "D-Link (router/network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1703788174"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Rocket Chat",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "225632504"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "mofinetwork",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1702393021"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Zabbix",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "892542951"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "TOTOLINK (network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "547474373"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Ossia (Provision SR) | Webcam/IP Camera",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-374235895"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "cPanel Login",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1544230796"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "D-Link (router/network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "517158172"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Jeedom (home automation)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "462223993"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "JBoss Application Server 7",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "937999361"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Niagara Web Server / Tridium",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1991562061"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Solarwinds Serv-U FTP Server",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "812385209"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Aruba (Virtual Controller)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1142227528"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Dell",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1153950306"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "RemObjects SDK / Remoting SDK for .NET HTTP Server Microsoft",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "72005642"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Zyxel ZyWALL",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-484708885"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "VisualSVN Server",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "706602230"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Jboss",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-656811182"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "STARFACE VoIP Software",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-332324409"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Netis (network devices)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-594256627"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "WHM",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-649378830"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Tandberg",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "97604680"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Ghost (CMS)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1015932800"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Avtech IP Surveillance (Camera)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-194439630"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Liferay Portal",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "129457226"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Parallels Plesk Panel",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-771764544"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Odoo",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-617743584"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Polycom",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "77044418"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Cake PHP",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "980692677"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Exacq",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "476213314"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "CheckPoint",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "794809961"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Ubiquiti UNMS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1157789622"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "cPanel Login",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1244636413"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "WorldClient for Mdaemon",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1985721423"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Netport Software (DSL)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1124868062"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "f5 Big IP",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-335242539"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Mailcow",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2146763496"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "QNAP NAS Virtualization Station",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1041180225"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Netgear",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1319025408"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Gogs",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "917966895"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Trendnet IP camera",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "512590457"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Asustor",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1678170702"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Dahua",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1466785234"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Discuz!",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-505448917"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Discuz!",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "Discuz!",
+    "Comsenz",
+    "cache/"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "wdCP cloud host management system",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "255892555"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Joomla",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1627330242"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "SmarterMail",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1935525788"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Seafile",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-12700016"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "bintec elmeg",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1770799630"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "NETGEAR ReadyNAS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-137295400"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "iPECS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-195508437"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "bet365",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2116540786"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Reolink",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-38705358"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "idera",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-450254253"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Proofpoint",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1630354993"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Kerio Connect WebMail",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1678298769"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "WorldClient for Mdaemon",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-35107086"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Realtek",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2055322029"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "锐捷网络-EWEB网管系统",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-692947551"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Askey Cable Modem",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1710631084"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Askey Cable Modem",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "89321398"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "锐捷 NBR 路由器",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "738520282"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "锐捷 SSLVPN",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "SSLVPN",
+    "rjweb",
+    "login"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "JAWS Web Server (IP Camera)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "90066852"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "JAWS Web Server (IP Camera)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "768231242"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Homegrown Website Hosting",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-421986013"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Technicolor / Thomson Speedtouch (Network / ADSL)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "156312019"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "DVR (Korean)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-560297467"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Joomla",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1950415971"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "TP-LINK (Network Device)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1842351293"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Salesforce",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1433417005"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Apache Haus",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-632070065"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Untangle",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1103599349"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Shenzhen coship electronics co.",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "224536051"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "D-Link (router/network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1038500535"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "D-Link (camera)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-355305208"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Kibana",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-267431135"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Kibana",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-759754862"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Kibana",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1200737715"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Kibana",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "75230260"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Kibana",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1668183286"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Intelbras SA",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "283740897"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Icecast Streaming Media Server",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1424295654"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "NEC WebPro",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1922032523"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Vivotek (Camera)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1654229048"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Microsoft IIS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1414475558"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Univention Portal",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1697334194"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Portainer (Docker Management)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1424036600"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "NOS Router",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-831826827"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Tongda",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-759108386"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "CrushFTP",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1022206565"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Endian Firewall",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1225484776"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Kerio Control Firewall",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-631002664"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Ferozo Panel",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2072198544"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Kerio Control Firewall",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-466504476"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Cafe24 (Korea)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1251810433"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Mautic (Open Source Marketing Automation)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1273982002"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "NETIASPOT (Network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-978656757"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Multilaser",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "916642917"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Canvas LMS (Learning Management)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "575613323"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "IBM Server",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1726027799"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ADB Broadband S.p.A. (Network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-587741716"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Citrix 虚拟桌面",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1272756243"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ARRIS (Network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-360566773"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Huawei (Network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-884776764"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "WAMPSERVER",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "929825723"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Seagate Technology (NAS)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "240136437"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "UPC Ceska Republica (Network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1911253822"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Flussonic (Video Streaming)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-393788031"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Joomla",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "366524387"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "WAMPSERVER",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "443944613"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Metabase",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1953726032"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "D-Link (Network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2031183903"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "MobileIron",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "545827989"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "MobileIron",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "967636089"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "MobileIron",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "362091310"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "MobileIron",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2086228042"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "CommuniGate",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1588746893"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ZTE (Network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1427976651"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "InfiNet Wireless | WANFleX (Network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1648531157"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Mersive Solstice",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "938616453"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Université Toulouse 1 Capitole",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1632780968"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Digium (Switchvox)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2068154487"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "PowerMTA monitoring",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1788112745"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "SmartLAN/G",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-644617577"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Checkpoint (Gaia)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1822098181"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "УТМ (Federal Service for Alcohol Market Regulation | Russia)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1131689409"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "MailWizz",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2127152956"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "RabbitMQ",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1064742722"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "openmediavault (NAS)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-693082538"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "openWRT Luci",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1941381095"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Honeywell",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "903086190"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "BOMGAR Support Portal",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "829321644"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Nuxt JS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1442789563"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "RoundCube Webmail",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2140379067"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "D-Link (camera)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1897829998"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Netgear (Network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1047213685"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "SonarQube",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1485257654"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Lupus Electronics XT",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-299324825"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Vanderbilt SPC",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1162730477"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "VZPP Plesk",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1268095485"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Baidu",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1118684072"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ownCloud",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1616115760"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Sentora",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2054889066"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Alfresco",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1333537166"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Digital Keystone (DK)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-373674173"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "WISPR (Airlan)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-106646451"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Synology VPN Plus",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1235070469"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Sentry",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2063428236"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "WatchGuard",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "15831193"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Web Client Pro",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-956471263"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Tecvoz",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1452159623"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "MDaemon Remote Administration",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "99432374"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Paradox IP Module",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "727253975"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "DokuWiki",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-630493013"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Sails",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "552597979"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "FastPanel Hosting",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "774252049"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "C-Lodop",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-329747115"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Jamf Pro Login",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1262005940"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "StruxureWare (Schneider Electric)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "979634648"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Axcient Replibit Management Server",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "475379699"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Twonky Server (Media Streaming)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-878891718"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Windows Azure",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2125083197"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ISP Manager (Web Hosting Panel)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1151675028"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "JupyterHub",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1248917303"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "CenturyLink Modem GUI Login (eg: Technicolor)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1908556829"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Tecvoz",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1059329877"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "OPNsense",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1148190371"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Ligowave (network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1467395679"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Rumpus",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1528414776"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Spiceworks (panel)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2117390767"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "TeamCity",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1944119648"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "INSTAR Full-HD IP-Camera",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1748763891"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "GPON Home Gateway",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "251106693"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Alienvault",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1779611449"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Arbor Networks",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1745552996"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Accrisoft",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1275148624"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Yasni",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-178685903"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Slack",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-43161126"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "innovaphone",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "671221099"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Shinobi (CCTV)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-10974981"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "TP-LINK (Network Device)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1274078387"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Siemens OZW772",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-336242473"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Lantronix (Spider)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "882208493"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ClaimTime (Ramsell Public Health & Safety)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-687783882"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Surfilter SSL VPN Portal",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-590892202"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Kyocera (Printer)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-50306417"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Lucee!",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "784872924"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Ricoh",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1135165421"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Handle Proxy",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "926501571"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Metasploit",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "579239725"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "iomega NAS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-689902428"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "iomega NAS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-600508822"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "iomega NAS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "656868270"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "iomega NAS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2056503929"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "iomega NAS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1656695885"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "iomega NAS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "331870709"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "iomega NAS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1241049726"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "iomega NAS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "998138196"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "iomega NAS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "322531336"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "iomega NAS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-401934945"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "iomega NAS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-613216179"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Chef Automate",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-276759139"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Gargoyle Router Management Utility",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1862132268"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "KeepItSafe Management Console",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1738727418"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Entronix Energy Management Platform",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-368490461"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "OpenProject",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1836828108"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Unified Management Console (Polycom)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1775553655"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Moxapass ioLogik Remote Ethernet I/O Server",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "381100274"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "HFS (HTTP File Server)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2124459909"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "HFS (HTTP File Server)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "731374291"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Traccar GPS tracking",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-335153896"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "IW",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "896412703"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Wordpress Under Construction Icon",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "191654058"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Combivox",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-342262483"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "NetComWireless (Network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "5542029"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Elastic (Database)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1552860581"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Drupal",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1747282642"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "truVision (NVR)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1093172228"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "SpamExperts",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1688698891"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Sonatype Nexus Repository Manager",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1546574541"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "iDirect Canada (Network Management)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-256828986"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "OpenERP (now known as Odoo)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1966198264"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "PKP (OpenJournalSystems) Public Knowledge Project",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "2099342476"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "LiquidFiles",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "541087742"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ZyXEL (Network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-882760066"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Universal Devices (UD)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "16202868"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Huawei (Network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "987967490"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Gitea",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1969970750"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "TC-Group",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1734573358"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Deluge Web UI",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1589842876"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "登录 – AMH",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1822002133"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "OTRS (Open Ticket Request System)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2006308185"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Bosch Security Systems (Camera)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1702769256"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Node-RED",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "321591353"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "motionEye (camera)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-923693877"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Saia Burgess Controls – PCD",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1547576879"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Arcadyan o2 box (Network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1479202414"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "D-Link (Network)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1081719753"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Abilis (Network/Automation)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-166151761"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Ghost (CMS)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1231681737"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Airwatch",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "321909464"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Airwatch",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1153873472"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Airwatch",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1095915848"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Airwatch",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "788771792"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Airwatch",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1863663974"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "KeyHelp (Keyweb AG)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1267819858"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "KeyHelp (Keyweb AG)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "726817668"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "GLPI",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1474875778"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Netcom Technology",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "5471989"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "CradlePoint",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1457536113"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "MyASP",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-736276076"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Intelbras SA",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1343070146"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Lenel",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "538585915"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "OkoFEN Pellematic",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-625364318"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "SimpleHelp (Remote Support)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1117165781"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "GraphQL",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1067420240"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "DNN (CMS)",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1465479343"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Apple",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1232159009"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Apple",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1382324298"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Apple",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1498185948"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ISPConfig",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "483383992"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Microsoft Outlook",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1249852061"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Hikvision IP Camera",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "999357577"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "IP Camera",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "492290497"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "AfterLogicWebMail系统",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-194791768"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "B2Bbuilder",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "492941040"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "深信服下一代防火墙管理系统",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "123821839"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "深信服WEB防篡改管理系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "WEB防篡改",
+    "cgi-bin/tamper_admin.cgi"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "YApi 可视化接口管理平台",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "YApi",
+    "id=\"yapi\"",
+    "prd",
+    "可视化接口管理平台"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "JumpServer 堡垒机",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1162630024"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "JumpServer 堡垒机",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "static/css/jumpserver.css"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "WeiPHP",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "weiphp.css",
+    "weiphp",
+    "Public/static"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Nagios XI",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "Nagios XI",
+    "nagiosxi",
+    "Nagios"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "ShowDoc",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1969934080"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "群晖 NAS",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "DiskStation",
+    "webman/modules",
+    "NAS"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "协达OA",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1850889691"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "山石网科 防火墙",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "Hillstone",
+    "licenseAggrement",
+    "GLOBAL_CONFIG.js"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "360天堤新一代智慧防火墙",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "360天堤",
+    "360",
+    "360防火墙"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "360网神防火墙系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "resources/image/logo_header.png",
+    "360",
+    "网神防火墙系统"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "网神SecGate 3600防火墙",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "网神SecGate",
+    "3600防火墙",
+    "css/lsec/login.css"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "蓝盾防火墙",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "蓝盾",
+    "Bluedon",
+    "default/js/act/login.js"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "LanProxy",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "LanProxy",
+    "password",
+    "lanproxy-config"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "ManageEngine ADManager Plus",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "ADManager",
+    "Hashtable.js",
+    "ManageEngine"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "SeaweedFS",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1210969935"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "FreeRDP 远程RDP工具",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2052468252"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Apache ActiveMQ",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1766699363"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "孚盟云 CRM",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1533124028"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "中新金盾信息安全管理系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "中新金盾信息安全管理系统",
+    "login",
+    "useusbkey"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "apache Solr",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "SolrCore Initialization Failures",
+    "Solr Admin"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "启莱OA",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "js/jQselect.js",
+    "CreateCheckCode.aspx?id"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "新点OA",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "href=\"新点助手工具包.exe\""
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "协众OA",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "Powered by 协众OA"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "协众OA",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "CNOAOASESSID"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "金蝶OA",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "EAS系统登录",
+    "金蝶国际软件集团有限公司"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "ACTI 视频监控",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/cgi-bin/system?SYSTEM_INFO",
+    "/cgi-bin/system?"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "ACTI 视频监控",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "Web Configurator",
+    "images/header_logo.jpg"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "狮子鱼CMS",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/seller.php?s=/Public/login"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "亿赛通 电子文档安全管理系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<title>电子文档安全管理系统</title>"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "ShopXO",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "Powered by <a href=\"http://shopxo.net/\" title=\"ShopXO电商系统\" target=\"_blank\">"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "佑友防火墙",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<title>佑友防火墙</title>"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "电信网关配置管理系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "src=\"img/dl.gif\"",
+    "<TITLE>系统登录</TITLE>"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "电信天翼网关F460",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<title>F460</title>"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "蜂网互联-互联企业级路由器",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "企业级流控云路由器",
+    "href=\"http://www.ifw8.cn\""
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "金山 V8 终端安全系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "iepngfix/iepngfix_tilebg.js"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "XXL-JOB",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "static/js/login.1.js",
+    "任务调度中心"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "FastAdmin 框架",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "assets/img/favicon.ico",
+    "bootstrap.min.css",
+    "navbar-toggle"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "FastAdmin 框架",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "ajax\\/upload",
+    "assets/img/favicon.ico",
+    "fastadmin"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "imo云办公室",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<a title=\"imo云办公室\""
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "imo云办公室",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "高效率网上办公平台",
+    "imo_setup.exe"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "永中DCS",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<title>永中文档在线预览DCS</title>",
+    "www.yozodcs.com"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "JeecgBoot",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "JeecgBoot",
+    "polyfill_"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "金山TimeOn云杀毒",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<title>TimeOn",
+    "iepngfix/iepngfix_tilebg.js"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "金山终端安全",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "终端安全系统",
+    "setup/kanclient.exe",
+    "iepngfix/iepngfix_tilebg.js"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "LANMP 默认页面",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<title>LANMP",
+    "<strong>恭喜",
+    "wdlinux.cn",
+    "本页可删除"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "帆软数据决策系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    ">数据决策系统",
+    "ReportServer?op"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Nacos",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<title>Nacos</title>"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "中腾OA",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "systemAction",
+    "zt_webframe",
+    "login"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "资产灯塔系统",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1708240621"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "致远 Analytics Cloud 分析云",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "410106848"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "景云网络防病毒系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "styles/images/logo.png",
+    "login_form",
+    "防病毒"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "GitBook",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "content=\"GitBook",
+    "gitbook"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "奥联通讯管理平台",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1356973161"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "百傲瑞达",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1169502834"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "明源云ERP",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-626335361"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Solar 网络管理系统",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-1871496583"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "e-cology 运维管理平台",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-384583337"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Igenus邮件系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "iGENUS",
+    "login.php",
+    "language"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "网神下一代极速防火墙",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "网神信息技术",
+    "login",
+    "防火墙"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "phpinfo",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<title>phpinfo",
+    "Virtual Directory Support"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "亿邮邮件系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "eYou",
+    "q=login",
+    "tpl/user"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "华天动力OA",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "OAapp/WebObjects/OAapp.woa",
+    "window.location"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "JEECMS",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/r/cms/www",
+    "shortcut icon"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Apache Hadoop",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "static/hadoop-st.png",
+    "Cluster"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "TamronOS IPTV系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "TamronOS",
+    "loginbox",
+    "tamronos.com"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "锐捷 RG-EW1200G",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "锐捷",
+    "/static/img/title.ico",
+    "/js/app"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "WordPress",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "wp-admin",
+    "wp-content/"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "WordPress",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "wp-",
+    "wp-content/themes/"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "微擎 - 公众平台自助引擎",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "微擎 - 公众平台自助引擎",
+    "www.w7.cc",
+    "login"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "网康科技网关/防火墙",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "5471989"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "ThinkPHP",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "ThinkPHP"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "SuperMap iServer Web Manager",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "1740191553"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "Jellyfin",
+   "method": "faviconhash",
+   "location": "body",
+   "keywords": [
+    "-2069226242"
+   ],
+   "category": "cms",
+   "confidence": 0.9
+  },
+  {
+   "name": "好视通视频会议系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "用户登录",
+    "resources/commonImage/favicon.ico",
+    "login/createQRCode.do"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "百度 ueditor编辑器",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "ueditor.all.js",
+    "UE.getEditor"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "图创图书馆集群管理系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "interlib/common/",
+    "self.location.href"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "H3C Web网管",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "webui",
+    "Web网管用户登录",
+    "china_logo.jpg"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "H3C ER6300G2",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "ER6300G2",
+    "h3c.com",
+    "login"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "H3C ER3100",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "ER3100",
+    "h3c.com",
+    "login"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "安恒云堡垒机",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "DBAPPSecurity",
+    "安恒云堡垒机"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Kyan 监控设备",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "login_files",
+    "platform",
+    "欢迎登陆系统"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Grafana",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "https://grafana.com",
+    "public/build/grafana"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "黑盾运维安全网关",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<title>黑盾运维安全网关 HD-SGS V4.0</title>"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "锐取工作流系统",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<title>深圳锐取工作流系统</title>"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "PMedia Platform OA",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "PMedia Platform",
+    "images/login/badgezh_cn.png"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "联达动力协同办公管理平台",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "/LKSys_WindowControlScript.js",
+    "LKSYS_PubMaxWin()"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "聚水潭SaaS协同平台",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "Hxj_Web_UI_Script_jquery_json-2_4_js"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "聚水潭SaaS协同平台",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "<title>聚水潭SaaS协同平台登录入口</title>"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "pbootCms",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "!-- 幻灯片 --",
+    "!--占位导航栏--"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "Ruoyi",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "ruoyi/css/ry-ui.css",
+    "ruoyi/js"
+   ],
+   "category": "cms",
+   "confidence": 0.8
+  },
+  {
+   "name": "cloudflare",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "cf-ray"
+   ],
+   "category": "waf",
+   "confidence": 0.95
+  },
+  {
+   "name": "cloudflare",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "server: cloudflare"
+   ],
+   "category": "waf",
+   "confidence": 0.9
+  },
+  {
+   "name": "cloudflare",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "__cf_bm"
+   ],
+   "category": "waf",
+   "confidence": 0.85
+  },
+  {
+   "name": "aws-waf",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "aws-waf-token"
+   ],
+   "category": "waf",
+   "confidence": 0.9
+  },
+  {
+   "name": "imperva-incapsula",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "incap_ses_"
+   ],
+   "category": "waf",
+   "confidence": 0.9
+  },
+  {
+   "name": "imperva-incapsula",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "x-iinfo"
+   ],
+   "category": "waf",
+   "confidence": 0.9
+  },
+  {
+   "name": "akamai",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "akamaighost"
+   ],
+   "category": "waf",
+   "confidence": 0.9
+  },
+  {
+   "name": "f5-bigip-asm",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "f5_fullwt"
+   ],
+   "category": "waf",
+   "confidence": 0.9
+  },
+  {
+   "name": "f5-bigip",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "bigipserver"
+   ],
+   "category": "waf",
+   "confidence": 0.85
+  },
+  {
+   "name": "modsecurity",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "mod_security"
+   ],
+   "category": "waf",
+   "confidence": 0.8
+  },
+  {
+   "name": "sucuri",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "x-sucuri-id"
+   ],
+   "category": "waf",
+   "confidence": 0.9
+  },
+  {
+   "name": "sucuri",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "sucuri"
+   ],
+   "category": "waf",
+   "confidence": 0.75
+  },
+  {
+   "name": "瑞数动态防护",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "fssbbil1ugzbn7n85t"
+   ],
+   "category": "waf",
+   "confidence": 0.9
+  },
+  {
+   "name": "阿里云盾",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "ali-swift-global-hits"
+   ],
+   "category": "waf",
+   "confidence": 0.9
+  },
+  {
+   "name": "阿里云盾",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "acw_tc"
+   ],
+   "category": "waf",
+   "confidence": 0.9
+  },
+  {
+   "name": "阿里云WAF",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "x-cache: ali"
+   ],
+   "category": "waf",
+   "confidence": 0.8
+  },
+  {
+   "name": "360网站卫士",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "x-powered-by-360wzb"
+   ],
+   "category": "waf",
+   "confidence": 0.9
+  },
+  {
+   "name": "360网站卫士",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "360wzb"
+   ],
+   "category": "waf",
+   "confidence": 0.85
+  },
+  {
+   "name": "百度云加速",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "yunjiasu-nginx"
+   ],
+   "category": "waf",
+   "confidence": 0.9
+  },
+  {
+   "name": "百度云加速",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "__yjs_duid"
+   ],
+   "category": "waf",
+   "confidence": 0.85
+  },
+  {
+   "name": "腾讯云WAF",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "tgw_l7_forward"
+   ],
+   "category": "waf",
+   "confidence": 0.9
+  },
+  {
+   "name": "知道创宇云防护",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "yunjiasu"
+   ],
+   "category": "waf",
+   "confidence": 0.85
+  },
+  {
+   "name": "知道创宇云防护",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "knownsec"
+   ],
+   "category": "waf",
+   "confidence": 0.85
+  },
+  {
+   "name": "安全狗",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "safedog-flow-item"
+   ],
+   "category": "waf",
+   "confidence": 0.9
+  },
+  {
+   "name": "安全狗",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "安全狗"
+   ],
+   "category": "waf",
+   "confidence": 0.75
+  },
+  {
+   "name": "雷池SafeLine",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "safeline"
+   ],
+   "category": "waf",
+   "confidence": 0.85
+  },
+  {
+   "name": "雷池SafeLine",
+   "method": "keyword",
+   "location": "body",
+   "keywords": [
+    "雷池"
+   ],
+   "category": "waf",
+   "confidence": 0.75
+  },
+  {
+   "name": "宝塔WAF",
+   "method": "keyword",
+   "location": "header",
+   "keywords": [
+    "bt-panel"
+   ],
+   "category": "waf",
+   "confidence": 0.85
+  }
+ ]
+}

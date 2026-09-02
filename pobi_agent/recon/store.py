@@ -20,12 +20,14 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
+from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy import event
+from sqlalchemy.exc import IntegrityError
 
 from pobi_agent.logging import get_module_logger
 from pobi_agent.utils.functions import num_tokens_from_string
@@ -79,6 +81,29 @@ _PREVIEW_BYTES = 200
 # API 响应判定：content-type 命中 json/xml（含 +json/+xml 变体）。
 _API_CONTENT_TYPE_RE = re.compile(r"(?:json|xml)", re.IGNORECASE)
 
+# 端点分类辅助：静态资源后缀 / API 路径特征（build_pre_recon_json 端点综述使用）。
+_STATIC_ASSET_SUFFIXES = (
+    ".css", ".js", ".mjs", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+    ".ico", ".webp", ".woff", ".woff2", ".ttf", ".eot", ".map",
+    ".pdf", ".zip", ".gz", ".tar", ".mp4", ".webm", ".mp3",
+)
+_API_PATH_MARKERS = (
+    "/api/", "/rest/", "/graphql", "/v1/", "/v2/", "/openapi",
+    "/swagger", "/actuator", ".json", ".xml",
+)
+
+
+def _looks_like_static_asset(path: str) -> bool:
+    """按路径后缀粗判静态资源端点（供综述统计，非精确分类）。"""
+    p = path.lower()
+    return p.endswith(_STATIC_ASSET_SUFFIXES) or "/static/" in p or "/assets/" in p
+
+
+def _looks_like_api_path(path: str) -> bool:
+    """按路径特征粗判 API 端点（供综述统计，非精确分类）。"""
+    p = path.lower()
+    return any(m in p for m in _API_PATH_MARKERS)
+
 
 class ReconStoreError(Exception):
     """ReconStore 操作失败（非致命，调用方应忽略以不阻断 agent 主循环）。"""
@@ -112,6 +137,27 @@ class SeedResult:
 
     def __bool__(self) -> bool:
         return self.seeded_count > 0 or self.already_covered_count > 0
+
+
+def _status_rank(code: Optional[int]) -> int:
+    """状态码优劣秩：2xx > 3xx > 4xx > 5xx（用于端点派生时择优）。
+
+    返回越高表示状态越好，故 2xx→3, 3xx→2, 4xx→1, 5xx→0, None→-1。
+    """
+    if code is None:
+        return -1
+    return 5 - code // 100
+
+
+def _latest_session_id(db, task_id: str) -> Optional[int]:
+    """取该 task 最新 session id（派生端点写回时需要非空 session_id）。"""
+    sess = (
+        db.query(ReconSession)
+        .filter(ReconSession.task_id == task_id)
+        .order_by(ReconSession.id.desc())
+        .first()
+    )
+    return sess.id if sess else None
 
 
 class ReconStore:
@@ -190,8 +236,22 @@ class ReconStore:
 
     def _apply_pragmas(self) -> None:
         with self._engine.connect() as conn:
-            for pragma in _WAL_PRAGMAS:
-                conn.exec_driver_sql(pragma)
+            try:
+                for pragma in _WAL_PRAGMAS:
+                    conn.exec_driver_sql(pragma)
+            except Exception:  # noqa: BLE001
+                # 部分文件系统（如容器 overlayfs）不支持 WAL 模式：-wal/-shm 的
+                # mmap/原子 rename 失败 -> disk I/O error。回退到兼容性最佳的
+                # DELETE（rollback journal）模式，避免建连即失败导致 recon 本地库不可用。
+                for fallback in (
+                    "PRAGMA journal_mode=DELETE;",
+                    "PRAGMA synchronous=NORMAL;",
+                    "PRAGMA busy_timeout=5000;",
+                ):
+                    try:
+                        conn.exec_driver_sql(fallback)
+                    except Exception:  # noqa: BLE001
+                        pass
             conn.commit()
 
     def _create_tables(self) -> None:
@@ -663,6 +723,20 @@ class ReconStore:
         )
         for f in high_conf[:15]:
             l0_lines.append(f"- [{f.category}] {f.key}: {f.value}")
+        # 站点总览（由 recon_http_transactions 现算，不落物化表）
+        overview = self.build_site_overview(task_id)
+        if overview["host_count"] or overview["endpoint_count"]:
+            l0_lines.append(
+                f"- 站点总览: 主机 {overview['host_count']} | 端点观测 {overview['endpoint_count']} | "
+                f"需认证 {overview['auth_required_endpoint_count']} | 输入点 {overview['input_point_count']}"
+            )
+            if overview["status_histogram"]:
+                l0_lines.append(f"- 状态码分布: {overview['status_histogram']}")
+            if overview["top_technologies"]:
+                l0_lines.append(
+                    "- 技术栈 Top: "
+                    + ", ".join(f"{t}({c})" for t, c in overview["top_technologies"][:6])
+                )
         if endpoints:
             hosts = sorted({e.host for e in endpoints if e.host})
             if hosts:
@@ -843,7 +917,19 @@ class ReconStore:
             }
             for e in endpoints
         ]
-        # HTTP 事务（2026-09-02）：url 维度收敛，同一 url 只留最新（含分层存储 body）。
+        # HTTP 事务：按 (method, url) 折叠，同一命令内不出现重复冲突键
+        # （recon_http_transactions 为 append-only 流水，保留多次观测，故脏行可能
+        # 含同 (method, url) 多条；PG 唯一键 (target_id, tenant_id, method, url)
+        # 在同 INSERT 命令内遇重复即 CardinalityViolation）。折叠取 id 最大（最新）
+        # 一行代表，其余脏行一并标记已同步（防漏同步）。
+        _tx_fold: Dict[Tuple[str, str], Any] = {}
+        tx_synced_ids: List[int] = []
+        for x in tx_rows_raw:
+            tx_synced_ids.append(x.id)
+            fk = (x.method or "", x.url or "")
+            cur = _tx_fold.get(fk)
+            if cur is None or (x.id or 0) > (cur.id or 0):
+                _tx_fold[fk] = x
         tx_rows = [
             {
                 "target_id": tgt,
@@ -867,7 +953,7 @@ class ReconStore:
                 "body_compressed": x.body_compressed,
                 "source_tasks": [tk],
             }
-            for x in tx_rows_raw
+            for x in _tx_fold.values()
         ]
 
         async with async_session_factory() as pg:
@@ -939,30 +1025,45 @@ class ReconStore:
                 )
                 await pg.execute(stmt)
             if tx_rows:
-                stmt = pg_insert(ReconHttpTransactionAgg).values(tx_rows)
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=["target_id", "tenant_id", "method", "url"],
-                    set_={
-                        "host": stmt.excluded.host,
-                        "path_normalized": stmt.excluded.path_normalized,
-                        "status_code": stmt.excluded.status_code,
-                        "source": stmt.excluded.source,
-                        "response_title": stmt.excluded.response_title,
-                        "content_type": stmt.excluded.content_type,
-                        "response_size": stmt.excluded.response_size,
-                        "response_time_ms": stmt.excluded.response_time_ms,
-                        "tech_stack": stmt.excluded.tech_stack,
-                        "parameters": stmt.excluded.parameters,
-                        "auth_used": stmt.excluded.auth_used,
-                        "auth_required": stmt.excluded.auth_required,
-                        "storage_strategy": stmt.excluded.storage_strategy,
-                        "response_body": stmt.excluded.response_body,
-                        "body_compressed": stmt.excluded.body_compressed,
-                        "source_tasks": stmt.excluded.source_tasks,
-                        "last_seen": _utcnow(),
-                    },
-                )
-                await pg.execute(stmt)
+                def _build_tx_stmt(rows: List[Dict[str, Any]]):
+                    s = pg_insert(ReconHttpTransactionAgg).values(rows)
+                    return s.on_conflict_do_update(
+                        index_elements=["target_id", "tenant_id", "method", "url"],
+                        set_={
+                            "host": s.excluded.host,
+                            "path_normalized": s.excluded.path_normalized,
+                            "status_code": s.excluded.status_code,
+                            "source": s.excluded.source,
+                            "response_title": s.excluded.response_title,
+                            "content_type": s.excluded.content_type,
+                            "response_size": s.excluded.response_size,
+                            "response_time_ms": s.excluded.response_time_ms,
+                            "tech_stack": s.excluded.tech_stack,
+                            "parameters": s.excluded.parameters,
+                            "auth_used": s.excluded.auth_used,
+                            "auth_required": s.excluded.auth_required,
+                            "storage_strategy": s.excluded.storage_strategy,
+                            "response_body": s.excluded.response_body,
+                            "body_compressed": s.excluded.body_compressed,
+                            "source_tasks": s.excluded.source_tasks,
+                            "last_seen": _utcnow(),
+                        },
+                    )
+
+                try:
+                    await pg.execute(_build_tx_stmt(tx_rows))
+                except IntegrityError as ie:
+                    _orig = getattr(ie, "orig", ie)
+                    if "CardinalityViolation" in type(_orig).__name__ or "cannot affect row a second time" in str(ie):
+                        # 脏行含重复冲突键（本不应发生：fold 已按 (method,url) 去重；
+                        # 此处兜底防御，避免批量 INSERT 同命令重复导致整体失败丢数据）。
+                        logger.warning(
+                            "[RECON-PG] tx 批量 upsert 遇重复冲突键,降级逐条 upsert (task=%s)", tk
+                        )
+                        for row in tx_rows:
+                            await pg.execute(_build_tx_stmt([row]))
+                    else:
+                        raise
             await pg.commit()
 
         # 增量打标：仅 PG 提交成功后，将本次成功同步的行标记为已同步（下次跳过）。
@@ -1001,7 +1102,7 @@ class ReconStore:
                         update(ReconHttpTransaction)
                         .where(
                             ReconHttpTransaction.task_id == tk,
-                            ReconHttpTransaction.id.in_([x.id for x in tx_rows_raw]),
+                            ReconHttpTransaction.id.in_(tx_synced_ids),
                         )
                         .values(pg_synced_at=now)
                     )
@@ -1676,6 +1777,367 @@ class ReconStore:
         """将用户关键词转义为 FTS5 安全短语查询（双引号包裹，转义内部引号）。"""
         escaped = keyword.replace('"', '""')
         return f'"{escaped}"'
+
+    # ------------------------------------------------------------------
+    # 端点派生 / 站点总览 / 基线块（recon_http_transactions 为单一真源）
+    # ------------------------------------------------------------------
+
+    async def derive_endpoints_from_transactions(
+        self, task_id: str, session_id: Optional[int] = None, db=None
+    ) -> List[Dict[str, Any]]:
+        """从 recon_http_transactions 按 (host, path_normalized) 派生端点树。
+
+        设计：recon_http_transactions 为单一真源（append-only 流水，保留多次观测，
+        如 katana 匿名 403 vs requester 带 cookie 200 的认证差异）。端点树不再由
+        sitemap/requester 双写，统一在此由 tx 派生并写回 recon_endpoints，消除双写
+        不一致，并使 PG 同步端点的唯一键天然收敛。
+
+        派生规则（与本地 recon_endpoints 幂等键 (task_id, path_normalized) 对齐，
+        方法视为路径维度下的属性而非独立标识）：
+        - GROUP BY (host, path_normalized)
+        - status_code：2xx > 3xx > 4xx > 5xx，同档取最新观测
+        - method：取最新观测（多方法在 notes 标注）
+        - detected_params / tech_stack：取并集
+        - auth_required：任一观测为真即标记
+        - discovered_via：取首次来源
+        - request_count：记该路径总观测数
+        - is_endpoint：默认 True（供 L1/L2 消费）
+        """
+        target_db = db or self._session_factory()
+        owns = db is None
+        try:
+            rows = (
+                target_db.query(ReconHttpTransaction)
+                .filter(ReconHttpTransaction.task_id == task_id)
+                .all()
+            )
+            groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
+            for tx in rows:
+                key = (tx.host or "", tx.path_normalized or "")
+                g = groups.get(key)
+                if g is None:
+                    g = {
+                        "host": tx.host,
+                        "path_normalized": tx.path_normalized,
+                        "method": tx.method,
+                        "url": tx.url,
+                        "status_code": tx.status_code,
+                        "discovered_via": tx.source,
+                        "tech_stack": set(),
+                        "parameters": set(),
+                        "auth_required": bool(tx.auth_required),
+                        "request_count": 0,
+                        "first_seen": tx.created_at,
+                        "last_seen": tx.created_at,
+                        "observed_statuses": set(),
+                        "observed_status_sources": {},
+                        "observed_methods": set(),
+                    }
+                    groups[key] = g
+                g["request_count"] += 1
+                g["observed_methods"].add(tx.method or "")
+                cur = g["status_code"]
+                new = tx.status_code
+                if new is None:
+                    pass
+                elif cur is None or _status_rank(new) > _status_rank(cur):
+                    g["status_code"] = new
+                g["observed_statuses"].add(str(tx.status_code))
+                g["observed_status_sources"].setdefault(str(tx.status_code), tx.source)
+                if tx.tech_stack:
+                    g["tech_stack"].update(tx.tech_stack)
+                if tx.detected_params:
+                    g["parameters"].update(tx.detected_params)
+                if tx.auth_required:
+                    g["auth_required"] = True
+                if tx.method:
+                    g["method"] = tx.method
+                if tx.created_at and (g["first_seen"] is None or tx.created_at < g["first_seen"]):
+                    g["first_seen"] = tx.created_at
+                if tx.created_at and (g["last_seen"] is None or tx.created_at > g["last_seen"]):
+                    g["last_seen"] = tx.created_at
+
+            for key, g in groups.items():
+                tech_stack = sorted(g["tech_stack"])
+                parameters = sorted(g["parameters"])
+                extras = []
+                if len(g["observed_statuses"]) > 1:
+                    extras.append("多观测状态码: " + ", ".join(sorted(g["observed_statuses"])))
+                if len(g["observed_methods"]) > 1:
+                    extras.append("方法: " + ",".join(sorted(m for m in g["observed_methods"] if m)))
+                notes = "; ".join(extras)
+                existing = (
+                    target_db.query(ReconEndpoint)
+                    .filter(
+                        ReconEndpoint.task_id == task_id,
+                        ReconEndpoint.path_normalized == g["path_normalized"],
+                    )
+                    .first()
+                )
+                if existing:
+                    existing.method = g["method"]
+                    existing.host = g["host"]
+                    existing.url = g["url"]
+                    existing.status_code = g["status_code"]
+                    existing.discovered_via = g["discovered_via"]
+                    existing.tech_stack = tech_stack
+                    existing.parameters = parameters
+                    existing.auth_required = g["auth_required"]
+                    existing.notes = notes
+                else:
+                    target_db.add(
+                        ReconEndpoint(
+                            task_id=task_id,
+                            session_id=session_id if session_id is not None else _latest_session_id(target_db, task_id),
+                            host=g["host"],
+                            path_normalized=g["path_normalized"],
+                            method=g["method"],
+                            status_code=g["status_code"],
+                            discovered_via=g["discovered_via"],
+                            tech_stack=tech_stack,
+                            parameters=parameters,
+                            auth_required=g["auth_required"],
+                            notes=notes,
+                        )
+                    )
+            target_db.commit()
+            return list(groups.values())
+        finally:
+            if owns:
+                target_db.close()
+
+    def build_site_overview(self, task_id: str) -> Dict[str, Any]:
+        """从 recon_http_transactions 现算站点总览统计（不落物化表）。
+
+        由 supervisor 启动基线块与 build_index_view 的 L0/L1 消费。
+        """
+        with self._session_factory() as session:
+            rows = (
+                session.query(ReconHttpTransaction)
+                .filter(ReconHttpTransaction.task_id == task_id)
+                .all()
+            )
+            hosts: set = set()
+            status_hist: Dict[int, int] = {}
+            auth_endpoints: set = set()
+            param_counter: Counter = Counter()
+            tech_counter: Counter = Counter()
+            form_endpoints: set = set()
+            first_seen = last_seen = None
+            for tx in rows:
+                if tx.host:
+                    hosts.add(tx.host)
+                if tx.status_code is not None:
+                    status_hist[tx.status_code] = status_hist.get(tx.status_code, 0) + 1
+                if tx.auth_required:
+                    auth_endpoints.add((tx.host, tx.path_normalized, tx.method))
+                for p in (tx.detected_params or []):
+                    param_counter[p] += 1
+                for t in (tx.tech_stack or []):
+                    tech_counter[t] += 1
+                if tx.detected_params:
+                    form_endpoints.add((tx.host, tx.path_normalized, tx.method))
+                if tx.created_at:
+                    if first_seen is None or tx.created_at < first_seen:
+                        first_seen = tx.created_at
+                    if last_seen is None or tx.created_at > last_seen:
+                        last_seen = tx.created_at
+        return {
+            "hosts": sorted(hosts),
+            "host_count": len(hosts),
+            "endpoint_count": len(rows),
+            "status_histogram": dict(sorted(status_hist.items())),
+            "auth_required_endpoint_count": len(auth_endpoints),
+            "top_parameters": param_counter.most_common(10),
+            "top_technologies": tech_counter.most_common(10),
+            "input_point_count": len(form_endpoints),
+            "first_seen_at": first_seen,
+            "last_seen_at": last_seen,
+        }
+
+    def build_baseline_block(self, task_id: str, token_budget: int = 2000) -> str:
+        """组合指纹/站点总览/端点摘要为 supervisor 启动注入块（读时现算）。"""
+        overview = self.build_site_overview(task_id)
+        with self._session_factory() as session:
+            endpoints = (
+                session.query(ReconEndpoint)
+                .filter(ReconEndpoint.task_id == task_id)
+                .order_by(ReconEndpoint.auth_required.desc(), ReconEndpoint.path_normalized)
+                .all()
+            )
+            facts = (
+                session.query(ReconFact)
+                .filter(ReconFact.task_id == task_id)
+                .all()
+            )
+            techs = (
+                session.query(ReconTechnique)
+                .filter(ReconTechnique.task_id == task_id)
+                .all()
+            )
+        lines: List[str] = ["## 目标侦察基线（来自历史/前置侦查）"]
+        lines.append(
+            f"- 主机数: {overview['host_count']} | 端点观测数: {overview['endpoint_count']} | "
+            f"需认证端点: {overview['auth_required_endpoint_count']} | 输入点: {overview['input_point_count']}"
+        )
+        if overview["hosts"]:
+            lines.append(f"- 主机: {', '.join(overview['hosts'])}")
+        if overview["status_histogram"]:
+            lines.append(f"- 状态码分布: {overview['status_histogram']}")
+        if overview["top_technologies"]:
+            lines.append(
+                "- 技术栈 Top: "
+                + ", ".join(f"{t}({c})" for t, c in overview["top_technologies"][:8])
+            )
+        if overview["top_parameters"]:
+            lines.append(
+                "- 参数名 Top: "
+                + ", ".join(f"{p}({c})" for p, c in overview["top_parameters"][:10])
+            )
+        if facts:
+            lines.append("- 已知事实:")
+            for f in facts[:12]:
+                lines.append(f"  - [{f.category}] {f.key}: {f.value}")
+        if techs:
+            lines.append("- 已尝试手法:")
+            for t in techs[:12]:
+                lines.append(f"  - {t.name} ({t.status})")
+        if endpoints:
+            lines.append("- 关键端点（需认证优先）:")
+            for ep in endpoints[:20]:
+                flag = " [需认证]" if ep.auth_required else ""
+                tech = f" tech={','.join(ep.tech_stack[:3])}" if ep.tech_stack else ""
+                lines.append(
+                    f"  - {ep.method} {ep.path_normalized} -> {ep.status_code}{flag}{tech}"
+                )
+        else:
+            lines.append("- 暂无端点（历史目标，新任务将从零侦察）")
+        return self._fit_budget("\n".join(lines), token_budget)
+
+    def build_pre_recon_json(self, task_id: str) -> Dict[str, Any]:
+        """将前置侦查产物组装为结构化 JSON（指纹/WAF/端点综述），供 supervisor 启动注入。
+
+        与 build_baseline_block（自然语言文本块）互补：本方法产出机器可读 JSON，
+        全部字段来自 recon 本地库（只读现算），无 LLM 参与、无凭空推断。
+        失败时返回空结构，不阻断主流程。
+        """
+        result: Dict[str, Any] = {"pre_recon": {}}
+        try:
+            # ---- 1) 目标基础 + 指纹 + WAF（recon_fingerprints 幂等键 task_id+target_url）----
+            target: Dict[str, Any] = {}
+            fingerprint: Dict[str, Any] = {}
+            waf: Dict[str, Any] = {"detected": False, "names": []}
+            with self._session_factory() as session:
+                row = session.execute(
+                    select(ReconFingerprint)
+                    .where(ReconFingerprint.task_id == task_id)
+                    .order_by(ReconFingerprint.updated_at.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                if row is not None:
+                    target = {
+                        "url": row.target_url,
+                        "host": row.host,
+                        "status_code": row.status_code,
+                    }
+                    fp = row.fingerprint_json or {}
+                    fingerprint = {
+                        "server": fp.get("server") or [],
+                        "backend": fp.get("backend") or [],
+                        "frontend": fp.get("frontend") or [],
+                        "cms": fp.get("cms") or [],
+                        "favicon_hash": row.favicon_hash,
+                        "matched_rules": row.matched_count,
+                        "total_rules": row.rule_count,
+                    }
+                    waf_list = fp.get("waf") or []
+                    if isinstance(waf_list, list) and waf_list:
+                        waf = {
+                            "detected": True,
+                            "names": [
+                                w.get("name")
+                                for w in waf_list
+                                if isinstance(w, dict) and w.get("name")
+                            ],
+                        }
+
+            # ---- 2) 站点端点综述（recon_endpoints + recon_http_transactions）----
+            site_overview = self._build_site_overview_json(task_id)
+
+            result["pre_recon"] = {
+                "target": target,
+                "fingerprint": fingerprint,
+                "waf": waf,
+                "site_overview": site_overview,
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RECON 组装 pre_recon JSON 失败（返回空结构）: %s", exc)
+        return result
+
+    def _build_site_overview_json(self, task_id: str) -> Dict[str, Any]:
+        """从 recon_endpoints / recon_http_transactions 现算端点综述（build_pre_recon_json 辅助）。"""
+        overview: Dict[str, Any] = {}
+        try:
+            with self._session_factory() as session:
+                endpoints = (
+                    session.query(ReconEndpoint)
+                    .filter(ReconEndpoint.task_id == task_id)
+                    .all()
+                )
+                txs = (
+                    session.query(ReconHttpTransaction)
+                    .filter(ReconHttpTransaction.task_id == task_id)
+                    .all()
+                )
+            methods: Dict[str, int] = {}
+            status_dist: Dict[int, int] = {}
+            total = len(endpoints)
+            with_params = 0
+            auth_required = 0
+            static_assets = 0
+            api_eps = 0
+            for ep in endpoints:
+                methods[ep.method] = methods.get(ep.method, 0) + 1
+                if ep.status_code is not None:
+                    status_dist[ep.status_code] = status_dist.get(ep.status_code, 0) + 1
+                if ep.parameters:
+                    with_params += 1
+                if ep.auth_required:
+                    auth_required += 1
+                path = (ep.path_normalized or "").lower()
+                if _looks_like_static_asset(path):
+                    static_assets += 1
+                if _looks_like_api_path(path):
+                    api_eps += 1
+
+            param_counter: Counter = Counter()
+            hosts: set = set()
+            for tx in txs:
+                if tx.host:
+                    hosts.add(tx.host)
+                for p in (tx.detected_params or []):
+                    param_counter[p] += 1
+
+            overview = {
+                "total_endpoints": total,
+                "api_endpoints": api_eps,
+                "endpoints_with_parameters": with_params,
+                "endpoints_without_parameters": total - with_params,
+                "auth_required_endpoints": auth_required,
+                "static_asset_endpoints": static_assets,
+                "application_endpoints": total - static_assets,
+                "total_http_transactions": len(txs),
+                "host_count": len(hosts),
+                "methods": dict(sorted(methods.items())),
+                "status_code_distribution": dict(sorted(status_dist.items())),
+                "top_parameters": [
+                    {"name": name, "count": cnt}
+                    for name, cnt in param_counter.most_common(10)
+                ],
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RECON 组装站点综述失败（返回空）: %s", exc)
+        return overview
 
     # ------------------------------------------------------------------
     # 内部辅助

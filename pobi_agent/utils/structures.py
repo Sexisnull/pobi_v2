@@ -189,6 +189,7 @@ class MemoryWorkspaceDeps:
     memory_workspace_root: str | None = None
     memory_context: str = ""
 
+
 @dataclass
 class RagDeps:
     """

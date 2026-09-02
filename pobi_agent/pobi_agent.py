@@ -84,6 +84,13 @@ class DeadEndAgent:
     local_agent_id: UUID
     stop_result: WorkflowStopResult | None = None
 
+    # ---- 共享提示词片段：消除各 workflow 方法中的重复硬编码段 ----
+    _RECON_REPORT_IMPORTANT = """IMPORTANT:
+- Preserve EXACT working payloads character-for-character
+- Include full HTTP requests that succeeded
+- Include response snippets proving vulnerabilities
+- Document filter bypass techniques with exact encoding used
+- Note validation status (reflected vs executed, needs browser test)"""
 
     def __init__(
         self,
@@ -663,34 +670,7 @@ IMPORTANT:
             yield self.stop_result.reporter_output
             return
 
-        prompt_task = f"""
-Prepare the necessary information (reconnaissance) to achieve the following task: {task}
-
-Focus on gathering ONLY the information needed for this specific task. Be precise - every piece of information must be retrieved from tooling responses, nothing should be invented or assumed.
-
-What to discover:
-- Endpoints relevant to the task and how to use them
-- What data/parameters each endpoint needs
-- Authentication requirements (which endpoints need auth, which don't)
-- Session management and authentication mechanisms
-- Any suspicious or interesting behavior related to the task
-
-Critical rules:
-- Do NOT use nmap or similar scanning on localhost (127.0.0.1)
-- Make requests to the target and analyze responses
-- Follow forms, links, and endpoints to discover relevant information
-- Extract endpoints, authentication info, and secrets from actual tool responses
-- Do NOT invent or guess endpoints - only use what is discovered
-- Return when you have gathered sufficient information to proceed with the task
-
-AUTHENTICATION IS PART OF RECON (mandatory when the target requires login):
-- If any endpoint requires authentication, you MUST establish the session during this phase.
-- Call the `authenticate` tool to log in (e.g. DVWA-style: `auth_flow="form"`, `auth_type="session_cookie"`),
-  and persist the result as an AuthContext profile (e.g. `profile="target_session"`).
-- The returned `auth_profile` name MUST be recorded in your recon output so that all later
-  detection and exploitation steps reuse the same authenticated session via `auth_profile="<profile>"`.
-- Do NOT proceed to later phases with only an anonymous session when the task endpoint needs auth.
-"""
+        prompt_task = self._build_recon_prompt(task)
         task_root = TaskNode(
             task=prompt_task,
             depth=0,
@@ -731,36 +711,77 @@ AUTHENTICATION IS PART OF RECON (mandatory when the target requires login):
         task_root.confidence_score = confidence_score
         task_root.status = "completed"
 
-        reporter_agent = ReporterAgent(
-            model=self.model,
-            validation_format="Information",
-            validation_type="security assessment",
-        )
-        # context_text = await self.context.get_all_context()
-        prompt_assessment = f"""\
-Summarize the security assessment results from the reconnaissance phase.
-Write the report to `reports/recon_report.md` using the write_workspace_file tool.
+        threat_model_data = await self._run_reporter(self._build_report_prompt(
+            context,
+            "Summarize the security assessment results from the reconnaissance phase.\n"
+            "Write the report to `reports/recon_report.md` using the write_workspace_file tool.",
+        ))
 
-IMPORTANT:
-- Preserve EXACT working payloads character-for-character
-- Include full HTTP requests that succeeded
-- Include response snippets proving vulnerabilities
-- Document filter bypass techniques with exact encoding used
-- Note validation status (reflected vs executed, needs browser test)
+        yield threat_model_data
+
+    # ------------------------------------------------------------------ #
+    # 共享提示词构造：消除各 workflow 方法中的重复硬编码 prompt 段
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _build_recon_prompt(task: str) -> str:
+        return f"""
+Prepare the necessary information (reconnaissance) to achieve the following task: {task}
+
+Focus on gathering ONLY the information needed for this specific task. Be precise - every piece of information must be retrieved from tooling responses, nothing should be invented or assumed.
+
+What to discover:
+- Endpoints relevant to the task and how to use them
+- What data/parameters each endpoint needs
+- Authentication requirements (which endpoints need auth, which don't)
+- Session management and authentication mechanisms
+- Any suspicious or interesting behavior related to the task
+
+Critical rules:
+- Do NOT use nmap or similar scanning on localhost (127.0.0.1)
+- Make requests to the target and analyze responses
+- Follow forms, links, and endpoints to discover relevant information
+- Extract endpoints, authentication info, and secrets from actual tool responses
+- Do NOT invent or guess endpoints - only use what is discovered
+- Return when you have gathered sufficient information to proceed with the task
+
+AUTHENTICATION IS PART OF RECON (mandatory when the target requires login):
+- If any endpoint requires authentication, you MUST establish the session during this phase.
+- Call the `authenticate` tool to log in (e.g. DVWA-style: `auth_flow="form"`, `auth_type="session_cookie"`),
+  and persist the result as an AuthContext profile (e.g. `profile="target_session"`).
+- The returned `auth_profile` name MUST be recorded in your recon output so that all later
+  detection and exploitation steps reuse the same authenticated session via `auth_profile="<profile>"`.
+- Do NOT proceed to later phases with only an anonymous session when the task endpoint needs auth.
+"""
+
+    def _build_report_prompt(self, context: str, intro: str) -> str:
+        return f"""\
+{intro}
+
+{self._RECON_REPORT_IMPORTANT}
 
 ## Assessment Data
 {context}
 """
-        threat_model_data = await reporter_agent.run(
-            prompt=prompt_assessment,
+
+    async def _run_reporter(
+        self,
+        prompt: str,
+        validation_format: str = "Information",
+        validation_type: str = "security assessment",
+    ) -> Any:
+        reporter_agent = ReporterAgent(
+            model=self.model,
+            validation_format=validation_format,
+            validation_type=validation_type,
+        )
+        return await reporter_agent.run(
+            prompt=prompt,
             deps=ReporterDeps(session_id=str(self.session_id)),
             usage=RunUsage(),
             usage_limits=UsageLimits(),
             deferred_tool_results=None,
-            message_history=""
+            message_history="",
         )
-
-        yield threat_model_data
 
     async def run_exploitation(self, threat_model: str, task: str):
         """Runs the exploitation workflow"""
@@ -924,36 +945,13 @@ The threat model has been done :
             else:
                 yield str(event)
 
-        reporter_agent = ReporterAgent(
-            model=self.model,
-            validation_format="Information",
-            validation_type="security assessment",
-        )
-        # context_text = await self.context.get_all_context()
-        prompt_assessment = f"""\
-Summarize the security assessment results from the exploitation phase.
-Return all the vulnerabilities found, what have been tried, and what have not, and also what you suspect
-with the path to reproduce.
-Write the report to `reports/exploit_report.md` using the write_workspace_file tool.
-
-IMPORTANT:
-- Preserve EXACT working payloads character-for-character
-- Include full HTTP requests that succeeded
-- Include response snippets proving vulnerabilities
-- Document filter bypass techniques with exact encoding used
-- Note validation status (reflected vs executed, needs browser test)
-
-## Assessment Data
-{self.context.get_unified_context(max_tokens=100000)}
-"""
-        security_report = await reporter_agent.run(
-            prompt=prompt_assessment,
-            deps=ReporterDeps(session_id=str(self.session_id)),
-            usage=RunUsage(),
-            usage_limits=UsageLimits(),
-            deferred_tool_results=None,
-            message_history=""
-        )
+        security_report = await self._run_reporter(self._build_report_prompt(
+            self.context.get_unified_context(max_tokens=100000),
+            "Summarize the security assessment results from the exploitation phase.\n"
+            "Return all the vulnerabilities found, what have been tried, and what have not, and also what you suspect\n"
+            "with the path to reproduce.\n"
+            "Write the report to `reports/exploit_report.md` using the write_workspace_file tool.",
+        ))
 
         yield security_report
 
@@ -1139,33 +1137,10 @@ Your goal is to achieve the following task: {task}
 
         self._set_task_status(task_root, "completed", confidence_score, task_label=task)
 
-        reporter_agent = ReporterAgent(
-            model=self.model,
-            validation_format="Information",
-            validation_type="security assessment",
-        )
-        # context_text = await self.context.get_all_context()
-        prompt_assessment = f"""\
-Summarize the security assessment results from the reconnaissance phase.
-Write the report to `reports/recon_report.md` using the write_workspace_file tool.
-
-IMPORTANT:
-- Preserve EXACT working payloads character-for-character
-- Include full HTTP requests that succeeded
-- Include response snippets proving vulnerabilities
-- Document filter bypass techniques with exact encoding used
-- Note validation status (reflected vs executed, needs browser test)
-
-## Assessment Data
-{context}
-"""
-        threat_model_data = await reporter_agent.run(
-            prompt=prompt_assessment,
-            deps=ReporterDeps(session_id=str(self.session_id)),
-            usage=RunUsage(),
-            usage_limits=UsageLimits(),
-            deferred_tool_results=None,
-            message_history=""
-        )
+        threat_model_data = await self._run_reporter(self._build_report_prompt(
+            context,
+            "Summarize the security assessment results from the reconnaissance phase.\n"
+            "Write the report to `reports/recon_report.md` using the write_workspace_file tool.",
+        ))
 
         yield threat_model_data

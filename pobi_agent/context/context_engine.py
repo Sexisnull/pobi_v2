@@ -1621,29 +1621,31 @@ class ContextEngine:
         confidence: float = 0.7,
         session_id: int | None = None,
     ) -> None:
-        """旁路写入 recon_endpoints（结构化端点/资产表）。
+        """旁路写入 recon_http_transactions（端点发现即一笔观测流水）。
 
+        端点树统一由 ReconStore.derive_endpoints_from_transactions 在 tx 之上派生，
+        故运行期不再直写 recon_endpoints，避免与 sitemap/requester 双写不一致。
         由 executor 在 agent 运行期解析侦察产物后调用；recon_store 未注入时
         安全跳过，异常仅记 warning 不阻断主循环（语义对齐 _recon_bypass_*）。
         """
         if self.recon_store is None:
             return
         try:
-            self.recon_store.upsert_endpoint(
+            # 端点解析输出多为路径 + 认证面标记，缺 host/status；写一笔 tx 观测，
+            # 由派生入口按 (host, path_normalized, method) 归并。
+            self.recon_store.insert_http_transaction(
                 task_id=self._recon_task_id(),
-                path_normalized=path_normalized,
                 host=host,
+                path_normalized=path_normalized,
+                url=path_normalized,
                 method=method,
                 status_code=status_code,
-                auth_required=auth_required,
+                source=discovered_via or "endpoint_parser",
                 tech_stack=tech_stack,
-                parameters=parameters,
-                notes=notes,
-                discovered_via=discovered_via,
-                confidence=confidence,
+                detected_params=parameters,
+                auth_required=auth_required,
                 session_id=session_id,
             )
-            self._recon_emit_sync()
         except Exception as exc:  # noqa: BLE001 - 旁路写入失败不应影响推理
             logger.warning("RECON 旁路 endpoint 写入失败（已忽略）: %s", exc)
 

@@ -27,6 +27,7 @@ from .python_interpreter import run_python_file, read_auth_storage
 from .webapp_code_rag import webapp_code_rag
 from .webapp_analyzer import webapp_analyzer
 from .recon_lookup import recon_lookup
+from .fingerprint import webapp_fingerprint  # noqa: F401 - 兼容层保留（引擎封装）
 from .tool_wrappers import with_tool_events, wrap_tool_with_events
 from .avfs import (
     avfs_mount,

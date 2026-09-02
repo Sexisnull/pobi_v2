@@ -15,6 +15,7 @@ from pobi_agent.storage_context import get_task_root
 from pobi_agent.utils.network import slugify_target
 
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -183,16 +184,80 @@ class CredentialsStore:
     _wallet_path: Path = REUSABLE_CREDENTIALS_FILE
 
     @classmethod
-    def _load_wallet(cls, path_credentials: Path | None) -> dict[str, Any]:
-        if path_credentials is None:
-            user_credentials = cls._wallet_path
-        else:
-            user_credentials = path_credentials
+    def _wallet_paths(cls) -> list[Path]:
+        """按优先级返回候选钱包路径：任务目录优先，全局兜底。
+
+        任务运行时（storage_context 已注入 task_root）凭据随任务走，落在
+        ``tasks/<task_id>/reusable_credentials.json``，随任务生命周期存续、
+        任务结束后作废；无注入（CLI/单测/手动维护场景）回退全局
+        ``~/.pobi_v2/reusable_credentials.json``。
+        """
+        task_root = get_task_root()
+        paths: list[Path] = []
+        if task_root is not None:
+            paths.append(Path(task_root) / "reusable_credentials.json")
+        if cls._wallet_path not in paths:
+            paths.append(cls._wallet_path)
+        return paths
+
+    @classmethod
+    def _load_single_wallet(cls, wallet_path: Path) -> dict[str, Any]:
         try:
-            with open(user_credentials, "r", encoding="utf-8") as fh:
+            with open(wallet_path, "r", encoding="utf-8") as fh:
                 return json.load(fh)
         except (FileNotFoundError, json.JSONDecodeError):
             return {"targets": {}}
+
+    @classmethod
+    def _load_wallet(cls, path_credentials: Path | None) -> dict[str, Any]:
+        if path_credentials is not None:
+            return cls._load_single_wallet(path_credentials)
+        # 合并候选钱包：任务钱包优先（同名 target 不被全局覆盖）
+        merged: dict[str, Any] = {"targets": {}}
+        for p in cls._wallet_paths():
+            w = cls._load_single_wallet(p)
+            for tkey, tval in w.get("targets", {}).items():
+                merged["targets"].setdefault(tkey, tval)
+        return merged
+
+    @classmethod
+    def save_credentials(
+        cls,
+        target: str,
+        profile: str,
+        *,
+        username: str | None = None,
+        password: str | None = None,
+        login_url: str | None = None,
+        refresh_url: str | None = None,
+    ) -> Path:
+        """把凭据写入钱包（任务运行时写任务目录，否则写全局），返回写入路径。
+
+        凭据属于不可复用资产：任务运行时才有效、任务结束即作废。任务目录
+        钱包文件以 0600 权限落盘，仅当前用户可读。
+        """
+        task_root = get_task_root()
+        wallet_path = Path(task_root) / "reusable_credentials.json" if task_root is not None else cls._wallet_path
+        wallet = cls._load_single_wallet(wallet_path)
+        key = cls._normalise_target(target)
+        tblock = wallet.setdefault("targets", {}).setdefault(key, {})
+        tblock.setdefault("credentials", {})[profile] = {
+            "username": username,
+            "password": password,
+            "role": "preauth",
+        }
+        if login_url:
+            tblock["login_url"] = login_url
+        if refresh_url:
+            tblock["refresh_url"] = refresh_url
+        wallet_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(wallet_path, "w", encoding="utf-8") as fh:
+            json.dump(wallet, fh, indent=2, ensure_ascii=False)
+        try:
+            os.chmod(wallet_path, 0o600)
+        except OSError:  # pragma: no cover — 平台不支持 chmod 时静默
+            pass
+        return wallet_path
 
     @classmethod
     def _normalise_target(cls, target: str) -> str:

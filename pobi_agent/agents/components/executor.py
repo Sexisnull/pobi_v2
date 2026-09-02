@@ -909,6 +909,27 @@ class AgentExecutor:
 
             # Execute task with supervisor
             supervisor_prompt = f"Your task is : {task_node.task}\n"
+
+            # 前置侦查结构化结论（指纹/WAF/端点综述）：读时现算注入，supervisor 启动即掌握目标形态。
+            # 置于 prompt 最前（紧跟任务单），作为 L0 决策依据。
+            try:
+                if self.context.recon_store is not None:
+                    pre_recon = self.context.recon_store.build_pre_recon_json(
+                        task_id=self.context._recon_task_id(),
+                    )
+                    pre_recon_block = json.dumps(
+                        pre_recon, ensure_ascii=False, indent=2
+                    )
+                    if pre_recon_block:
+                        supervisor_prompt += (
+                            "## 前置侦查结构化结论（指纹/WAF/端点综述）:\n"
+                            "<pre_recon_json>\n"
+                            f"{pre_recon_block}\n"
+                            "</pre_recon_json>\n"
+                        )
+            except Exception as _pr_exc:  # noqa: BLE001
+                logger.debug("前置侦查 JSON 注入失败（忽略）: %s", _pr_exc)
+
             if supervisor_deps.memory_context:
                 supervisor_prompt += f"## Persistent Memory Context:\n{supervisor_deps.memory_context}\n"
             if agent_context:
@@ -921,6 +942,13 @@ class AgentExecutor:
             except Exception as _fp_exc:  # noqa: BLE001
                 logger.debug("足迹摘要注入失败（忽略）: %s", _fp_exc)
 
+            # 发送前日志：输出将发往远端 LLM 的完整 user 提示词（含 pre_recon JSON）。
+            # 便于排查"实际发给 LLM 的内容"。
+            logger.info(
+                "========== SUPERVISOR LLM PROMPT (pre-request) ==========\n%s\n=======================================================",
+                supervisor_prompt,
+            )
+
             result = await supervisor.run(
                 prompt=supervisor_prompt,
                 deps=supervisor_deps,
@@ -929,7 +957,6 @@ class AgentExecutor:
                 usage_limits=usage_limits,
                 deferred_tool_results=deferred_tool_results
             )
-
             # Extract SupervisorOutput fields
             supervisor_output = result.output
             context["supervisor_history"] = agent_context

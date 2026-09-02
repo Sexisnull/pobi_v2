@@ -1,6 +1,8 @@
 import json
 import hashlib
+import re
 from pathlib import Path
+from urllib.parse import urlparse
 from pydantic_ai import RunContext
 from pobi_agent.utils.structures import RequesterDeps
 from pobi_agent.utils.functions import truncate_string
@@ -30,6 +32,137 @@ def _extract_endpoint(raw_request: str) -> str:
     if len(parts) >= 2:
         return f"{parts[0]} {parts[1]}"
     return first[:80]
+
+
+# 认证重定向目标特征（302→login 判定 auth_required）。
+_LOGIN_LOCATION_RE = re.compile(r"/(?:login|signin|auth|sso)(?:[/?#]|$)", re.IGNORECASE)
+_HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+
+
+def _request_url(raw_request: str, is_tls: bool) -> str:
+    """从 raw HTTP 请求第一行 + Host header 组装完整 URL。"""
+    lines = (raw_request or "").split("\r\n")
+    first = lines[0] if lines else ""
+    parts = first.split()
+    target = parts[1] if len(parts) > 1 else "/"
+    host = ""
+    for line in lines[1:]:
+        if line.lower().startswith("host:"):
+            host = line.split(":", 1)[1].strip()
+            break
+    scheme = "https" if is_tls else "http"
+    if host:
+        return f"{scheme}://{host}{target}"
+    return target
+
+
+def _parse_response_text(raw: str) -> dict | None:
+    """从原始 HTTP 响应文本解析 status_code/headers/body；无法解析返回 None。
+
+    兼容 ``send_raw_data`` 的重定向拼接（``=== FOLLOWING REDIRECTS ===``），
+    取最终响应段；请求失败的错误文本（非 HTTP 响应）返回 None 跳过。
+    """
+    if not raw:
+        return None
+    if "=== FOLLOWING REDIRECTS ===" in raw:
+        raw = raw.rsplit("=== FOLLOWING REDIRECTS ===", 1)[-1]
+    raw = raw.lstrip("\r\n")
+    lines = raw.split("\r\n")
+    status_line = lines[0] if lines else ""
+    m = re.match(r"HTTP/\d(?:\.\d)?\s+(\d{3})", status_line)
+    if not m:
+        return None
+    status_code = int(m.group(1))
+    headers: dict[str, str] = {}
+    idx = 1
+    while idx < len(lines):
+        line = lines[idx]
+        if not line.strip():
+            break
+        if ":" in line:
+            k, _, v = line.partition(":")
+            headers[k.strip().lower()] = v.strip()
+        idx += 1
+    body = "\r\n".join(lines[idx + 1:]) if idx + 1 < len(lines) else ""
+    return {"status_code": status_code, "headers": headers, "body": body}
+
+
+def _persist_http_tx(
+    ctx: RunContext["RequesterDeps"],
+    raw_request_anon: str,
+    is_tls: bool,
+    auth_used: bool,
+    responses: list,
+) -> None:
+    """把 requester 每次请求结构化写入 recon_http_transactions（与 sitemap 对齐）。
+
+    解析 raw 请求/响应文本拆出 method/url/status_code/headers/body 等字段，
+    与 katana JSONL 字段同 schema 落库；recon_store 未注入时安全跳过，
+    异常仅记 debug 不阻断请求主流程。
+    """
+    context = getattr(ctx.deps, "context", None)
+    if context is None or not hasattr(context, "add_recon_http_transaction"):
+        return
+    try:
+        from pobi_agent.utils.urls import extract_params, normalize_path
+
+        req_url = _request_url(raw_request_anon, is_tls)
+        req_host = urlparse(req_url).netloc or ""
+        req_path = normalize_path(req_url)
+        # 请求侧信息（method / headers / body）
+        req_lines = (raw_request_anon or "").split("\r\n")
+        req_first = req_lines[0].split() if req_lines else []
+        req_method = req_first[0] if req_first else "GET"
+        req_headers: dict[str, str] = {}
+        for line in req_lines[1:]:
+            if ":" in line and not line.strip().startswith(("http", "/")):
+                k, _, v = line.partition(":")
+                req_headers[k.strip().lower()] = v.strip()
+        # 从 request 段末尾提取 body（Host 头之后的空行之后）
+        req_body = ""
+        for i, line in enumerate(req_lines[1:], start=1):
+            if not line.strip():
+                req_body = "\r\n".join(req_lines[i + 1:])
+                break
+
+        for response in responses:
+            text = (
+                response.decode("utf-8", errors="replace")
+                if isinstance(response, bytes)
+                else str(response)
+            )
+            parsed = _parse_response_text(text)
+            if parsed is None:
+                continue  # 非 HTTP 响应（连接错误等）不记事务
+            status = int(parsed["status_code"])
+            resp_headers = parsed["headers"]
+            auth_required = status in (401, 403, 407) or (
+                status in (301, 302, 303, 307, 308)
+                and bool(_LOGIN_LOCATION_RE.search(urlparse(resp_headers.get("location", "")).path or ""))
+            )
+            body = parsed["body"]
+            title_m = _HTML_TITLE_RE.search(body or "")
+            title = re.sub(r"\s+", " ", title_m.group(1)).strip()[:512] if title_m else ""
+            context.add_recon_http_transaction(
+                host=req_host,
+                path_normalized=req_path,
+                url=req_url,
+                method=req_method,
+                status_code=status,
+                source="agent:requester",
+                request_headers=req_headers,
+                request_body=req_body,
+                response_headers=resp_headers,
+                response_body=body,
+                response_title=title,
+                content_type=resp_headers.get("content-type", ""),
+                response_size=len(body or ""),
+                detected_params=extract_params(req_url),
+                auth_used=auth_used,
+                auth_required=auth_required,
+            )
+    except Exception as exc:  # noqa: BLE001 - 事务结构化写入失败不阻断请求
+        logger.debug("HTTP 事务结构化写入失败（忽略）: %s", exc)
 
 
 def _record_payload_footprint(
@@ -233,6 +366,15 @@ async def pw_send_payload(
             agent_id=str(ctx.deps.agent_id), 
             session_key=str(ctx.deps.session_id), 
             responses=responses)
+
+        # 结构化写入 recon_http_transactions（与 sitemap:katana 对齐，供站点地图）
+        _persist_http_tx(
+            ctx,
+            raw_request_anon,
+            is_tls,
+            auth_used=auth_profile is not None,
+            responses=responses,
+        )
 
         # Convert bytes responses to strings before truncation
         string_responses = []
