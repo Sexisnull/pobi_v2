@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     llm_api_base: str | None = None
     llm_api_key: str | None = None
     llm_rate_limit_rpm: int = 60
+    # LLM 单调用超时（秒）：远端无响应时防止协程无限 await 假死；超时后由 litellm
+    # 按 llm_max_retries 自动退避重试，仍失败则任务报错终止（而非等 30 分钟子超时）。
+    llm_request_timeout: int = 180
+    # LLM 调用自动重试次数（覆盖瞬态：超时 / 限流 429 / 5xx / 连接失败）
+    llm_max_retries: int = 3
 
     # DEPRECATED: 与 `model` 语义重叠，统一入口不再消费。
     # 模型串请只用 `model`（POBI_V2_MODEL）。保留仅为向后兼容既有 .env。

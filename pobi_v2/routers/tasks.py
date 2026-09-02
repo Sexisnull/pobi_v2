@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from uuid import UUID
 
 from pobi_v2.core.deps import get_current_user, require_scope
 from pobi_v2.core.exceptions import NotFoundError
+
+logger = logging.getLogger(__name__)
 from pobi_v2.db.models import Task, TaskEvent, TaskStatus, Target, User
 from pobi_v2.db.session import get_session
 from pobi_v2.db.persistence import record_audit
@@ -128,12 +131,9 @@ async def create_task(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"目标超出授权范围，拒绝创建任务: {reason}",
         )
-    # 认证前置（PreAuth）：分离凭据明文，密码经 Fernet 加密落库（auth_secret）
+    # 认证前置（PreAuth）：凭据不落任何数据库（pgsql/sqlite），仅写任务目录
+    # 钱包（tasks/<task_id>/reusable_credentials.json），随任务生命周期存续。
     payload = data.model_dump(exclude={"auth_password"})
-    if data.auth_password:
-        from pobi_v2.core.security import encrypt_api_token
-
-        payload["auth_secret"] = encrypt_api_token(data.auth_password)
     task = Task(**payload)
     task.tenant_id = user.tenant_id
     task.owner_id = user.id
@@ -151,13 +151,30 @@ async def create_task(
         task.status = TaskStatus.pending
         await session.commit()
         logger.warning("[TASK-CREATE] 队列不可用，任务回退 pending | task_id=%s", task.id)
-    # 认证前置：auth_mode=auto 时后台触发自动认证（不阻塞任务创建响应）
-    if data.auth_mode == "auto" and data.auth_password and task.auth_secret:
+    # 认证前置（PreAuth）：auth_mode=auto 且提供凭据时，把凭据写入任务目录钱包
+    # （tasks/<task_id>/reusable_credentials.json），供 authenticator 重认证消费。
+    # 凭据不落任何数据库；这里只写文件，随后后台正式登录落会话。
+    if data.auth_mode == "auto" and data.auth_password:
         from pobi_agent.constants import TASKS_ROOT
-        from pobi_v2.engine.preauth import run_auto_auth
+        from pobi_v2.engine.preauth import run_auto_auth, save_task_credentials
 
         task_root = TASKS_ROOT / str(task.id)
         task_root.mkdir(parents=True, exist_ok=True)
+        try:
+            save_task_credentials(
+                task_root=task_root,
+                target=target.url,
+                username=data.auth_username or "",
+                password=data.auth_password,
+                login_url=data.auth_login_url,
+            )
+            logger.info(
+                "[TASK-CREATE] 任务凭据已写入任务目录钱包 | task_id=%s | profile=preauth",
+                task.id,
+            )
+        except Exception:  # noqa: BLE001 — 凭据落文件失败不阻断任务创建
+            logger.exception("任务 %s 写入任务目录凭据失败", task.id)
+
         task_id_str = str(task.id)
         target_url = target.url
         login_url = data.auth_login_url
@@ -167,7 +184,6 @@ async def create_task(
         async def _background_auto_auth() -> None:
             try:
                 from pobi_v2.db.session import AsyncSessionLocal
-                from pobi_v2.core.security import decrypt_api_token
 
                 result = await run_auto_auth(
                     task_id=task_id_str,

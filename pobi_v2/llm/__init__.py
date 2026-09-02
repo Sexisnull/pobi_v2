@@ -9,7 +9,7 @@
 """
 
 from pobi_v2.llm.client import chat, complete, complete_json
-from pobi_v2.llm.config import get_model_spec, to_litellm_model
+from pobi_v2.llm.config import configure_litellm, get_model_spec, to_litellm_model
 from pobi_v2.llm.types import (
     LLMError,
     LLMMessage,
@@ -23,6 +23,7 @@ from pobi_v2.llm.types import (
 __all__ = [
     "get_model_spec",
     "to_litellm_model",
+    "configure_litellm",
     "complete",
     "complete_json",
     "chat",

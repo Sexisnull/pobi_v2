@@ -128,3 +128,47 @@ def to_litellm_model(spec: ModelSpec) -> str:
     if "/" in model_name:
         return model_name
     return f"{provider}/{model_name}"
+
+
+import logging  # noqa: E402  (模块末尾统一设置 LLM 全局行为)
+
+_log = logging.getLogger("pobi")
+
+
+def configure_litellm() -> None:
+    """为所有经 litellm 的 LLM 调用设置全局超时与重试。
+
+    agent 路径（pydantic_ai -> litellm）与平台路径（pobi_v2.llm.client）最终都
+    调用 litellm，故在此统一设置即可同时覆盖，避免「远端无响应时协程无限 await
+    假死、任务只能等 30 分钟子超时」的问题。超时后 litellm 会按 llm_max_retries
+    自动退避重试瞬态错误（超时 / 限流 / 5xx / 连接失败），仍失败才向上抛异常，
+    由 executor 兜底归类为『用户可读的 LLM 失败原因』。
+    """
+    import litellm  # 延迟导入：仅在本函数被调用时加载，避免无谓的启动开销
+
+    timeout = int(getattr(settings, "llm_request_timeout", 180) or 180)
+    retries = int(getattr(settings, "llm_max_retries", 3) or 3)
+    try:
+        litellm.request_timeout = timeout
+    except Exception:  # noqa: BLE001 — 不同 litellm 版本属性名略有差异，容忍
+        pass
+    try:
+        litellm.num_retries = retries
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        retry_cfg = getattr(litellm, "retry", None)
+        if isinstance(retry_cfg, dict):
+            retry_cfg["num_retries"] = retries
+            retry_cfg["backoff_factor"] = 2
+    except Exception:  # noqa: BLE001
+        pass
+    _log.info(
+        "[LLM] litellm 全局配置生效 | request_timeout=%ss | num_retries=%s",
+        timeout, retries,
+    )
+
+
+# 模块导入即生效：worker / API / reconcile 等任何导入本层（进而触发 LLM 调用）的
+# 进程都会先应用超时与重试，无需各自在启动钩子里重复调用。
+configure_litellm()

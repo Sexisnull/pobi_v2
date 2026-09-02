@@ -108,6 +108,42 @@ async def _publish_status_change(task_id: UUID, new_status: TaskStatus) -> None:
         pass
 
 
+def _classify_llm_error(exc: BaseException) -> str | None:
+    """把 LLM 相关异常归一为用户可读的中文失败原因；返回 None 表示非 LLM 异常。
+
+    agent 路径经 pydantic_ai -> litellm，litellm 的 Timeout / RateLimit / APIError
+    等会被 pydantic_ai 包成 ``ModelHTTPError`` / ``UnexpectedModelBehavior``，原始
+    类型名仍含 litellm 字样，故同时按异常类型名与消息内容判定。
+    """
+    cls = type(exc)
+    qual = f"{getattr(cls, '__module__', '')}.{cls.__name__}"
+    msg = str(exc)
+    low = (qual + " " + msg).lower()
+    is_llm = (
+        "litellm" in low
+        or "pydantic_ai" in low
+        or "modelhttperror" in cls.__name__.lower()
+        or "unexpectedmodelbehavior" in cls.__name__.lower()
+    )
+    if not is_llm:
+        return None
+    if "timeout" in low:
+        return (
+            "LLM 调用超时：远端未在限定时间内响应，疑似请求过大或服务暂时不可用。"
+            "系统已按配置自动重试仍失败，任务终止。可尝试减小上下文 / 分段生成，"
+            "或检查 LLM 服务端健康状态与网络连通性。"
+        )
+    if "ratelimit" in low or "429" in low:
+        return "LLM 调用被限流（429）：系统已自动退避重试仍失败，任务终止。请降低并发或稍后重试。"
+    if "connection" in low or "serviceunavailable" in low:
+        return "LLM 服务不可用 / 连接失败：系统已自动重试仍失败，任务终止。请检查 LLM 端点网络与可用性。"
+    if "authentication" in low or ("auth" in low and "key" in low):
+        return "LLM 鉴权失败（API Key / Base URL 无效），任务终止。"
+    if "notfound" in low or ("model" in low and "not found" in low):
+        return "LLM 模型不存在（请检查 POBI_V2_MODEL 配置），任务终止。"
+    return f"LLM 调用失败：{msg[:400]}"
+
+
 async def run_task(ctx, task_id: str, **kwargs: object) -> dict:
     """ARQ 任务入口：执行一次渗透测试任务。
 
@@ -142,7 +178,11 @@ async def run_task(ctx, task_id: str, **kwargs: object) -> dict:
                 log.error("[TASK-LIFECYCLE] 任务超时/中断（job_timeout 或 Worker 重启）")
         elif isinstance(exc, Exception):
             _status = TaskStatus.cancelled if (await is_cancelled(tid)) else TaskStatus.failed
-            _err = str(exc)
+            friendly = _classify_llm_error(exc)
+            _err = friendly or str(exc)
+            if friendly:
+                # 命中 LLM 失败归类：单独打一行，使『卡死原因』在 worker.log 立即可见
+                log.error("[LLM-ERROR] task=%s | %s", tid, friendly)
         else:
             _status = TaskStatus.failed
             _err = f"未知退出：{exc!r}"
@@ -219,6 +259,39 @@ async def _run_probe_branch(tid, task, target, hooks, session) -> dict:
     return outcome
 
 
+async def _run_pre_recon_branch(tid, task, target, hooks) -> None:
+    """前置侦查分支：任务启动后自动执行指纹识别 + WAF 识别。
+
+    平台层自动、不依赖 LLM；失败仅记日志与审计，不阻断任务主流程。
+    结果落库 recon_fingerprints + technology facts，供 L0/L1 注入下游。
+    """
+    log = task_logger(tid)
+    try:
+        from pobi_v2.engine import pre_recon
+        from pobi_v2.engine.recon_access import task_root as _task_root
+
+        result = await pre_recon.run_pre_recon(
+            task_id=tid,
+            target_url=target.url,
+            task_root=_task_root(tid),
+            hooks=hooks,
+            # 任务带认证时等待 PreAuth 会话落盘（避免 pre_recon 抢跑在后台认证
+            # 完成前，导致 sitemap 匿名爬取）；无认证任务不等待，直接外部探测。
+            preauth_wait_timeout=pre_recon.PREAUTH_WAIT_TIMEOUT if task.auth_username else 0.0,
+        )
+        if result.get("status") == "error":
+            log.warning(
+                "[TASK-LIFECYCLE] 前置侦查未完成（不阻断主流程）: %s", result.get("error")
+            )
+        else:
+            log.info(
+                "[TASK-LIFECYCLE] 前置侦查完成 | %s | auth_mode=%s | matched=%s",
+                target.url, result.get("auth_mode"), result.get("matched_count"),
+            )
+    except Exception as exc:  # noqa: BLE001 - 前置侦查失败不阻断任务主流程
+        log.warning("[TASK-LIFECYCLE] 前置侦查异常（已忽略）: %s", exc)
+
+
 async def _run_task_body(tid: UUID) -> dict:
     """执行任务主体；异常统一由 ``run_task`` 兜底落库。"""
     async with AsyncSessionLocal() as session:
@@ -272,6 +345,9 @@ async def _run_task_body(tid: UUID) -> dict:
             log.info("[TASK-LIFECYCLE] 进入探针分支")
             outcome = await _run_probe_branch(tid, task, target, hooks, session)
         else:
+            # 前置侦查（平台层自动，deadend/ScanWorkflow 共用）：任务启动后、
+            # 智能体侦查前，自动执行指纹识别 + WAF 识别并落库。失败不阻断主流程。
+            await _run_pre_recon_branch(tid, task, target, hooks)
             # 主路径：直接驱动原 pobi_agent.DeadEndAgent（完整 AI 自主渗透系统，
             # 含 Docker 沙箱执行验证、多智能体协作、ADaPT 规划、ValidationGate、
             # ReporterAgent）。沙箱为必需依赖；若不可用时回退到轻量 ScanWorkflow。

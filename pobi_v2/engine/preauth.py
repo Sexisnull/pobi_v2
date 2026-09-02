@@ -30,6 +30,7 @@ from pobi_agent.auth_resolver.auth_resolver import (
     AuthContextHandler,
     AuthFlow,
     AuthType,
+    CredentialsStore,
 )
 from pobi_agent.logging import logger
 from pobi_agent.recon.store import ReconStore
@@ -107,8 +108,34 @@ def _write_auth_facts(
         auth_status,
         confidence=0.9,
         source=source,
-        details={"username": username, "error": error} if error else {"username": username},
+        details={"error": error} if error else None,
     )
+
+
+def save_task_credentials(
+    *,
+    task_root: Path,
+    target: str,
+    username: str,
+    password: str,
+    login_url: str | None = None,
+) -> Path:
+    """把任务凭据写入任务目录钱包（``tasks/<task_id>/reusable_credentials.json``）。
+
+    凭据是不可复用资产：随任务目录存续、任务结束即作废，不落任何数据库。
+    需在 task_root 注入下调用（内部 set_task_root，写后复位）。
+    """
+    token = set_task_root(task_root)
+    try:
+        return CredentialsStore.save_credentials(
+            target,
+            "preauth",
+            username=username,
+            password=password,
+            login_url=login_url,
+        )
+    finally:
+        clear_task_root(token)
 
 
 async def verify_credentials(

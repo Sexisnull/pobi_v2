@@ -448,6 +448,34 @@ async def _run_deadend_agent_body(
     # 9) 注册审批回调
     agent.set_approval_callback(approval_cb)
 
+    # 9.5) 历史任务预热续扫：同目标已有任务时，从 PG 聚合层拉回端点/事实/威胁/事务
+    # 骨架重建本地库（Layer2 seed-in），供 supervisor 启动基线块与 L0/L1/L2 复用，
+    # 跳过重复工作。失败仅 warning 不阻断（首任务/无历史时本就无数据）。
+    try:
+        from pathlib import Path as _Path
+
+        from pobi_agent.recon import ReconStore
+
+        _db_path = _Path(task_root) / f"{task_id}.db"
+        if _db_path.exists():
+            _store = ReconStore(_db_path)
+            try:
+                await _store.seed_from_pg(
+                    target_id=str(task.target_id),
+                    tenant_id=str(task.tenant_id),
+                    async_session_factory=_async_session_factory(),
+                )
+                await _store.seed_local_artifacts(
+                    task_root=task_root,
+                    target_id=str(task.target_id),
+                    tenant_id=str(task.tenant_id),
+                    async_session_factory=_async_session_factory(),
+                )
+            finally:
+                _store.close()
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("任务启动历史 recon 预热失败（已忽略）: %s", exc)
+
     # 10) 逐阶段驱动（威胁建模 -> 利用 -> 报告）
     _ensure_local_persist_worker()
     objective = task.objective or f"Perform a security assessment of {target.url}"

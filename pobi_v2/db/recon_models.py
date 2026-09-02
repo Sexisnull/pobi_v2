@@ -23,6 +23,7 @@ from sqlalchemy import (
     Index,
     Integer,
     JSON,
+    LargeBinary,
     String,
     Text,
     Uuid,
@@ -322,6 +323,62 @@ class TaskMetricsAgg(Base):
     )
     metrics_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     rag_index_ref: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    source_tasks: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    last_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    target = relationship("Target")
+
+
+class ReconHttpTransactionAgg(Base):
+    """recon_http_transactions_agg：按 (target_id, method, url) 聚合的 HTTP 事务表。
+
+    目标级 sitemap 真源（2026-09-02）：任务完成时把本地 recon_http_transactions
+    推送至此（url 维度收敛，同一 url 多次请求只留最新），新任务启动时从本表
+    seed 目标已有骨架（covered_block / L1 增量提示，避免重复枚举）。
+
+    响应体沿用本地分层存储策略：full（明文）/ compressed（gzip 存
+    ``body_compressed``）/ digest（仅摘要）。``source_tasks`` 记录最近来源任务。
+    """
+
+    __tablename__ = "recon_http_transactions_agg"
+    __table_args__ = (
+        UniqueConstraint(
+            "target_id", "tenant_id", "method", "url",
+            name="uq_recon_http_tx_agg_tgt_method_url",
+        ),
+        Index("ix_recon_http_tx_agg_tenant", "tenant_id"),
+        Index("ix_recon_http_tx_agg_tgt_path", "target_id", "path_normalized"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    target_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("targets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    host: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    path_normalized: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    method: Mapped[str] = mapped_column(String(16), nullable=False, default="GET")
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="sitemap:katana")
+    response_title: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    response_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    response_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tech_stack: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    parameters: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    auth_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    auth_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    storage_strategy: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="full"
+    )
+    response_body: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    body_compressed: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     source_tasks: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     last_seen: Mapped[datetime] = mapped_column(

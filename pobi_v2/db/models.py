@@ -206,9 +206,10 @@ class Task(Base):
     auth_mode: Mapped[str] = mapped_column(String(16), default="none", nullable=False)
     # auth_status：none / pending / running / success / failed / mfa（MFA 拦截）
     auth_status: Mapped[str] = mapped_column(String(24), default="none", nullable=False)
-    # 凭据（secret 用 Fernet 加密落库，绝不明文存储；明文仅存在于创建请求中）
+    # 凭据（密码）绝不落库：仅写入任务目录钱包 tasks/<task_id>/reusable_credentials.json，
+    # 供 authenticator 重认证消费；auth_username 保留用于展示（非高敏）。
+    # 注：auth_secret 列已在 alembic 0019 删除。
     auth_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    auth_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
     auth_login_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     # 会话落盘使用的 AuthContext profile 名（默认 preauth，与原生 AuthAgent 自有 profile 隔离）
     auth_profile: Mapped[str] = mapped_column(String(64), default="preauth", nullable=False)

@@ -24,7 +24,6 @@ from pobi_agent.logging import logger
 
 from pobi_v2.core.deps import require_scope
 from pobi_v2.core.exceptions import NotFoundError
-from pobi_v2.core.security import decrypt_api_token
 from pobi_v2.db.models import Task, User
 from pobi_v2.db.session import get_session
 from pobi_v2.engine.preauth import (
@@ -119,9 +118,19 @@ async def trigger_auto_auth(
     """触发自动认证（复用任务已保存凭据，或 body 覆盖）。返回运行结果摘要。"""
     task = await _load_task(task_id, session, user)
     username = body.username if body and body.username else task.auth_username
-    password = body.password if body and body.password else (
-        decrypt_api_token(task.auth_secret) if task.auth_secret else None
-    )
+    password = body.password if body and body.password else None
+    if not password:
+        # 密码不落库：从任务目录钱包回退读取（凭据随任务走）
+        from pobi_agent.auth_resolver import CredentialsStore
+        from pobi_agent.storage_context import clear_task_root, set_task_root
+
+        _tok = set_task_root(_task_root(task_id))
+        try:
+            password = CredentialsStore.resolve(
+                task.target.url, task.auth_profile or "preauth"
+            ).password
+        finally:
+            clear_task_root(_tok)
     login_url = body.login_url if body and body.login_url else task.auth_login_url
     if not username or not password:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="缺少账号密码凭据")

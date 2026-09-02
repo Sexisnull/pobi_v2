@@ -38,6 +38,12 @@ async def _on_startup(_ctx: dict) -> None:
     否则 ``get_event_hooks()`` 返回 NullEventHooks，而它缺少 emit_phase_changed
     等方法，会导致 run_task 在驱动 DeadEndAgent 时立即抛 AttributeError。
     """
+    # 显式应用 LLM 全局超时与重试（不依赖 config 模块的隐式导入触发）：
+    # 确保本 worker 进程内所有经 litellm 的调用（含 agent 路径）都带 request_timeout
+    # 与 num_retries，避免远端假死时协程无限 await。
+    from pobi_v2.llm.config import configure_litellm
+
+    configure_litellm()
     install_event_hooks()
     logger.info(
         "[WORKER] arq Worker 进程启动 | job_timeout=%s | max_jobs=%s | retry_jobs=%s",
