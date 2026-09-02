@@ -10,17 +10,23 @@
         ├─ 开发：宿主 Vite dev server(:5173, HMR)，不进 Docker，改完即生效
         └─ 生产：nginx 根目录托管 web/spa，/ 即控制台，/app/ 为兼容别名
         └─ FastAPI 网关 (pobi_v2/main.py)
-             ├─ routers/         # REST + SSE 接口层（auth/targets/tasks/instruction/stream/persistence/approval/report/system/pricing/api_tokens）
-        ├─ engine/          # 任务编排：executor / event_bus / agent_adapter / deadend_runner / probe_runner / queue / worker / reconcile / recon_access / cancel_state / approval / report / guardrails
-        ├─ db/              # SQLAlchemy 2.0 异步模型与持久化（models / session / persistence）
-        ├─ schemas/         # Pydantic Schema（target/task/persistence/auth/approval/pricing）
+             ├─ routers/         # REST + SSE 接口层（12 个）：auth / targets / tasks / task_auth / instruction / stream / persistence / approval / report / system / pricing / api_tokens
+        ├─ engine/          # 任务编排（19 个）：executor / event_bus / agent_adapter / deadend_runner / probe_runner / queue / worker / reconcile / recon_access / cancel_state / approval / report / guardrails / instruction_channel / preauth / pre_recon / scan_tools / scan_workflow / sitemap(katana_runner)
+        ├─ db/              # SQLAlchemy 2.0 异步模型与持久化（models / session / persistence / recon_models[PG 聚合表]）
+        ├─ schemas/         # Pydantic Schema（8 个）：target / task / persistence / auth / approval / pricing / recon / token
         ├─ core/            # config / exceptions / security(JWT+bcrypt) / deps / seed
-        ├─ llm/             # 统一 LLM 抽象层（LiteLLM+Instructor），agent 内核与平台统一接入
-        └─（无独立 services/ 层）  # PROJECT_GOAL 曾提及的跨域服务（邮件/定价）未单设目录：定价实现在 routers/pricing.py + schemas/pricing.py
+        ├─ llm/             # 统一 LLM 抽象层（LiteLLM+Instructor）：__init__ / client / config / types；agent 内核与平台统一接入
+        ├─ benchmark/       # TSec Benchmark 评测入口（run_benchmark.py，可选依赖组 `benchmark`），不参与主运行链路
+        ├─ sandbox_bootstrap.py  # 沙箱就绪引导（Kali 容器准备）
+        └─（无独立 services/ 层）  # 跨域服务未单设目录：定价实现在 routers/pricing.py + schemas/pricing.py
    └─ pobi_agent（内核，仓库根目录子包，uv workspace 复用）
-        ├─ CoreAgent / DeadEndAgent / EventHooks
-        ├─ tools/           # 网络请求 / 浏览器 / 文件 / 沙箱执行
-        └─ agents/          # 监督者 + 6 子 Agent（executor/MemoryAgent/scanner/requester/shell/python-interpreter）
+        ├─ pobi_agent.py    # CoreAgent / DeadEndAgent / EventHooks
+        ├─ tools/           # 顶层：recon_lookup / web_resource_extractor / webapp_code_rag / shell / tool_wrappers
+        │                   # 子包：avfs / browser / browser_automation / fingerprint / sitemap / python_interpreter / webapp_analyzer
+        └─ agents/
+             ├─ 顶层：supervisor_agent / planner / validator / judge / reporter / exploit_web_agent / recon_threatmodel_agent / factory / architecture
+             ├─ components/：executor / planner / validation_strategies
+             └─ generic_agents/（6 个）：authenticator_agent / memory_agent / request_agent(requester) / shell_agent / python_interpreter_agent / webapp_analyzer_agent
    外部依赖（全部为 Docker 容器服务，接入统一网络 pobi_net）：
         ├─ PostgreSQL       # 主库（多租户隔离；Docker 容器，仅内网不映射宿主端口）
         ├─ Redis + ARQ      # 任务队列 + 事件总线 + 取消/指令状态（Docker 容器，仅内网不映射宿主端口）
@@ -65,7 +71,8 @@
 2. ARQ Worker 拉起 `engine/executor.py` → 分流 `deadend_runner`（M8 主路径，驱动 `DeadEndAgent`）或 `probe_runner`（probe 快路径，绕过 avfs/多智能体）。
 3. 运行期事件经 `pobi_agent.EventHooks` → `engine/event_bus.py` → 落库 `TaskEvent` + 会话级 token 累计；SSE 经 `routers/stream.py` 实时推送。
    - **Token 实时统计链路（2026-08-28）**：统一层返回 `usage` → `emit_llm_response` 内存累计（executor 任务结束落库用）+ **异步 HINCRBY 写 Redis**（`pobi:usage:{tid}`，TTL 24h，跨 worker 合并的实时真源）→ `llm_response` 事件 payload 附加 `token_usage` 累计值 → SSE 推送前端实时刷新 token 卡片；`GET /tasks/{id}/usage` 对 running/queued 任务**优先读 Redis 实时值**，终态回退 DB。`reset_session_usage` 同时清内存与 Redis。
-4. **侦察/利用产物旁路落库**：supervisor 调用 requester/shell/webapp_analyzer（侦察与利用共用同一 `RequesterAgent`，仅提示词不同）后，在 `agents/components/executor.py` 的 `_add_agent_output_to_context` 内调用 `_persist_recon_facts`，解析 agent 输出文本中的端点 / 技术栈，经 `ContextEngine.add_discovered_fact`（落 `recon_facts`）与 `ContextEngine.add_recon_endpoint`（落 `recon_endpoints`）旁路写入本地 SQLite（`~/.pobi_v2/tasks/<task_id>/<task_id>.db`，`ReconStore.for_task` 任务级单一库，非 `recon/` 子目录）。该通道在 agent 运行期随跑随写、异常仅记 warning 不阻断主循环，**任务取消不影响已落库数据**；`ContextEngine.recon_store` 未注入时全部 no-op。正式 `findings`/`task_events` 仍仅在 `_persist_outcome` 的 `completed` 路径写入（取消分支跳过）。
+4. **侦察/利用产物旁路落库**：supervisor 调用 requester/shell/webapp_analyzer（侦察与利用共用同一 `RequesterAgent`，仅提示词不同）后，在 `agents/components/executor.py` 的 `_add_agent_output_to_context` 内调用 `_persist_recon_facts`，解析 agent 输出文本中的端点 / 技术栈，经 `ContextEngine.add_discovered_fact`（落 `recon_facts`）与 `ContextEngine.add_recon_endpoint`（改为落 `recon_http_transactions` 一笔观测，由 `derive_endpoints_from_transactions` 归并到 `recon_endpoints`）旁路写入本地 SQLite（`~/.pobi_v2/tasks/<task_id>/<task_id>.db`，`ReconStore.for_task` 任务级单一库，非 `recon/` 子目录）。该通道在 agent 运行期随跑随写、异常仅记 warning 不阻断主循环，**任务取消不影响已落库数据**；`ContextEngine.recon_store` 未注入时全部 no-op。正式 `findings`/`task_events` 仍仅在 `_persist_outcome` 的 `completed` 路径写入（取消分支跳过）。
+   - **requester 事务对齐（2026-09-02）**：`pw_send_payload`（`pobi_agent/tools/browser_automation/__init__.py`）在请求完成后，经 `_persist_http_tx` 从 raw 请求/响应文本解析出 method/url/status_code/headers/body/title/content-type/params 等结构化字段，经 `ContextEngine.add_recon_http_transaction` 落 `recon_http_transactions`（source=`agent:requester`），与 sitemap 同 schema 对齐；非 HTTP 响应（连接错误等）跳过、失败仅记 debug 不阻断请求主流程。
 4. 高危工具调用 → `engine/approval.py` 创建 `ApprovalRequest`（checkpoint，失败关闭）→ 前端审批或 `auto_approve`。
 5. 完成 → 状态 `completed`/`failed`/`cancelled`，`result` 写入；报告经 `routers/report.py` 导出。
 6. SSE 断连 → `GET /api/v1/tasks/{id}/events`（`after_seq` 游标）回放，弥补断连即丢。
@@ -82,13 +89,14 @@
 tasks/<task_id>/
 ├── scope.<task_id>.yaml / validation.<task_id>.yaml   # 平台层：授权范围 / 验证策略
 ├── <task_id>.db                    # ★本地任务库（sqlite，ReconStore，WAL+FTS5）
-├── agent/
+├── agent/                          # ★扁平化：无 <agent_id>/<session_id> 嵌套层（2026-08-27 改造）
 │   ├── run_context/context.txt     # 运行上下文（ContextEngine 持续追加）
-│   ├── auth_context/               # 认证会话（<profile>.json、playwright_state.json、index.json、target_session.json）
-│   └── <agent_id>/<session_id>/
-│       ├── memory/summaries/{agent}.md   # Agent 记忆摘要（authenticator/requester/shell/python_interpreter）
-│       ├── workspace/  webpages/         # 工作区 / 网页抓取产物
-├── rag/<agent_id>/<session_id>/<target>.db   # ★RAG 索引库（sqlite，code chunks + vectors）
+│   ├── auth_context/               # 认证会话（<profile>.json、<profile>.playwright.json、index.json、target_session.json）
+│   ├── memory/summaries/{agent}.md # Agent 记忆摘要（AVFS workspace，非目录层级）
+│   ├── workspace/                  # 工作区（agents_storage_root/workspace）
+│   └── webpages/                   # 网页抓取产物
+├── rag/<embedding_session_id>/<target>.db   # ★RAG 索引库（sqlite，code chunks + vectors）
+├── sitemap/katana_raw.jsonl                 # 前置侦查 katana 原始 JSONL（防误过滤复盘）
 ├── logs/
 │   ├── <session_key>/requester.jsonl      # requester 每次 HTTP 请求/响应
 │   └── python_interpreter.jsonl           # Python 解释器每次执行结果
@@ -103,7 +111,7 @@ tasks/<task_id>/
 | 验证策略 | `validation.<task_id>.yaml` | 任务创建（平台层） |
 | 运行上下文 | `agent/run_context/context.txt` | `ContextEngine._append_to_context_file` 持续追加（user input / 各 agent 响应摘要） |
 | 认证会话 | `agent/auth_context/` | authenticator 登录成功后 `save_context`（auth_resolver，Playwright storage state） |
-| Agent 记忆摘要 | `agent/<agent_id>/<session_id>/memory/summaries/{agent}.md` | executor `_persist_agent_summary`（AVFS memory workspace，须用 `memory_session_id`=agent_id） |
+| Agent 记忆摘要 | `agent/memory/summaries/{agent}.md` | executor `_persist_agent_summary`（AVFS memory workspace，须用 `memory_session_id`=agent_id）。**实路径**：`_prepare_memory_workspace`（`pobi_agent.py:311`）拼 `agents_storage_root / "memory"`，`agents_storage_root` 由 `deadend_runner` 注入为 `tasks/<task_id>/agent`（`Config.agents_storage_root` 默认 `None`，禁止回退旧根） |
 | HTTP 请求/响应 | `logs/<session_key>/requester.jsonl` | requester 工具 `_save_responses_to_file`（pretty JSON 追加） |
 | Python 执行结果 | `logs/python_interpreter.jsonl` | python_interpreter 工具 `_save_result_to_file`（追加） |
 | 会话指标 | `metrics/metrics.json` | `SessionMetrics.save()` 任务推进/结束时写 |
@@ -120,18 +128,27 @@ tasks/<task_id>/
 | `recon_endpoints` | 端点（path/method/status_code/auth_required/tech_stack/parameters/discovered_via） |
 | `recon_techniques` | 已测技术/尝试足迹（name 含 endpoint 前缀、status、success_count/tested_count/last_result），2026-08-31 起由 `pw_send_payload` 工具层实时写入（成功/失败/connection reset 均记），供主控证据驱动收敛 |
 | `recon_threats` | 威胁（CVE、severity、status：suspected/confirmed/exploited） |
+| `recon_fingerprints` | 指纹明细（2026-09-01 新增）：四层完整指纹 + favicon + auth_mode，`pre_recon` 落库；仅存本地，不进 PG |
+| `recon_http_transactions` | HTTP 请求/响应事务流水（2026-09-02 新增）：每次请求一条（无幂等键，保留历史可对比），`source` 区分 `sitemap:katana` / `agent:requester`；含 status/headers/body/title/content_type/size/tech_stack/detected_params/forms、auth_used/auth_required、body_blob_ref（>100KB 大 body 外置 blobs/）；为「站点地图页面对齐 katana 与 requester」的数据基座，仅存本地不进 PG |
 
 > **足迹驱动收敛（2026-08-31）**：`RequesterDeps` 注入 `context`（TYPE_CHECKING）→ `pw_send_payload` 每次请求实时 upsert `recon_techniques`（name 幂等键 `"{endpoint} | {payload摘要} [{sha1:8}]"`）→ 接通 `was_already_attempted` 防重复 + `is_surface_dead(endpoint, threshold=10)` 死路硬护栏（BLOCKED 拒绝）→ supervisor 决策 / requester 委派前注入 `get_failed_footprint_summary()` 摘要。目的：不限攻击轮数，靠证据引导子 agent 在死路上转向（如 UNION 全被 connection reset → 切布尔盲注）。
 
-> **PG 增量同步（2026-08-31）**：本地 `recon_facts`/`recon_endpoints`/`recon_threats` 三表加 `pg_synced_at` 脏标记列（旧库 `_ensure_column` 幂等补列）；四个 upsert 更新已有行时自动置脏。`upsert_to_pg` 只读脏行 → PG upsert → 提交成功打标（失败不打标重试不丢数据）。触发侧 `_recon_emit_sync` per-task in-flight 合并（同步期间新写入标记 pending 补一轮），不再每次写入 create_task。收敛策略：内容字段最新 wins + confidence 取 `GREATEST`，替代原 `confidence>` 整行门控（修复静默过期）。新增 PG 资产聚合表 `recon_endpoints_agg`（迁移 0017），`seed_from_pg` 续扫时灌入本地结构化端点。
+> **前置侦查 pre_recon（2026-09-01 奠基，2026-09-02 收敛数据模型）**：平台层自动通道，任务启动后（executor 主路径，deadend/ScanWorkflow 共用）在智能体侦查前自动执行**指纹识别 + WAF 识别 + 站点地图**。模块：`pobi_v2/engine/pre_recon.py`（编排：phase/tool 事件 + 认证读取 + 引擎 + 落库）+ `pobi_agent/tools/fingerprint/engine.py`（无 ctx 引擎 `run_fingerprint`/`persist_fingerprint`）。**认证感知**：读取 PreAuth 落盘的 `preauth` 会话注入 cookies（`authenticated:<profile>`）；无会话标记 `no_auth_context`/`external_only` 仅外部探测。**落库四通道**：`recon_fingerprints`（独立明细表，完整四层 + favicon + auth_mode）+ `recon_facts(category=technology)` + `recon_techniques(fingerprint|{host})` 足迹防重；技术栈信息保留在 facts（供 L0/L1 与基线块消费），**端点树不再直写**，统一由 pre_recon 落库后 `ReconStore.derive_endpoints_from_transactions` 从 `recon_http_transactions` 派生。
 
-**B2 RAG 索引库 `rag/<agent_id>/<session_id>/<target>.db`（sqlite_connector）**
+> **Layer1 启动注入（2026-09-02）**：`execute_supervisor` 的 `supervisor_prompt` 在组装时调用 `ReconStore.build_baseline_block`（token 预算 2000，失败仅 warning），由 `recon_http_transactions` 现算指纹/站点总览/端点/认证面组装成「目标侦察基线」块注入 prompt。supervisor 启动即拥有基线，无需先跑工具；运行期仍靠 `build_index_view`（L0/L1）与按需工具（`list_endpoints`/`search_transactions`）补充。站点总览（`build_site_overview`）读时现算，**不落物化表**。**实时流**：`phase_changed(pre_recon)` + `tool_call_start/end(fingerprint)` 经 SSE 推送前端（前端 events.js 已支持渲染）。指纹明细仅存本地库，technology facts 走 PG 聚合层供同目标新任务 seed 复用。
+
+> **站点地图 sitemap（2026-09-02）**：前置侦查第二子阶段（fingerprint 之后），Kali 内执行 katana 构建站点地图。**katana 由用户在自建 Kali 镜像预装打包（本项目不安装/固化）**，代码侧仅做 `katana -version` 健康检查，缺失 → `status="skipped"` 不阻断任务。执行链路：`pre_recon` → `run_sitemap`（`pobi_v2/engine/sitemap/katana_runner.py`，构造命令含 Cookie/自定义 header 认证注入 + `-ef` 静态扩展名过滤 + `-iqp`；复用 `_resolve_auth(preauth)` 会话）→ Kali `execute_command` → JSONL stdout → 原始输出落盘 `tasks/<id>/sitemap/katana_raw.jsonl`（防误过滤复盘）→ `pobi_agent/tools/sitemap/engine.py`（`parse_katana_jsonl`/`should_keep`/`persist_sitemap`）解析去噪 → 落库 `recon_http_transactions`（source=`sitemap:katana`）；**端点树不再双写**，由 `derive_endpoints_from_transactions` 在事务之上派生；足迹 `recon_techniques(sitemap|{host})` 防重（同 host 只跑一次）。**无意义页面三层防线**：① katana 参数层（`-ef`/`-iqp`）；② 落库层 `pobi_agent/utils/urls.py`（静态资源/登出错误噪音/纯分页参数变体过滤，katana 无 -pcs/-fsu/-filter-page-type）；③ agent 复用注入（L1 端点 + `covered_block`）。**katana 不暴露给 agent 工具集**，仅前置侦查平台层调用（对齐 fingerprint 不暴露模式）。
+
+> **PG 增量同步（2026-08-31 奠基，2026-09-02 修复）**：本地 `recon_facts`/`recon_endpoints`/`recon_threats` 三表加 `pg_synced_at` 脏标记列（旧库 `_ensure_column` 幂等补列）；四个 upsert 更新已有行时自动置脏。`upsert_to_pg` 只读脏行 → PG upsert → 提交成功打标（失败不打标重试不丢数据）。**2026-09-02 修复 `CardinalityViolation`**：`recon_http_transactions` 为 append-only 流水（同 `(method,url)` 可多条，保留 katana 403 vs requester 200 历史），`upsert_to_pg` 写 PG 前按 `(method,url)` 折叠脏行取最新代表，折叠的全部脏行统一打 `pg_synced_at`，否则撞 `recon_http_transactions_agg` 唯一键 `(target_id,tenant_id,method,url)` 同命令重复。收敛策略：内容字段最新 wins + confidence 取 `GREATEST`，替代原 `confidence>` 整行门控（修复静默过期）。端点树由 `recon_http_transactions` 派生后写入 `recon_endpoints` 再同步 PG 资产聚合表 `recon_endpoints_agg`（迁移 0017），`seed_from_pg` 续扫时灌入本地结构化端点。
+
+**B2 RAG 索引库 `tasks/<task_id>/rag/<embedding_session_id>/<target>.db`（sqlite_connector）**
 `rag_manager.get_connector` + `batch_insert_code_chunks` 写入网页/代码 chunks + 向量，供 `webapp_code_rag` 语义检索；embedder 缺失时优雅降级引导改用 facts/shell。
 
 ### C. 前端推送（SSE 实时流 + 查询接口）
 
-**C1 SSE 实时流 `GET /api/v1/tasks/{id}/stream`（EventSource）**
-`PobiV2EventHooks` 将 agent 事件发布到事件总线（Redis pub/sub / memory）→ `routers/stream.py` 订阅推送，前端 `eventToChat` 渲染为聊天气泡：
+**C1 SSE 实时流 `GET /api/v1/tasks/{id}/stream`**
+`PobiV2EventHooks` 将 agent 事件发布到事件总线（Redis pub/sub / memory）→ `routers/stream.py` 订阅推送。
+前端消费：`webapp/src/api.js:openTaskStream()`（**手写流解析而非 `EventSource`**——需通配监听具名事件；token 走查询参数 `?token=`）→ 由 `webapp/src/events.js` 的 `categoryOf` / `typeLabel` / `describeEvent` / `eventTone` 归一化后，在 `pages/TaskConsole.jsx` 渲染为聊天气泡：
 
 | 事件类型 | 前端呈现 |
 |---|---|
@@ -167,15 +184,33 @@ tasks/<task_id>/
 | 侦察结论（端点/技术/事实） | run_context/context.txt | ✅ recon_facts/endpoints/techniques | ✅ task_context_agg（context.txt，终态落库） | ✅ threats 态势条 |
 | Agent 经验摘要 | ✅ memory/summaries/*.md | — | ✅ task_memory_agg（终态落库） | — |
 | 认证会话 | ✅ auth_context/*.json | ✅ recon_facts（authentication） | ❌ 不落库（每次重认证） | ✅ agent 状态事件 |
-| HTTP 请求/响应 | ✅ requester.jsonl | 网页内容进 RAG 库 | ✅ task_metrics_agg（rag 索引元数据，终态落库） | ✅ tool_call 事件摘要 |
+| HTTP 请求/响应 | ✅ requester.jsonl + sitemap/katana_raw.jsonl | ✅ recon_http_transactions（结构化，source 区分来源，**响应体分层存储**） | ✅ recon_http_transactions_agg（target 级 url 收敛，终态落库） | ✅ tool_call 事件摘要 |
 | Python 执行 | ✅ python_interpreter.jsonl | 结论进 recon_facts | — | ✅ tool_call 事件 |
 | 用量/指标 | ✅ metrics.json | — | ✅ task_metrics_agg（终态落库） | ✅ /usage、SSE token 卡 |
 
 ### 结论口径
 
 - **本地文件**：日志、运行上下文、认证会话、记忆摘要、metrics、scope/validation——过程与调试数据；
-- **本地 sqlite**：`<task_id>.db`（recon 五表）承载侦察/威胁结构化成果，RAG 库承载网页代码索引——可查结果数据；
+- **本地 sqlite**：`<task_id>.db`（recon 六表，含 recon_http_transactions）承载侦察/威胁结构化成果，RAG 库承载网页代码索引——可查结果数据；
 - **前端推送**：SSE 实时事件流 + 查询接口组合，展示状态、思考、LLM 过程、计划、威胁态势。
+
+### 响应体分层存储 + 目标级增量（HTTP 事务，2026-09-02）
+
+> sitemap/requester 共用的事务表 `recon_http_transactions`（本地流水）与 PG 聚合表 `recon_http_transactions_agg`（target 级收敛）语义不同：**本地看当前任务流水（保留每次请求历史）**，**PG 看目标跨任务最新状态（url 维度行收敛）**。站点地图页本地按 task 读流水，跨任务视图按 target 查 PG agg。
+
+**本地分层存储**（`insert_http_transaction`，store.py）：
+
+| 策略 | 触发条件 | response_body | body_compressed |
+|---|---|---|---|
+| `full` | <100KB（含 json/xml） | 明文全量 | — |
+| `compressed` | 100KB–1MB 非 API；**或 json/xml API ≥100KB（全量保留）** | 200 字符预览 | gzip 压缩全量（BLOB） |
+| `digest` | >1MB 非 API | 前 2048 字符摘要 | — |
+
+- 常量：`_BLOB_THRESHOLD_BYTES=100KB` / `_COMPRESS_MAX_BYTES=1MB` / `_DIGEST_PREFIX_BYTES=2048` / `_API_CONTENT_TYPE_RE`（json/xml 判定）。
+- 读取侧**按需拉取**：`list_http_transactions` 只回骨架（`storage_strategy` + `body_available` 标记），`get_transaction_body(task_id, tx_id)` 解压/取全文，列表不拖大 body。
+- 旧库 `_migrate` 幂等补列（`storage_strategy`/`body_compressed`/`pg_synced_at`）。
+
+**目标级增量（PG）**：完成推送 `upsert_to_pg` 读本地脏事务（`pg_synced_at IS NULL`）→ `recon_http_transactions_agg`（唯一键 `target_id+tenant_id+method+url`，ON CONFLICT 只留最新，含分层 body）→ 提交成功后打标；新任务 `seed_from_pg` 拉目标事务骨架灌本地端点树（covered_block / L1 增量提示，避免重复枚举已抓 url）。
 
 ### 本地文件沉淀层落库到 PG（历史经验复用，2026-08-31 落地，迁移 0016_artifact_agg）
 
@@ -189,7 +224,7 @@ tasks/<task_id>/
 
 **落库边界（明确排除认证）**
 - ✅ 落库：Agent 经验摘要 `agent/memory/summaries/*.md`、运行上下文 `agent/run_context/context.txt`、会话指标 `metrics/metrics.json`、RAG 索引元数据（`rag/` 仅存引用，不存向量二进制）。
-- ❌ **不落库**：认证相关 `agent/auth_context/*`（含 `target_session.json`/`playwright_state.json`/`index.json`）——会话有时效且属敏感凭据，**每次任务重新发起认证**，不跨任务复用。
+- ❌ **不落库**：认证相关 `agent/auth_context/*`（含 `target_session.json`/`playwright_state.json`/`index.json`）与任务凭据钱包 `reusable_credentials.json`——会话/凭据有时效且属敏感凭据（不可复用资产，登录态失效即作废），**每次任务重新发起认证**，不跨任务复用；凭据仅落任务目录文件供 authenticator 重认证消费（2026-09-02 强化：`tasks.auth_secret` 列已删，密码全程不落任何数据库）。
 
 **PG 新增聚合表（与 `recon_facts_agg` 同级，按 `target_id`+`tenant_id` 维度，级联删除挂 targets/tenants）**
 | 表 | 字段 | 来源本地文件 | 唯一约束 |
@@ -211,7 +246,7 @@ tasks/<task_id>/
    - 异常仅记 warning 不阻断主循环（与现有 recon 旁路同策略），任务取消不影响已落库数据。
 
 **复用流程（新任务启动期，已落地）**
-- 现有 `seed_from_pg(target_id)` 续扫 Recon（L0/L1/L2）→ 灌本地 sqlite（`pobi_agent.py:997` 调用）。
+- 现有 `seed_from_pg(target_id)` 续扫 Recon（L0/L1/L2）→ 灌本地 sqlite。**2026-09-02 修复触发面**：原仅 ADaPT `pobi_agent.py:start_supervisor` 分支调用，生产主链路（deadend_runner → threat_model → execute_supervisor）从未触发，导致历史沉淀无法续扫；现 `deadend_runner` 在任务启动、pre_recon 完成后、`threat_model` 前调用 `seed_from_pg` + `seed_local_artifacts` 预热（失败仅 warning），与 ADaPT 分支对齐。
 - 新增 `ReconStore.seed_local_artifacts(task_root, target_id, tenant_id, async_session_factory)`（`store.py` 实现，`pobi_agent.py:1013` 紧接 seed_from_pg 调用）：从三张 agg 表拉取 → 写回新任务 `agent/memory/summaries/` 与 `agent/run_context/context.txt`（仅当本地尚无内容时写入，避免覆盖新任务自身产出），使 `ContextEngine` 与 `_persist_agent_summary` 启动即读到历史经验。
 - RAG 索引因体积大仅存元数据引用，新任务按 `rag_index_ref` 按需重建（或跳过，降级走 facts/shell）。
 - agent 首轮 prompt 注入顺序（已成立）：目标上下文 → 历史 recon（含 L2 经验）→ covered_block → **最后才发 Approach 工作指令**，保证先读历史再开工。
