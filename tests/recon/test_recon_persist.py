@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from pathlib import Path
 
@@ -57,6 +58,10 @@ def test_persist_endpoints_have_auth_marker(tmp_path: Path) -> None:
     engine = _make_engine(tmp_path)
     executor_mod._persist_recon_facts(engine, "requester", _sample_output())
 
+    # 端点树由事务派生（单一真源），先派生再断言
+    asyncio.run(
+        engine.recon_store.derive_endpoints_from_transactions(str(engine.session_id))
+    )
     endpoints = engine.recon_store.list_endpoints(task_id=str(engine.session_id))
     auth_paths = {e["path"] for e in endpoints if e.get("auth_required")}
     assert "/login.php" in auth_paths

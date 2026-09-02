@@ -41,6 +41,21 @@ def _pg_agg_threat(cve_id, title="t", category="cve", severity="high", status="c
     return t
 
 
+def _pg_agg_tx(url="/api/v2", path="/api/v2", method="GET", status=200, host="ex.com",
+               source="sitemap:katana", params=None, tech=None):
+    t = MagicMock()
+    t.url = url
+    t.path_normalized = path
+    t.method = method
+    t.status_code = status
+    t.host = host
+    t.source = source
+    t.parameters = params or []
+    t.tech_stack = tech or []
+    t.auth_required = False
+    return t
+
+
 @pytest.mark.asyncio
 async def test_seed_counts_new_and_covered(tmp_path):
     # 注意：_task_id_of_db() 从 db 文件名反推 task_id，文件名须与 ensure_session 的 task_id 一致。
@@ -50,6 +65,8 @@ async def test_seed_counts_new_and_covered(tmp_path):
     pg_session = AsyncMock()
     result_e = MagicMock()
     result_e.scalars.return_value.all.return_value = []  # recon_endpoints_agg：本轮无资产
+    result_tx = MagicMock()
+    result_tx.scalars.return_value.all.return_value = []  # http 事务骨架：无
     result_f = MagicMock()
     result_f.scalars.return_value.all.return_value = [
         _pg_agg_fact("endpoint", "/api/v1"),
@@ -59,8 +76,11 @@ async def test_seed_counts_new_and_covered(tmp_path):
     result_t.scalars.return_value.all.return_value = [
         _pg_agg_threat("CVE-2024-0001", status="confirmed"),
     ]
-    # seed_from_pg 依次查询 endpoints → facts → threats 三张聚合表；cycle 保证二次 seed 复用同序。
-    pg_session.execute.side_effect = itertools.cycle([result_e, result_f, result_t])
+    # seed_from_pg 依次查询 endpoints → http_tx → facts → threats 四张聚合表；
+    # cycle 保证二次 seed 复用同序。
+    pg_session.execute.side_effect = itertools.cycle(
+        [result_e, result_tx, result_f, result_t]
+    )
 
     factory = MagicMock()
     factory.return_value.__aenter__.return_value = pg_session
@@ -90,13 +110,17 @@ async def test_seed_higher_confidence_overwrites(tmp_path):
     pg_session = AsyncMock()
     result_e = MagicMock()
     result_e.scalars.return_value.all.return_value = []  # endpoints 聚合：空
+    result_tx = MagicMock()
+    result_tx.scalars.return_value.all.return_value = []  # http 事务：空
     result_f = MagicMock()
     result_f.scalars.return_value.all.return_value = [
         _pg_agg_fact("technology", "nginx", value="new", confidence=0.95),
     ]
     result_t = MagicMock()
     result_t.scalars.return_value.all.return_value = []
-    pg_session.execute.side_effect = itertools.cycle([result_e, result_f, result_t])
+    pg_session.execute.side_effect = itertools.cycle(
+        [result_e, result_tx, result_f, result_t]
+    )
 
     factory = MagicMock()
     factory.return_value.__aenter__.return_value = pg_session
@@ -112,6 +136,46 @@ async def test_seed_higher_confidence_overwrites(tmp_path):
         ).scalar_one()
         assert row.value == "new"
         assert row.confidence == 0.95
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_seed_seeds_http_tx_skeleton(tmp_path):
+    """目标级 HTTP 事务骨架 seed：历史已抓 url 灌入端点树（增量提示，避免重复枚举）。"""
+    store = ReconStore(tmp_path / "tx.db")
+    store.ensure_session("t")
+
+    pg_session = AsyncMock()
+    result_e = MagicMock()
+    result_e.scalars.return_value.all.return_value = []
+    result_tx = MagicMock()
+    result_tx.scalars.return_value.all.return_value = [
+        _pg_agg_tx(url="http://ex.com/api/v2?q=1", path="/api/v2",
+                   params=["q"], source="sitemap:katana"),
+    ]
+    result_f = MagicMock()
+    result_f.scalars.return_value.all.return_value = []
+    result_t = MagicMock()
+    result_t.scalars.return_value.all.return_value = []
+    pg_session.execute.side_effect = itertools.cycle(
+        [result_e, result_tx, result_f, result_t]
+    )
+
+    factory = MagicMock()
+    factory.return_value.__aenter__.return_value = pg_session
+
+    res = await store.seed_from_pg("11111111-1111-1111-1111-111111111111",
+                                   "22222222-2222-2222-2222-222222222222", factory)
+    # 事务骨架 path 进入 covered_endpoints（增量提示），且落入本地端点树。
+    assert "/api/v2" in res.covered_endpoints
+    assert res.seeded_count == 1
+    with store._session_factory() as s:
+        from sqlalchemy import select as _sel
+        from pobi_agent.recon.sqlite_models import ReconEndpoint as _E
+
+        row = s.execute(_sel(_E).where(_E.path_normalized == "/api/v2")).scalar_one()
+        assert row.parameters == ["q"]
+        assert row.discovered_via == "sitemap:katana:seed"
     store.close()
 
 

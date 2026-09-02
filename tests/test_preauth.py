@@ -391,3 +391,72 @@ async def test_auto_submit_timeout():
     )
     assert r["success"] is False
     assert "超时" in r["error"]
+
+
+# ---------------------------------------------------------------------------
+# 凭据落任务目录（不落库，仅文件供 authenticator 重认证消费）
+# ---------------------------------------------------------------------------
+
+
+def test_save_task_credentials_writes_task_wallet(tmp_path):
+    """save_task_credentials 只写任务目录钱包，凭据随任务走、不落库。"""
+    from pobi_agent.auth_resolver import CredentialsStore
+
+    wallet = preauth.save_task_credentials(
+        task_root=Path(tmp_path),
+        target="https://pwn.example:8081/login",
+        username="admin",
+        password="s3cret!",
+        login_url="https://pwn.example:8081/login.php",
+    )
+    assert wallet == Path(tmp_path) / "reusable_credentials.json"
+    assert wallet.exists()
+    data = json.loads(wallet.read_text(encoding="utf-8"))
+    creds = data["targets"]["pwn.example:8081"]["credentials"]["preauth"]
+    assert creds["username"] == "admin"
+    assert creds["password"] == "s3cret!"
+
+    # 任务外（无 task_root 注入）不读任务钱包 —— 凭据隔离在任务目录内
+    assert CredentialsStore.resolve("https://pwn.example:8081/login", "preauth").password is None
+
+
+async def test_credentials_store_resolves_task_wallet(tmp_path):
+    """authenticator 重认证时（task_root 已注入）能从任务目录钱包读到凭据。"""
+    from pobi_agent.auth_resolver import CredentialsStore
+    from pobi_agent.storage_context import clear_task_root, set_task_root
+
+    preauth.save_task_credentials(
+        task_root=Path(tmp_path),
+        target="https://pwn.example/login",
+        username="admin",
+        password="s3cret!",
+    )
+    token = set_task_root(Path(tmp_path))
+    try:
+        creds = CredentialsStore.resolve("https://pwn.example/login", "preauth")
+        assert creds.username == "admin"
+        assert creds.password == "s3cret!"
+    finally:
+        clear_task_root(token)
+
+
+def test_write_auth_facts_no_username(tmp_path):
+    """认证事实不再携带 username（凭据不落 recon sqlite）。"""
+    task_id = "t-facts"
+    preauth._write_auth_facts(
+        task_id=task_id,
+        task_root=Path(tmp_path),
+        target="https://example.com",
+        profile="preauth",
+        source="preauth_auto",
+        auth_status="success",
+        username="admin",  # 传入但不应落库
+        error=None,
+    )
+    store = ReconStore.for_task(task_id, str(tmp_path))
+    store.ensure_session(task_id, target="https://example.com")
+    rows = store.list_facts(task_id, category="authentication")
+    status_row = [r for r in rows if r["key"] == "auth_status"][0]
+    details = status_row.get("details") or {}
+    assert "username" not in details
+    assert "admin" not in json.dumps(status_row)
