@@ -907,6 +907,57 @@ class AgentExecutor:
                     return str(output.model_dump())
                 return str(output)
 
+            @supervisor.agent.tool
+            async def call_recon_lookup(
+                ctx: RunContext[SupervisorDeps],
+                host: str | None = None,
+                tech: str | None = None,
+                path_prefix: str | None = None,
+                category: str | None = None,
+                keyword: str | None = None,
+                limit: int = 20,
+            ) -> str:
+                """检索本任务已物化的侦察资产（端点/技术栈/事实），按需下钻详细信息。
+
+                当索引层信息不足、需要某个端点的详细参数、某技术栈的历史测试结果、
+                或按关键词查找已有发现时调用。命中可复用历史结论，避免重复探索。
+
+                Args:
+                    host: 按主机精确匹配（如 target.com）
+                    tech: 按技术栈/手法匹配（如 nginx、sql-injection）
+                    path_prefix: 按端点路径前缀匹配（如 /api/user）
+                    category: 按事实类别匹配（如 endpoint、technology、vulnerability）
+                    keyword: 关键词全文检索（FTS5 模糊召回）
+                    limit: 返回上限（默认 20）
+                """
+                empty = json.dumps(
+                    {"found": False, "count": 0, "results": [], "hint": "无匹配侦察资产"},
+                    ensure_ascii=False,
+                )
+                context = ctx.deps.context
+                if context is None or context.recon_store is None:
+                    return empty
+                try:
+                    results = context.recon_store.lookup(
+                        task_id=str(ctx.deps.session_id),
+                        host=host,
+                        tech=tech,
+                        path_prefix=path_prefix,
+                        category=category,
+                        keyword=keyword,
+                        limit=limit,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 工具失败不阻断主流程
+                    logger.warning("supervisor recon_lookup 查询失败（已忽略）: %s", exc)
+                    return empty
+                if not results:
+                    return empty
+                return json.dumps(
+                    {"found": True, "count": len(results), "results": results,
+                     "hint": "命中本地侦察资产，可复用历史结论"},
+                    ensure_ascii=False, indent=2,
+                )
+
             # Execute task with supervisor
             supervisor_prompt = f"Your task is : {task_node.task}\n"
 

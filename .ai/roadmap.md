@@ -89,6 +89,14 @@
   - 验证：构造一个前端 AES 加密回显的靶场，任务应能从 JS 逆向算法 → 发出合法密文 → 解密响应 → 确认注入命中并上报 finding。
 - [ ] 白盒代码分析（可选）：`pobi_agent.code_indexer.SourceCodeIndexer`（Playwright/Embedder/RAG），默认关闭，依赖齐备后启用，缺失优雅降级黑盒
 - [ ] **探索过程可检索化（P1–P4，2026-09-01 立项）**：源自下方「外部项目借鉴分析（ARTEX）」，P1 优先。
+- [ ] **Agent 记忆与上下文分层优化（2026-09-03 立项，方案见 `docs/agent-memory-architecture-plan.md`）**：核心问题是上下文膨胀 + 三个真缺口（工作记忆 / 结构化摘要回流 / 威胁未落库）。
+  - **M0 现状基线（已完成）**：`.ai/architecture.md` 新增「上下文与记忆分层」章节，固化注入入口与预算、SECTION 结构、已上线能力与已知缺口。**后续推导一律以该节为准**，勿再按「L0/L1/L2 待新增 / 威胁无人写」的旧描述推演。
+  - [ ] **M1 上下文压缩**：SECTION 3/4（COMPLETE TEST HISTORY / KEY DISCOVERIES）加预算裁剪；`maybe_summarize_context` 阈值由 `200_000` 下调至 ~30k；`_add_agent_output_to_context` 把子 agent detailed_summary/proofs 摘要化后再入 fact。验收：同类任务 token 量对比下降，且 findings 不回归。
+  - [ ] **M2 结构化摘要注入**：新增 `add_agent_summary` → `deque(K)` → `get_unified_context` 注入最近 K 条，降低「每轮 MemoryAgent LLM 重汇总」开销（保留原路径降级）。
+  - [ ] **M3 工作记忆窗口**：`ContextEngine.working_memory = deque(maxlen=3)`，requester 读写当前 cookie/session_key/payload，与 `message_history` 协同不重复。
+  - [ ] **M4 威胁闭环**：executor 旁路补威胁创建入口（**复用** `upsert_threat` / `record_threat_status`，不重建状态机），利用阶段注入「待验证威胁清单」逐条推进状态机 → PG 同步 → 前端威胁列表。验收：真实任务 `recon_threats` 有 agent 自产记录，前端态势条非空。
+  - **明确不做（红线）**：① 另起一套 L0/L1/L2 注入逻辑（已上线，只扩展 `build_index_view`）；② 给 `recon_http_transactions` 加 `(uri_template, body_md5)` 唯一索引去重（破坏 append-only 流水语义，去重只在 PG `recon_http_transactions_agg` 层）；③ 引入 LanceDB/Chroma（沿用 `SqliteRagConnector`，保持零外部依赖 + 任务隔离）；④ 新建独立 `memory_storage/` 目录（破坏任务隔离与 PG 聚合闭环）。完整红线见 `.ai/constraints.md`「上下文与记忆分层」条目。
+
 - [ ] **manual 认证分支残留清理（2026-09-01 依源码校正确认）**：手动登录分支已搁置，残留物未清理——① ~~`webapp/src/pages/Tasks.jsx` 的 `auth_mode === 'manual'` 渲染分支与表单选项~~ **已于 2026-09-02 注释**（hint 同步更新）；② `webapp/src/components/AuthPanel.jsx`（随搁置未启用，手动状态/函数/UI 已注释，保留状态展示）；③ `pobi_v2/engine/preauth.py` 的 `ManualAuthSession` 及相关函数注释块；④ `tests/test_preauth.py` 的 `test_manual_session_ttl_*` 注释用例。
   - **决策点**：永久放弃手动分支 → 删除 ①②③④；计划重启（MFA / 验证码场景）→ 保留 ③ 作设计参考，仅清理 ①② 死代码，且重启前须先解决多 worker 下进程内注册表失效问题。
 

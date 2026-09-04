@@ -77,6 +77,81 @@
 5. 完成 → 状态 `completed`/`failed`/`cancelled`，`result` 写入；报告经 `routers/report.py` 导出。
 6. SSE 断连 → `GET /api/v1/tasks/{id}/events`（`after_seq` 游标）回放，弥补断连即丢。
 
+## 上下文与记忆分层（ContextEngine，2026-09-03 依源码校正）
+
+> 本节用于消除「记忆架构」相关描述与代码的偏差：**L0/L1/L2 分层索引与威胁状态机均已上线**，真正缺失的是「工作记忆窗口 / 落盘摘要的结构化回流 / 生产路径创建威胁」。
+
+### 两级结构
+
+| 层 | 载体 | 职责 |
+|---|---|---|
+| 结构化层 | `StructuredContext` | 内存事实/执行记录容器，`get_unified_context` 按 SECTION 拼装 |
+| 编排层 | `ContextEngine`（`pobi_agent/context/context_engine.py`） | 持有 `structured` + `workflow_context` + `recon_store`，在结构化上下文前部挂载 RECON 分层块 |
+
+### 注入入口与默认预算（实测值）
+
+| 入口 | 默认 | 消费方 |
+|---|---|---|
+| `StructuredContext.get_unified_context(max_tokens=6000)`（`:635`） | 6000 | 被编排层同名方法包一层 |
+| `ContextEngine.get_unified_context(max_tokens=6000)`（`:1088`） | 6000 | executor / validator / planner / router 共用 |
+| `ContextEngine.get_executor_context(max_tokens=6000)`（`:461`） | 6000 | 执行器专用 |
+| `ContextEngine.get_all_context(max_tokens=8000)`（`:1033`，async） | 8000 | workflow 全文 |
+| `ReconStore.build_index_view`（`store.py:692`） | L1=500 / L2=1500 | L0/L1/L2 分层块 |
+| `ReconStore.build_baseline_block(task_id, token_budget=2000)`（`store.py:1958`） | 2000 | supervisor 启动注入 |
+
+### SECTION 结构（`StructuredContext.get_unified_context`，`:635-`）
+
+| SECTION | 内容 | 截断语义 |
+|---|---|---|
+| 1 | Target + Goal（`:642`） | 全量 |
+| 2 | FLAG/EXPLOIT FOUND 复现步骤（`:650`） | 全量 |
+| 3 | COMPLETE TEST HISTORY（按 endpoint 分组的全部 executions，`:677`） | **无截断**（注释 `exhaustive, no truncation`） |
+| 4 | KEY DISCOVERIES（finding/technology/attack_vector/feature，`:708`） | **无截断**（注释 `full text, no truncation`） |
+| 5 | IDENTIFIED ENDPOINTS（`:721`） | 全量 |
+| 6 | VULNERABILITIES（category=vulnerability 的 facts，按 confidence 标 CONFIRMED/SUSPECTED/POSSIBLE，`:741`） | `response_excerpt` 截 200 字符 |
+| 6.5 | AUTHENTICATION STATE（authentication/credential facts，`:755`） | 全量 |
+| 7 | AGENT INSIGHTS（`thoughts` 最近 5 条，`:775`） | 取 `summary` 或 `thought[:150]` |
+| 8 | NEXT STEPS（最近 5 条 executions 的 `next_steps`，`:785`） | 限 5 条 |
+
+> **SECTION 3/4 是主膨胀源**：随任务推进线性增长且全文入 prompt，`max_tokens` 未作用于这两块。
+> **SECTION 7 已提供「最近 5 条 insights」注入**（读内存 `thoughts`），故「摘要注入」并非从零缺失——缺的是落盘摘要与注入之间的**结构化桥梁**（见下）。
+
+### 长期记忆（已上线，勿重复建设）
+
+- `ReconStore.build_index_view` 实现 L0 目标基线 / L1 端点技术栈（≤500 tok）/ L2 可复用利用经验（≤1500 tok），预算常量见 `store.py:61-62`。
+- 挂载点：`ContextEngine._build_recon_index_block`（`:1119`）在 `get_unified_context` 内前置拼接 RECON 块（`:1113-1117`），异常仅 warning 跳过。
+- 启动期另有 `build_baseline_block`（预算 2000）注入 supervisor prompt，使 supervisor 运行前即持有目标基线。
+- 跨任务续扫：`deadend_runner` 在 pre_recon 后、`threat_model` 前调 `seed_from_pg` + `seed_local_artifacts`。
+
+### 摘要回流（已上线，形态为「每轮 LLM 重汇总」）
+
+- `DeadEndAgent._populate_memory_context`（`pobi_agent.py:330`）在 supervisor 执行前用 `MemoryAgent`（`generic_agents/memory_agent.py`，`message_history=[]` 单轮）读 AVFS memory workspace，产出纯文本摘要回灌 `memory_context` 并分发给 executor / shell / requester / webapprecon deps。
+- 落盘侧：`executor._persist_agent_summary` 写 `agent/memory/summaries/<agent>.md`。
+- **缺口**：摘要只落盘 + 每轮 LLM 重新汇总，**无「最近 K 条结构化摘要直接注入」通道**（无 `add_agent_summary`，`ContextEngine` 无摘要 deque）。
+
+### 威胁闭环（状态机已实现，生产路径未接入）
+
+| 能力 | 位置 | 状态 |
+|---|---|---|
+| 创建 `upsert_threat` | `store.py:531` | 已实现（写 SQLite + 置 `pg_synced_at` 脏标记） |
+| 状态机 `update_threat_status`（suspected→confirmed→exploited→remediated，单向、迁 `exploited` 须带 `evidence_summary`） | `store.py:1628` | 已实现 |
+| 公开入口 `record_threat_status`（旁路语义，内部调 `update_threat_status` + `_recon_emit_sync` 触发 PG 同步） | `context_engine.py:1492` | 已实现，**落库** |
+| 自动推进 `_promote_threat_on_success`（`record_attempt` 成功时调用） | `context_engine.py:1469` | 已接线，但**仅在 payload/reason 能正则匹配 `CVE-\d{4}-\d{4,7}` 时生效** |
+| **生产路径调用方** | — | **无**（`upsert_threat` 仅 `store.py:1556/1730` 两处 `seed_from_pg` 回填调用；`record_threat_status` 无外部调用方） |
+
+> **精确结论（勿夸大）**：
+> 1. 状态机本身完备且**落库**（经 `ReconStore` → PG 聚合），并非「只是占位」；
+> 2. 唯一的自动推进路径 `_promote_threat_on_success` **只能识别 CVE 编号**——自研发现的 SQLi / XSS / 弱口令等非 CVE 漏洞永远无法从 `suspected` 推进；
+> 3. 真正的缺口是**「创建」入口完全缺失**：无任何生产路径调用 `upsert_threat` 新建 agent 自身发现的威胁，因此 `recon_threats` 在真实任务中只有 PG 历史回填的记录，利用阶段无结构化「待验证威胁清单」可消费。
+
+### 已知缺口汇总（真缺口）
+
+1. **上下文膨胀**：SECTION 3/4 全量注入；`_add_agent_output_to_context` 把子 agent detailed_summary/proofs 全文塞成 fact；`maybe_summarize_context` 阈值 `200_000`（`:1136`）远超单轮预算，实际不触发。
+2. **无工作记忆窗口**：无 `working_memory`，即时上下文散在 `message_history` / `current_task_log`，无聚焦的「当前 1-3 步」区。
+3. **摘要未结构化回流**：内存 `thoughts` 最近 5 条已由 SECTION 7 注入，但落盘摘要（`agent/memory/summaries/*.md`）与注入之间无结构化桥梁——无 `add_agent_summary`、无 decision/outcome/token_cost 结构化字段、无跨轮持久化的摘要队列，摘要消费仍靠每轮 `MemoryAgent` LLM 重汇总（成本随轮次线性增长）。
+4. **威胁未落库**：见上。
+5. **响应级去重**：`recon_http_transactions` **刻意无幂等键**（`sqlite_models.py:330` 注释：保留每次请求历史以便对比 katana 403 vs requester 200），去重只能在 PG 聚合层 `recon_http_transactions_agg` 做；**禁止**在原始流水表加 `(uri_template, body_md5)` 唯一索引。
+
 ## 任务运行时数据流向（本地文件 / 本地 sqlite / 前端推送）
 
 > 全链路代码核验于 2026-08-31（worker → deadend_runner → ContextEngine/ReconStore → 事件总线 → SSE → 前端）。
