@@ -1,6 +1,6 @@
 {
   "project": "pobi_v2",
-  "last_updated": "2026-09-05T23:56:00+08:00",
+  "last_updated": "2026-09-06T00:15:00+08:00",
   "current_test_task": {
     "task_id": "3e1d7d33-0409-49d5-a00c-c851be2945b2",
     "name": "dvwa-sqli-test-v2",
@@ -67,6 +67,28 @@
       "impact": "成本核算功能失效",
       "solution": "待调查",
       "discovered_at": "2026-09-05T23:35:00+08:00"
+    },
+    {
+      "id": "ISSUE-005",
+      "severity": "critical",
+      "status": "fixed",
+      "title": "前端下载报告无意义 - agent 工作区报告未被平台读取",
+      "description": "任务完成后，PG 中只有兜底的'扫描摘要' finding（severity=info, confidence=0），无 report artifact。agent 在工作区生成的详细报告（dvwa-sqli.md，含漏洞确认、5步递进测试、payload、MariaDB 报错证据、修复建议）完全未被平台读取和持久化。",
+      "evidence_code": "deadend_runner.py _normalize_outcome() findings 初始化为空列表且从未填充；_persist_outcome() 仅在 structured_report.report 存在时保存 artifact，但 ReporterAgent 通常无输出",
+      "evidence_log": "报告 API 返回 severity_counts={info:1}, findings=[{title:'扫描摘要', confidence:0.0}], artifacts=[]",
+      "impact": "前端下载的报告只有空壳摘要，无实际漏洞详情、payload、证据，完全不可用",
+      "solution": "新增 _collect_workspace_reports() 读取工作区报告；_extract_finding_from_report() 从报告提取 findings；新增 artifact 下载端点",
+      "fixed_at": "2026-09-06T00:10:00+08:00"
+    },
+    {
+      "id": "ISSUE-006",
+      "severity": "medium",
+      "status": "fixed",
+      "title": "缺少 artifact 下载端点",
+      "description": "只有 GET /tasks/{id}/artifacts 列表端点，无下载端点。artifact content 存储在 PG 但无法通过 API 下载。",
+      "evidence_code": "routers/report.py 原仅有 report/report/markdown/report/json 三个端点",
+      "solution": "新增 GET /api/v1/artifacts/{artifact_id}/download，使用 RFC 5987 编码中文文件名",
+      "fixed_at": "2026-09-06T00:10:00+08:00"
     }
   ],
   "code_changes": [
@@ -87,6 +109,22 @@
       "reason": "修复 FTS5 查询函数调用错误，_fts_query 是 staticmethod 需通过 self 调用",
       "decision": "保持 staticmethod 设计，通过 self 引用调用",
       "changed_at": "2026-09-05T23:48:00+08:00"
+    },
+    {
+      "id": "CHANGE-003",
+      "file": "pobi_v2/engine/deadend_runner.py",
+      "change": "新增 _collect_workspace_reports() 读取 agent 工作区 reports/*.md；_normalize_outcome() 新增 workspace_reports 参数和 _extract_finding_from_report() 从报告提取结构化 findings",
+      "reason": "修复报告无意义问题：agent 生成的详细报告（含漏洞确认、payload、证据）未被平台读取，导致 PG 中只有兜底的'扫描摘要' finding，无 report artifact",
+      "decision": "ReporterAgent 无输出时兜底读取工作区报告；从报告文本提取基本 finding（标题、描述、严重级别、证据）",
+      "changed_at": "2026-09-06T00:05:00+08:00"
+    },
+    {
+      "id": "CHANGE-004",
+      "file": "pobi_v2/routers/report.py",
+      "change": "新增 GET /api/v1/artifacts/{artifact_id}/download 端点；markdown 报告追加完整报告正文（来自 report 类型 artifact）；artifact 列表包含 content 字段",
+      "reason": "前端无法下载完整报告内容，只有结构化报告元数据",
+      "decision": "使用 RFC 5987 编码 UTF-8 文件名（支持中文）；Response 直接返回 content",
+      "changed_at": "2026-09-06T00:10:00+08:00"
     }
   ],
   "test_history": [

@@ -506,6 +506,16 @@ async def _run_deadend_agent_body(
     if stop_result is not None and getattr(stop_result, "reporter_output", None):
         report = stop_result.reporter_output
 
+    # 兜底：ReporterAgent 无输出时，读取 agent 工作区中由子 agent 写入的报告文件
+    # （如 requester/exploit agent 通过 write_workspace_file 写入的 reports/*.md）。
+    # 这些报告包含完整的漏洞确认、payload、证据、复现步骤，是实际有价值的交付物。
+    workspace_reports: list[str] = []
+    if not report:
+        workspace_reports = _collect_workspace_reports(task_root)
+        if workspace_reports:
+            # 优先选择非 recon 的报告（如 dvwa-sqli.md），其次 recon_report.md
+            report = workspace_reports[0]
+
     # 实时推送安全评估报告到前端聊天流（前端已具备 report_task_event 渲染分支，
     # 此前后端漏发该事件，导致报告仅落库、UI 不展示）。
     if report:
@@ -524,8 +534,33 @@ async def _run_deadend_agent_body(
         plan=plan,
         validation_token=validation_token,
         report=report,
+        workspace_reports=workspace_reports,
     )
     return outcome
+
+
+def _collect_workspace_reports(task_root: Path) -> list[str]:
+    """读取 agent 工作区 reports/ 目录下的 Markdown 报告，按价值排序返回。
+
+    排序规则：非 recon 报告优先（如 dvwa-sqli.md、exploit-report.md），
+    recon_report.md 次之。仅读取 .md 文件，跳过空文件。
+    """
+    reports_dir = task_root / "agent" / "workspace" / "reports"
+    if not reports_dir.exists():
+        return []
+    collected: list[tuple[str, int]] = []  # (content, priority)
+    for f in sorted(reports_dir.glob("*.md")):
+        try:
+            content = f.read_text(encoding="utf-8").strip()
+            if not content:
+                continue
+            # recon 报告优先级低（值越大越靠后）
+            priority = 10 if "recon" in f.name.lower() else 0
+            collected.append((content, priority))
+        except Exception:
+            continue
+    collected.sort(key=lambda x: x[1])
+    return [c[0] for c in collected]
 
 
 def _normalize_outcome(
@@ -534,6 +569,7 @@ def _normalize_outcome(
     plan: Any,
     validation_token: str,
     report: str | None = None,
+    workspace_reports: list[str] | None = None,
 ) -> dict:
     """把 DeadEndAgent 的产出（recon_report / plan / validation_token / report）归一化。"""
     summary_parts: list[str] = []
@@ -544,12 +580,32 @@ def _normalize_outcome(
     if isinstance(recon_report, dict):
         summary_parts.append(str(recon_report.get("summary") or ""))
         structured_report.update(recon_report)
+        # 从 recon_report 中提取 findings
+        raw_findings = recon_report.get("findings")
+        if isinstance(raw_findings, list):
+            for f in raw_findings:
+                if isinstance(f, dict):
+                    findings.append({
+                        "title": str(f.get("title", "未命名发现")),
+                        "description": str(f.get("description", "")),
+                        "severity": str(f.get("severity", "info")).lower(),
+                        "confidence": float(f.get("confidence", 0.0) or 0.0),
+                        "evidence": str(f.get("evidence", ""))[:4000],
+                        "cwe": f.get("cwe"),
+                    })
     elif isinstance(recon_report, str):
         summary_parts.append(recon_report)
 
     if report:
-        summary_parts.append(report)
+        summary_parts.append(report[:500])  # 摘要只取前500字符
         structured_report["report"] = report
+
+    # 从工作区报告中提取 findings（报告标题 + 首段作为描述）
+    if workspace_reports and not findings:
+        for wr in workspace_reports:
+            finding = _extract_finding_from_report(wr)
+            if finding:
+                findings.append(finding)
 
     if plan is not None:
         if hasattr(plan, "confidence_score"):
@@ -564,12 +620,79 @@ def _normalize_outcome(
     structured_report.setdefault("summary", summary)
     if validation_token:
         structured_report["validation_token"] = validation_token
+    if findings:
+        structured_report["findings"] = findings
 
     return {
         "summary": summary,
         "confidence": confidence,
         "structured_report": structured_report,
         "findings": findings,
+    }
+
+
+def _extract_finding_from_report(report_text: str) -> dict | None:
+    """从 Markdown 报告文本中提取基本漏洞发现。
+
+    解析报告标题（# 开头）和关键信息（漏洞类型、端点、payload），
+    生成一条结构化 finding。无法解析时返回 None。
+    """
+    lines = report_text.strip().splitlines()
+    title = ""
+    for line in lines:
+        if line.startswith("# "):
+            title = line[2:].strip()
+            break
+    if not title:
+        # 尝试从 TL;DR 或 Confirmed Vulnerability 段提取
+        for line in lines:
+            if "vulnerability" in line.lower() or "漏洞" in line:
+                title = line.strip().lstrip("#-* ").strip()
+                break
+    if not title:
+        title = "渗透测试发现"
+
+    # 提取描述（前 500 字符非空内容）
+    description_parts = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and not stripped.startswith("```"):
+            description_parts.append(stripped)
+        if len(" ".join(description_parts)) > 500:
+            break
+    description = " ".join(description_parts)[:500]
+
+    # 判断严重级别
+    severity = "info"
+    report_lower = report_text.lower()
+    if any(kw in report_lower for kw in ["rce", "remote code execution", "远程代码执行", "sql injection", "sql 注入", "sqli"]):
+        severity = "high"
+    elif any(kw in report_lower for kw in ["xss", "cross-site", "csrf", "idor", "信息泄露", "information disclosure"]):
+        severity = "medium"
+    elif any(kw in report_lower for kw in ["low", "低危", "信息收集", "recon"]):
+        severity = "low"
+
+    # 提取证据（payload 或 error message）
+    evidence = ""
+    for i, line in enumerate(lines):
+        if any(kw in line.lower() for kw in ["payload", "poc", "exploit", "证据", "proof"]):
+            # 取后续几行作为证据
+            evidence_lines = []
+            for j in range(i, min(i + 10, len(lines))):
+                evidence_lines.append(lines[j])
+            evidence = "\n".join(evidence_lines)[:2000]
+            break
+    if not evidence:
+        # 取报告前 2000 字符作为证据
+        evidence = report_text[:2000]
+
+    return {
+        "title": title[:200],
+        "description": description,
+        "severity": severity,
+        "confidence": 0.8,  # 来自 agent 写入的报告，置信度较高
+        "evidence": evidence,
+        "cwe": None,
     }
 
 
