@@ -660,21 +660,24 @@ class StructuredContext:
                 lines.append(f"Method: {fact.value}")
                 if fact.details:
                     if fact.details.get("payload"):
-                        lines.append(f"Payload: {fact.details['payload']}")
+                        lines.append(f"Payload: {str(fact.details['payload'])[:500]}")
                     if fact.details.get("endpoint"):
                         lines.append(f"Endpoint: {fact.details['endpoint']}")
                     if fact.details.get("validation_token"):
                         lines.append(f"Flag: {fact.details['validation_token']}")
-            for exec_rec in flag_execs:
+            # flag_execs 限数：最多 10 条（取最近的），key_finding/parameters 限长
+            for exec_rec in flag_execs[-10:]:
                 lines.append(f"Action: {exec_rec.action}")
                 lines.append(f"Endpoint: {exec_rec.target_endpoint}")
                 lines.append(f"Technique: {exec_rec.technique}")
                 if exec_rec.parameters:
-                    lines.append(f"Parameters: {exec_rec.parameters}")
-                lines.append(f"Result: {exec_rec.key_finding}")
+                    lines.append(f"Parameters: {str(exec_rec.parameters)[:300]}")
+                lines.append(f"Result: {exec_rec.key_finding[:200]}")
+            if len(flag_execs) > 10:
+                lines.append(f"... ({len(flag_execs) - 10} more successful executions omitted)")
             sections.append("\n".join(lines))
 
-        # SECTION 3: COMPLETE TEST HISTORY (exhaustive, no truncation)
+        # SECTION 3: TEST HISTORY (success 全保留，failure 每 endpoint 最多 5 条，key_finding 限长 100)
         if self.executions:
             by_endpoint: Dict[str, List[ExecutionRecord]] = {}
             for ex in self.executions:
@@ -696,33 +699,38 @@ class StructuredContext:
                     for ex in successes:
                         lines.append(f"  - {ex.technique}")
                         if ex.key_finding:
-                            lines.append(f"    → {ex.key_finding}")
+                            lines.append(f"    → {ex.key_finding[:100]}")
                 if failures:
                     lines.append("✗ FAILED:")
-                    for ex in failures:
+                    # failure 每 endpoint 最多 5 条（取最近的）
+                    for ex in failures[-5:]:
                         reason = ex.key_finding or ex.result_status
-                        lines.append(f"  - {ex.technique} [{reason}]")
+                        lines.append(f"  - {ex.technique} [{reason[:100]}]")
+                    if len(failures) > 5:
+                        lines.append(f"  ... ({len(failures) - 5} more failures omitted)")
 
             sections.append("\n".join(lines))
 
-        # SECTION 4: KEY DISCOVERIES (full text, no truncation)
+        # SECTION 4: KEY DISCOVERIES (按 confidence 取前 20 条，value/details 限长 200)
         findings = [f for f in self.facts.values()
                     if f.category in ("finding", "technology", "attack_vector", "feature")]
         if findings:
             lines = ["## KEY DISCOVERIES"]
-            for fact in sorted(findings, key=lambda f: -f.confidence):
-                lines.append(f"[{fact.category}] {fact.key}: {fact.value}")
+            for fact in sorted(findings, key=lambda f: -f.confidence)[:20]:
+                lines.append(f"[{fact.category}] {fact.key}: {fact.value[:200]}")
                 if fact.details:
                     for k, v in fact.details.items():
                         if v and k not in ("source",):
-                            lines.append(f"  {k}: {v}")
+                            lines.append(f"  {k}: {str(v)[:200]}")
+            if len(findings) > 20:
+                lines.append(f"... ({len(findings) - 20} more discoveries omitted)")
             sections.append("\n".join(lines))
 
-        # SECTION 5: IDENTIFIED ENDPOINTS
+        # SECTION 5: IDENTIFIED ENDPOINTS (最多 50 条，notes 限长 100)
         endpoints = [f for f in self.facts.values() if f.category == "endpoint"]
         if endpoints:
             lines = ["## ENDPOINTS"]
-            for ep in endpoints:
+            for ep in endpoints[:50]:
                 details = ep.details or {}
                 params = details.get("parameters", [])
                 auth = "🔒" if details.get("auth_required") else "🔓"
@@ -734,22 +742,26 @@ class StructuredContext:
                 if techs:
                     line += f" [{techs}]"
                 if notes:
-                    line += f" - {notes}"
+                    line += f" - {str(notes)[:100]}"
                 lines.append(line)
+            if len(endpoints) > 50:
+                lines.append(f"... ({len(endpoints) - 50} more endpoints omitted)")
             sections.append("\n".join(lines))
 
-        # SECTION 6: VULNERABILITIES STATUS
+        # SECTION 6: VULNERABILITIES STATUS (按 confidence 取前 20 条，value 限长 200，payload 限长 300)
         vulns = [f for f in self.facts.values() if f.category == "vulnerability"]
         if vulns:
             lines = ["## VULNERABILITIES"]
-            for v in vulns:
+            for v in sorted(vulns, key=lambda f: -f.confidence)[:20]:
                 status = "CONFIRMED" if v.confidence >= 0.8 else "SUSPECTED" if v.confidence >= 0.5 else "POSSIBLE"
-                lines.append(f"[{status}] {v.key}: {v.value}")
+                lines.append(f"[{status}] {v.key}: {v.value[:200]}")
                 if v.details:
                     if v.details.get("payload"):
-                        lines.append(f"  Payload: {v.details['payload']}")
+                        lines.append(f"  Payload: {str(v.details['payload'])[:300]}")
                     if v.details.get("response_excerpt"):
                         lines.append(f"  Response: {v.details['response_excerpt'][:200]}")
+            if len(vulns) > 20:
+                lines.append(f"... ({len(vulns) - 20} more vulnerabilities omitted)")
             sections.append("\n".join(lines))
 
         # SECTION 6.5: AUTHENTICATION STATE (for authenticated testing)
@@ -789,7 +801,31 @@ class StructuredContext:
             next_steps_facts = [f for f in self.facts.values()
                                if "next" in f.key.lower() or f.category == "finding"]
 
-        return "\n\n".join(sections)
+        # max_tokens 总预算：按优先级从低到高删除 section，直到 <= max_tokens
+        result = "\n\n".join(sections)
+        if len(result) > max_tokens:
+            # 优先级从低到高（先删最低优先级）；HEADER(Target/Goal) 和 FLAG/EXPLOIT 是最高优先级，不删，仅硬截断
+            deprioritized = [
+                "## COMPLETE TEST HISTORY",
+                "## KEY DISCOVERIES",
+                "## ENDPOINTS",
+                "## VULNERABILITIES",
+                "## AUTHENTICATION",
+                "## INSIGHTS",
+            ]
+            for marker in deprioritized:
+                for i, s in enumerate(sections):
+                    if s.startswith(marker):
+                        sections.pop(i)
+                        break
+                result = "\n\n".join(sections)
+                if len(result) <= max_tokens:
+                    break
+            # 最终兜底：硬截断（预留截断提示空间，确保总长度 <= max_tokens）
+            if len(result) > max_tokens:
+                trunc_note = "\n... [truncated to max_tokens]"
+                result = result[:max_tokens - len(trunc_note)] + trunc_note
+        return result
 
     def reset(self) -> None:
         """Reset all structured context."""
@@ -875,6 +911,7 @@ class ContextEngine:
         self.assets = {}
         self.target = ""
         self.workflow_context = ""
+        self._max_workflow_chars: int = 50_000  # 环形截断阈值，超过则保留最近内容（完整历史已落盘 context.txt）
         self.final_goal = ""
         self.model = model
 
@@ -1190,6 +1227,9 @@ class ContextEngine:
         appropriate formatting. Also saves to text file.
         """
         self.workflow_context += f"\n{response}\n"
+        # 环形截断：超过阈值时从开头截断，保留最近内容（完整历史已落盘 context.txt）
+        if len(self.workflow_context) > self._max_workflow_chars:
+            self.workflow_context = self.workflow_context[-self._max_workflow_chars:]
 
         # Update structured context log (unless skipped to avoid duplicates)
         if not skip_structured:

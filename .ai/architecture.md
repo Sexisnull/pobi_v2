@@ -147,10 +147,36 @@
 ### 已知缺口汇总（真缺口）
 
 1. **上下文膨胀**：SECTION 3/4 全量注入；`_add_agent_output_to_context` 把子 agent detailed_summary/proofs 全文塞成 fact；`maybe_summarize_context` 阈值 `200_000`（`:1136`）远超单轮预算，实际不触发。
+   - 其中 **`message_history` 跨轮无界**（L3 主膨胀源）已由路径 A（驱动循环 + `window_messages` 窗口化 + `UsageLimits` 刹车）于 2026-09-05 根治；SECTION 3/4 全量注入与 fact 全文（L2 渲染）由正交的 M1 计划治理，不并入路径 A。
 2. **无工作记忆窗口**：无 `working_memory`，即时上下文散在 `message_history` / `current_task_log`，无聚焦的「当前 1-3 步」区。
 3. **摘要未结构化回流**：内存 `thoughts` 最近 5 条已由 SECTION 7 注入，但落盘摘要（`agent/memory/summaries/*.md`）与注入之间无结构化桥梁——无 `add_agent_summary`、无 decision/outcome/token_cost 结构化字段、无跨轮持久化的摘要队列，摘要消费仍靠每轮 `MemoryAgent` LLM 重汇总（成本随轮次线性增长）。
 4. **威胁未落库**：见上。
 5. **响应级去重**：`recon_http_transactions` **刻意无幂等键**（`sqlite_models.py:330` 注释：保留每次请求历史以便对比 katana 403 vs requester 200），去重只能在 PG 聚合层 `recon_http_transactions_agg` 做；**禁止**在原始流水表加 `(uri_template, body_md5)` 唯一索引。
+
+## Supervisor 驱动循环与 message_history 窗口化（路径 A，2026-09-05 落地）
+
+> 治 L3 主膨胀源（`message_history` 跨轮无界 + 无 `usage_limits` 刹车）。背景与取舍见 `.ai/context-explosion-analysis.md` §8（路径 A）。本计划**仅覆盖路径 A**，与已就绪的 M1（治 L2 渲染膨胀）正交。
+
+### 架构契约
+
+- **决策器而非 router**：`SupervisorAgent.output_type = SupervisorDecision`（`action ∈ {call_agent, complete}`、`agent`、`prompt`、`task_achieved`、`confidence_score`、`detailed_summary`、`proofs`）。supervisor 不再持子 agent 工具（`@supervisor.agent.tool` 注册已删除，仅保留只读 `call_recon_lookup`）。
+- **驱动循环归属 `executor.execute_supervisor`**：逐轮 `window_messages(history) → supervisor.run(message_history=窗口化, usage_limits=有界) → 解析 SupervisorDecision`；`action==call_agent` 由 `_run_sub_agent`（经 `_ToolCtx` 垫片复用既有 `call_*`）直调子 agent，返回 **compact 结果**（`_format_tool_result_for_supervisor` 限长）追加进 `supervisor_history`；`complete` 产出 `ResultEvent`。
+- **唯一裁剪边界（`run()` 之间）**：取 `RunResult.raw_messages`（等价 pydantic-ai `all_messages()`）→ 剥离 system → `window_messages(history, history_max_messages=24, history_max_tokens=6000)` 窗口化后**重传**下一轮 `message_history`；存储列表本身每轮经 `window_messages` 重赋，杜绝跨轮无界累积。
+- **子 agent 隔离**：`_run_sub_agent` 每次 `message_history=None`（独立、不回灌 supervisor 历史）+ 有界 `usage_limits`；仅 compact 摘要进 `supervisor_history`，根治「子 agent 全量结果回灌」膨胀链。
+- **M-L3b 刹车（零自研）**：`_DEFAULT_SUPERVISOR_LOOP_CONFIG` 经 `SupervisorLoopConfig.usage_limits` 透传 `UsageLimits(request_limit=40)`；框架层 `FallbackAgentResult`（UsageLimitExceeded 被 `AgentRunner` 捕获）触发即终止循环，立即止血。
+- **跨 ADaPT 轮持久**：`architecture.py` 外层 `while` 维护 `supervisor_history: list[dict]`，同 node 迭代间传递；换节点时重建空列表（节点间不复用，避免污染）。
+- **落库零改动**：`_add_agent_output_to_context` / `_persist_agent_summary` / `_register_auth_facts_in_context` 仍在 `_run_sub_agent` 内调用，findings 无回归。
+
+### 数据流
+
+```
+architecture.py ADaPT while ──supervisor_history 持久跨轮──▶ execute_supervisor 驱动循环
+   └─ window_messages(history) ─▶ supervisor.run(message_history=窗口化, usage_limits=有界)
+        └─ 解析 SupervisorDecision.action
+             ├─ call_agent ─▶ _run_sub_agent 直调子 agent ─▶ 落 fact/summary ─▶ compact turn 追加 ─▶ 再窗口化
+             └─ complete   ─▶ ResultEvent(confidence/task_achieved/summary/proofs)
+   FallbackAgentResult（usage 触顶）─▶ 终止循环
+```
 
 ## 任务运行时数据流向（本地文件 / 本地 sqlite / 前端推送）
 

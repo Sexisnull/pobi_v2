@@ -8,7 +8,7 @@ This module implements an AI agent that decomposes security assessment goals int
 explicit, atomic subtasks and delegates them to specialized agents. The supervisor
 interprets agent outputs and determines task completion status.
 """
-from typing import Dict
+from typing import Dict, Literal
 from pobi_agent.context.context_engine import Any
 from pydantic import BaseModel
 from pydantic_ai import RunUsage, UsageLimits, DeferredToolResults
@@ -20,6 +20,22 @@ class SupervisorOutput(BaseModel):
     confidence_score: float
     detailed_summary: str
     proofs: str
+
+
+class SupervisorDecision(BaseModel):
+    """Supervisor 决策器输出（路径 A）：取代 router 模式。
+
+    supervisor 不再把子 agent 注册为工具，每轮只返回一个结构化决策：
+    - action=='call_agent'：驱动层直调对应子 agent，并把 compact 结果回灌历史；
+    - action=='complete'：本轮任务结束，由驱动层产出 ResultEvent。
+    """
+    action: Literal["call_agent", "complete"] = "complete"
+    agent: str | None = None
+    prompt: str | None = None
+    task_achieved: bool = False
+    confidence_score: float = 0.5
+    detailed_summary: str = ""
+    proofs: str = ""
 
 class SupervisorAgent(AgentRunner):
     """
@@ -39,7 +55,7 @@ class SupervisorAgent(AgentRunner):
             model=model,
             instructions=router_instructions,
             deps_type=deps_type,
-            output_type=SupervisorOutput,
+            output_type=SupervisorDecision,
             tools=[]
         )
 

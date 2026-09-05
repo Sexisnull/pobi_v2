@@ -9,6 +9,7 @@ from pobi_agent.agents.components.executor import (
     ValidationStopEvent,
 )
 from pobi_agent.agents.components.planner import Planner, TaskNode
+from pobi_agent.agents.components.task_state import TaskState
 from pobi_agent.context import ContextEngine
 from pobi_agent.hooks import get_event_hooks
 from pobi_agent.logging import logger
@@ -223,26 +224,43 @@ class ADaPTAgent:
 
         should_exit = exit_loop
 
-        # Accumulate a log of supervisor ↔ subagent interactions across
-        # iterations so the next supervisor call knows what was already tried.
-        interaction_history: list[str] = []
+        # 有界任务态：替代原无界 interaction_history 列表（O(n²) 累积 → O(1) 最近 N 轮）。
+        # 每轮 record_decision 只存裁剪摘要，render_history 输出不随轮次增长。
+        task_state = TaskState(max_decisions=5)
+
+        # [Path A] supervisor 消息历史：跨同一 node 的 ADaPT 迭代持久；executor 在 run() 边界做窗口化重传，
+        # 根治 message_history 跨轮无界膨胀（L3 主膨胀源）。run() 为单 node 调用，故该列表按 node 隔离。
+        supervisor_history: list[dict] = []
+        iteration = 0
+        logger.info(
+            "[ADAPT] _solve 进入 | task_id=%s | task='%s' | depth=%d",
+            getattr(node, "task_id", "?"), node.task[:60], depth,
+        )
 
         while not should_exit or node.status != "completed":
             # ----- 1. Execute supervisor -----
+            iteration += 1
+            logger.info(
+                "[ADAPT] 迭代开始 | task_id=%s | iter=%d",
+                getattr(node, "task_id", "?"), iteration,
+            )
             tasks_context = self.context.get_tasks(depth=0, include_goal=False)
             unified_context = self.context.get_unified_context(max_tokens=6000)
+            logger.debug(
+                "[ADAPT] 上下文快照 | task_id=%s | iter=%d | unified_context_len=%d | structured_log_len=%d",
+                getattr(node, "task_id", "?"), iteration,
+                len(unified_context), len(self.context.structured.log),
+            )
 
-            if interaction_history:
-                history_block = (
-                    "## Previous Supervisor Iterations (DO NOT repeat these actions)\n"
-                    + "\n".join(interaction_history)
-                )
+            history_block = task_state.render_history()
+            if history_block:
                 agent_context = f"{unified_context}\n\n{history_block}\n\n{tasks_context}"
             else:
                 agent_context = f"{unified_context}\n\n{tasks_context}"
 
             executor_stream = self.executor.execute_supervisor(
                 task_node=node, agent_context=agent_context,
+                message_history=supervisor_history,
             )
 
             confidence_score: float | None = None
@@ -259,6 +277,10 @@ class ADaPTAgent:
                     task_achieved = new_context.get("task_achieved", False)
                     detailed_summary = new_context.get("detailed_summary", "")
                     proofs = new_context.get("proofs", "")
+                    logger.info(
+                        "[ADAPT] 收到 supervisor 结果 | task_id=%s | confidence=%.2f | task_achieved=%s",
+                        getattr(node, "task_id", "?"), confidence_score, task_achieved,
+                    )
 
                     if task_achieved:
                         self._set_task_status(node, "completed", confidence_score)
@@ -308,23 +330,15 @@ class ADaPTAgent:
             if confidence_score > task_record["best_confidence"]:
                 task_record["best_confidence"] = confidence_score
 
-            # Record this iteration so the next supervisor call knows what
-            # was already attempted and does not repeat the same actions.
-            iteration_entry = (
-                f"--- Iteration {len(interaction_history) + 1} ---\n"
-                f"Task: {node.task}\n"
-                f"Result: {'achieved' if task_achieved else 'not achieved'} "
-                f"| confidence={confidence_score:.2f}\n"
-                f"Summary: {detailed_summary}\n"
+            # 记录本轮决策摘要到有界任务态（自动裁剪 + deque 淘汰最旧，不再 O(n²) 累积）。
+            # 去掉 Subagent calls 全量日志：Summary 已覆盖 supervisor 对结果的总结。
+            task_state.record_decision(
+                task=node.task,
+                achieved=task_achieved,
+                confidence=confidence_score,
+                summary=detailed_summary,
+                evidence=proofs,
             )
-            if proofs:
-                iteration_entry += f"Evidence: {proofs}\n"
-            # Include the subagent interaction log captured by emit() inside
-            # execute_supervisor tool calls (stored in context["log"]).
-            exec_log = new_context.get("log", "")
-            if exec_log:
-                iteration_entry += f"Subagent calls:\n{exec_log}\n"
-            interaction_history.append(iteration_entry)
 
             if detailed_summary:
                 yield emit(f"[RESULT] {detailed_summary[:200]}")
@@ -336,14 +350,19 @@ class ADaPTAgent:
 
             # ----- 3. ADaPT policy (expand / refine / fail) -----
             decision = self._policy(confidence_score)
-            logger.debug(
-                "task: %s decision: %s confidence: %.2f",
-                node.task[:50], decision, confidence_score,
+            logger.info(
+                "[ADAPT] 策略决策 | task_id=%s | confidence=%.2f | decision=%s | 阈值(fail<%.2f,expand>=%.2f)",
+                getattr(node, "task_id", "?"), confidence_score, decision,
+                self.FAIL_THRESHOLD, self.EXPAND_THRESHOLD,
             )
 
             if decision == "fail":
                 self._set_task_status(node, "failed", confidence_score)
                 self.context.update_task_status(node.task, "failed", confidence_score)
+                logger.info(
+                    "[ADAPT] 子任务失败 | task_id=%s | confidence=%.2f",
+                    getattr(node, "task_id", "?"), confidence_score,
+                )
                 yield emit(f"[POLICY] Task '{node.task[:50]}...' failed with confidence {confidence_score:.2f}")
                 return
 
@@ -352,6 +371,10 @@ class ADaPTAgent:
                 # re-check root goal on next iteration if there's more work.
                 self._set_task_status(node, "completed", confidence_score)
                 self.context.mark_task_completed(node.task, confidence_score)
+                logger.info(
+                    "[ADAPT] 子任务校验通过 | task_id=%s | confidence=%.2f",
+                    getattr(node, "task_id", "?"), confidence_score,
+                )
                 yield emit(f"[POLICY] Subtask validated: '{node.task[:50]}...'")
                 return
 
@@ -391,6 +414,10 @@ class ADaPTAgent:
 
                 if not subtasks:
                     self._set_task_status(node, "refine")
+                    logger.info(
+                        "[ADAPT] 无可展开子任务, 转 refine | task_id=%s",
+                        getattr(node, "task_id", "?"),
+                    )
                     yield emit(f"[PLANNER] No subtasks generated for '{node.task}', requesting refinement")
                     if node.parent:
                         async for chunk in self._solve(node.parent, depth=node.depth, exit_loop=exit_loop):
@@ -402,6 +429,10 @@ class ADaPTAgent:
                     break
 
                 node.children = subtasks
+                logger.info(
+                    "[ADAPT] 展开子任务 | task_id=%s | count=%d | depth=%d",
+                    getattr(node, "task_id", "?"), len(subtasks), depth + 1,
+                )
                 yield emit(f"[PLANNER] Generated {len(subtasks)} subtasks for '{node.task}'")
                 for subtask in subtasks:
                     async for chunk in self._solve(subtask, depth + 1, exit_loop=exit_loop):

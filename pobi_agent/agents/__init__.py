@@ -3,7 +3,7 @@
 # See LICENSE file for full license information.
 
 from .planner import Planner, PlannerAgent, PlannerOutput, RagDeps
-from .supervisor_agent import SupervisorAgent, SupervisorOutput
+from .supervisor_agent import SupervisorAgent, SupervisorOutput, SupervisorDecision
 from .factory import AgentRunner, AgentOutput
 from .generic_agents.shell_agent import ShellAgent, ShellOutput
 from .generic_agents.python_interpreter_agent import PythonInterpreterAgent, PythonInterpreterOutput
@@ -15,7 +15,7 @@ from .generic_agents.authenticator_agent import AuthenticatorAgent, Authenticato
 __all__ = [
     "AgentRunner", "AgentOutput",
     "Planner", "PlannerAgent", "PlannerOutput", "RagDeps",
-    "SupervisorAgent", "SupervisorOutput",
+    "SupervisorAgent", "SupervisorOutput", "SupervisorDecision",
     # Generic agents
     "ShellAgent", "ShellOutput",
     "PythonInterpreterAgent", "PythonInterpreterOutput",

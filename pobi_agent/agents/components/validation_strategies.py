@@ -326,7 +326,6 @@ class JudgeAgentStrategy:
             f"置信度：{output.confidence_score}\n\n"
             f"## 最近一次 Supervisor 响应\n{output.latest_response or 'N/A'}\n\n"
             f"## 最近一次子 Agent 执行日志\n{output.subagent_log or 'N/A'}\n\n"
-            f"## 先前的 Supervisor 上下文\n{output.supervisor_history or 'N/A'}\n\n"
             "# 执行轨迹\n"
             f"{context}\n\n"
             "# 判定要求\n"

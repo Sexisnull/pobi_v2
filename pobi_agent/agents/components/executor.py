@@ -6,7 +6,7 @@ import asyncio
 from pydantic import BaseModel
 from pydantic_ai import DeferredToolResults, RunContext, UsageLimits, RunUsage, UsageLimitExceeded
 from pobi_agent.agents import (
-    SupervisorAgent, SupervisorOutput,
+    SupervisorAgent, SupervisorOutput, SupervisorDecision,
     RequesterAgent,
     ShellAgent,
     PythonInterpreterAgent, AgentOutput,
@@ -23,6 +23,29 @@ from pobi_agent.config.settings import ModelSpec
 from pobi_agent.tools.avfs.write import write_text
 from pobi_agent.utils.structures import MemoryWorkspaceDeps, WebappreconDeps, RequesterDeps, ShellDeps
 from pobi_agent.logging import logger
+from pobi_agent.agents.components.task_state import window_messages
+from pobi_agent.agents.factory import FallbackAgentResult
+
+
+@dataclass
+class SupervisorLoopConfig:
+    """Supervisor 驱动循环配置（路径 A）。
+
+    - request_limit：单 ADaPT 迭代内 supervisor 最大轮次。CoreAgent compat 仅把
+      request_limit 映射到 limits_dict["requests"] 生效（tool_calls_limit / total_tokens_limit
+      在 compat 层被丢弃），故刹车以 request_limit 为准。
+    - history_max_messages / history_max_tokens：run() 边界窗口化双约束。
+    """
+    request_limit: int = 40
+    history_max_messages: int = 24
+    history_max_tokens: int = 6000
+
+    @property
+    def usage_limits(self) -> UsageLimits:
+        return UsageLimits(request_limit=self.request_limit, tool_calls_limit=None)
+
+
+_DEFAULT_SUPERVISOR_LOOP_CONFIG = SupervisorLoopConfig()
 
 
 class LogEvent(BaseModel):
@@ -178,23 +201,29 @@ def _persist_recon_facts(context: "ContextEngine | None", agent_name: str, outpu
 
 
 def _format_tool_result_for_supervisor(agent_name: str, output: Any) -> str:
-    """Render tool/agent output in a stable format that preserves key details for downstream reasoning."""
+    """Render tool/agent output in a stable format that preserves key details for downstream reasoning.
+
+    切片 3 P2：detailed_summary/proofs/thoughts 限长，避免单轮子 agent 输出全量注入 supervisor 消息列表。
+    """
     if isinstance(output, AgentOutput):
+        summary = (output.detailed_summary or "None")[:1500]
+        proofs = (output.proofs or "None")[:500]
+        thoughts = (output.thoughts or "None")[:300]
         return (
             f"{agent_name} agent result\n"
             f"confidence_score: {output.confidence_score:.2f}\n"
-            f"detailed_summary:\n{output.detailed_summary or 'None'}\n\n"
-            f"proofs:\n{output.proofs or 'None'}\n\n"
-            f"thoughts:\n{output.thoughts or 'None'}"
+            f"detailed_summary:\n{summary}\n\n"
+            f"proofs:\n{proofs}\n\n"
+            f"thoughts:\n{thoughts}"
         )
 
     if isinstance(output, BaseModel):
         return (
             f"{agent_name} agent result\n"
-            f"{json.dumps(output.model_dump(), indent=2, ensure_ascii=False)}"
+            f"{json.dumps(output.model_dump(), indent=2, ensure_ascii=False)[:3000]}"
         )
 
-    return f"{agent_name} agent result\n{str(output)}"
+    return f"{agent_name} agent result\n{str(output)[:3000]}"
 
 @dataclass
 class SupervisorDeps:
@@ -317,9 +346,21 @@ class AgentExecutor:
         validation_input: ValidationInput,
         max_tokens: int,
     ) -> str:
-        """Build a reporter/validator context that preserves the latest iteration details."""
-        unified_context = self.context.get_unified_context(max_tokens=max_tokens)
-        sections = [unified_context]
+        """Build a reporter/validator context that preserves the latest iteration details.
+
+        去重（切片 1）：supervisor_history（= agent_context）已包含 unified_context，
+        不再单独调 get_unified_context（避免 unified_context ×2）。
+        supervisor_history 为空时回退到 get_unified_context。
+        """
+        sections = []
+
+        supervisor_history = validation_input.supervisor_history.strip()
+        if supervisor_history:
+            # supervisor_history = unified_context + interaction_history + tasks_context，
+            # 已是 supervisor 实际看到的完整输入，直接作为主体。
+            sections.append(supervisor_history)
+        else:
+            sections.append(self.context.get_unified_context(max_tokens=max_tokens))
 
         latest_supervisor_response = validation_input.latest_response.strip()
         if latest_supervisor_response:
@@ -333,13 +374,6 @@ class AgentExecutor:
             sections.append(
                 "## Latest Subagent Execution Log\n"
                 f"{latest_subagent_log}"
-            )
-
-        supervisor_history = validation_input.supervisor_history.strip()
-        if supervisor_history:
-            sections.append(
-                "## Supervisor Input Context\n"
-                f"{supervisor_history}"
             )
 
         return "\n\n".join(section for section in sections if section.strip())
@@ -469,7 +503,7 @@ class AgentExecutor:
         task_node: TaskNode,
         agent_context: str = "",
         usage: RunUsage = RunUsage(),
-        usage_limits: UsageLimits = UsageLimits(request_limit=None, tool_calls_limit=None),
+        usage_limits: UsageLimits | None = None,
         deferred_tool_results: DeferredToolResults | None = None,
         message_history: list | None = None,
         phase: str | None = None,
@@ -726,7 +760,6 @@ class AgentExecutor:
                     )
 
             # Create tool functions using RunContext for agent delegation
-            @supervisor.agent.tool
             async def call_authenticator_agent(ctx: RunContext[SupervisorDeps], prompt: str) -> str:
                 """Call the authenticator agent to log in and persist a reusable auth context.
 
@@ -768,7 +801,6 @@ class AgentExecutor:
                 emit(f"[authenticator] prompt={prompt[:200]} | result={result_str[:300]}")
                 return result_str
 
-            @supervisor.agent.tool
             async def call_requester_agent(ctx: RunContext[SupervisorDeps], prompt: str) -> str:
                 """Call the requester agent to perform HTTP request testing."""
                 if ctx.deps.requester_agent is None or ctx.deps.requester_deps is None:
@@ -809,7 +841,6 @@ class AgentExecutor:
                 emit(f"[requester] prompt={prompt[:200]} | result={result_str[:300]}")
                 return result_str
 
-            @supervisor.agent.tool
             async def call_shell_agent(ctx: RunContext[SupervisorDeps], prompt: str) -> str:
                 """Call the shell agent to execute shell commands."""
                 if ctx.deps.shell_agent is None or ctx.deps.shell_deps is None:
@@ -841,7 +872,6 @@ class AgentExecutor:
                 emit(f"[shell] prompt={prompt[:200]} | result={result_str[:300]}")
                 return result_str
             
-            @supervisor.agent.tool
             async def call_webapp_analyzer_agent(ctx: RunContext[SupervisorDeps], prompt: str) -> str:
                 """Call the webapp analyzer agent to analyze web application structure and behavior."""
                 memory_prefix = _memory_prompt_prefix(ctx.deps.memory_context)
@@ -858,7 +888,6 @@ class AgentExecutor:
                 emit(f"[webapp_analyzer] prompt={prompt[:200]} | result={result_str[:300]}")
                 return result_str
 
-            @supervisor.agent.tool
             async def call_python_interpreter_agent(ctx: RunContext[SupervisorDeps], prompt: str) -> str:
                 """Call the python interpreter agent to execute Python scripts."""
                 memory_prefix = _memory_prompt_prefix(ctx.deps.memory_context)
@@ -889,7 +918,6 @@ class AgentExecutor:
                 emit(f"[python_interpreter] prompt={prompt[:200]} | result={result_str[:300]}")
                 return result_str
 
-            @supervisor.agent.tool
             async def call_memory_agent(ctx: RunContext[SupervisorDeps], prompt: str) -> str:
                 """Call the memory agent to inspect or update persistent notes."""
                 result = await ctx.deps.memory_agent.run(
@@ -958,6 +986,40 @@ class AgentExecutor:
                     ensure_ascii=False, indent=2,
                 )
 
+            # [Path A] 子 agent 调用已移出 pydantic-ai 工具边界，下面定义驱动层直调入口
+            class _ToolCtx:
+                """最小工具上下文垫片，复用既有 call_* 嵌套函数（原 @supervisor.agent.tool）。"""
+                def __init__(self, deps, usage):
+                    self.deps = deps
+                    self.usage = usage
+
+            async def _run_sub_agent(agent_name: str, prompt: str) -> str:
+                """驱动层直调子 agent（替代 supervisor 工具调用），复用既有 call_* 逻辑。
+
+                每次调用 message_history=None（独立，不污染 supervisor 历史），
+                usage_limits 取自 effective_limits（有界刹车）。落库闭环不变。
+                """
+                logger.info(
+                    "[EXEC] 委派子 agent | task_id=%s | agent=%s | prompt=%s",
+                    getattr(task_node, "task_id", "?"), agent_name, (prompt or "")[:120],
+                )
+                ctx = _ToolCtx(supervisor_deps, usage)
+                name = (agent_name or "").lower()
+                if name == "authenticator":
+                    return await call_authenticator_agent(ctx, prompt)
+                if name == "requester":
+                    return await call_requester_agent(ctx, prompt)
+                if name == "shell":
+                    return await call_shell_agent(ctx, prompt)
+                if name == "webapp_analyzer":
+                    return await call_webapp_analyzer_agent(ctx, prompt)
+                if name == "python_interpreter":
+                    return await call_python_interpreter_agent(ctx, prompt)
+                if name == "memory":
+                    return await call_memory_agent(ctx, prompt)
+                emit(f"[SUPERVISOR-LOOP] unknown agent: {agent_name}")
+                return f"[unknown agent: {agent_name}]"
+
             # Execute task with supervisor
             supervisor_prompt = f"Your task is : {task_node.task}\n"
 
@@ -1000,39 +1062,97 @@ class AgentExecutor:
                 supervisor_prompt,
             )
 
-            result = await supervisor.run(
-                prompt=supervisor_prompt,
-                deps=supervisor_deps,
-                message_history=message_history,
-                usage=usage,
-                usage_limits=usage_limits,
-                deferred_tool_results=deferred_tool_results
+            # ---- [Path A] Supervisor 决策器 + 驱动循环（替代 router 工具）----
+            # 裁剪边界在「我们拥有的循环」(run() 之间)：取 raw_messages 剥离 system 后窗口化重传，
+            # 根治 message_history 跨轮无界膨胀（L3 主膨胀源）。子 agent 经 _run_sub_agent 直调，
+            # 每次独立 message_history（不回灌 supervisor 历史），仅 compact 结果进 history。
+            cfg = _DEFAULT_SUPERVISOR_LOOP_CONFIG
+            effective_limits = usage_limits or cfg.usage_limits
+            # 子 agent 调用：独立历史 + 有界刹车（经 call_* 的 ctx.deps 读取）
+            supervisor_deps.message_history = None
+            supervisor_deps.usage_limits = effective_limits
+
+            history = message_history if message_history is not None else []
+            logger.info(
+                "[EXEC] execute_supervisor 启动 | task_id=%s | is_root=%s | initial_history=%d",
+                getattr(task_node, "task_id", "?"),
+                "yes" if getattr(task_node, "is_root", False) else "no",
+                len(history),
             )
-            # Extract SupervisorOutput fields
-            supervisor_output = result.output
-            context["supervisor_history"] = agent_context
-            if isinstance(supervisor_output, SupervisorOutput):
-                confidence_score = supervisor_output.confidence_score
-                context["task_achieved"] = supervisor_output.task_achieved
-                context["detailed_summary"] = supervisor_output.detailed_summary
-                context["proofs"] = supervisor_output.proofs
-                context["last_output"] = supervisor_output.model_dump()
-                context["supervisor_response"] = (
-                    "Task achieved: "
-                    f"{supervisor_output.task_achieved}\n"
-                    f"Confidence: {supervisor_output.confidence_score:.2f}\n"
-                    f"Detailed summary:\n{supervisor_output.detailed_summary}\n\n"
-                    f"Proofs:\n{supervisor_output.proofs or 'None'}"
+            first_round = True
+            decision: SupervisorDecision | None = None
+            max_rounds = max(1, int(cfg.request_limit or 1))
+            outcome_for_next: str = ""
+            for _round in range(max_rounds):
+                windowed = window_messages(history, cfg.history_max_messages, cfg.history_max_tokens)
+                prompt = supervisor_prompt if first_round else outcome_for_next
+                first_round = False
+                emit(f"[SUPERVISOR-LOOP] round={_round + 1} history={len(history)} windowed={len(windowed)}")
+                logger.info(
+                    "[EXEC] supervisor 第 %d 轮 | task_id=%s | history=%d | windowed=%d",
+                    _round + 1, getattr(task_node, "task_id", "?"), len(history), len(windowed),
+                )
+                result = await supervisor.run(
+                    prompt=prompt,
+                    deps=supervisor_deps,
+                    message_history=windowed,
+                    usage=usage,
+                    usage_limits=effective_limits,
+                    deferred_tool_results=deferred_tool_results,
+                )
+                if isinstance(result, FallbackAgentResult):
+                    emit("[SUPERVISOR-LOOP] usage limit / error reached; terminating loop.")
+                    logger.info("[EXEC] supervisor 触顶/错误终止 | task_id=%s", getattr(task_node, "task_id", "?"))
+                    confidence_score = 0.5
+                    context["task_achieved"] = False
+                    context["detailed_summary"] = (
+                        "[SUPERVISOR-LOOP] supervisor loop terminated by usage limit or error before completion."
+                    )
+                    context["proofs"] = ""
+                    context["last_output"] = result.output
+                    context["supervisor_response"] = context["detailed_summary"]
+                    break
+                decision = result.output
+                if decision.action == "complete":
+                    confidence_score = decision.confidence_score
+                    logger.info(
+                        "[EXEC] supervisor complete | task_id=%s | task_achieved=%s | confidence=%.2f",
+                        getattr(task_node, "task_id", "?"), decision.task_achieved, decision.confidence_score,
+                    )
+                    context["task_achieved"] = decision.task_achieved
+                    context["detailed_summary"] = decision.detailed_summary
+                    context["proofs"] = decision.proofs
+                    context["last_output"] = decision
+                    context["supervisor_response"] = (
+                        "Task achieved: "
+                        f"{decision.task_achieved}\n"
+                        f"Confidence: {decision.confidence_score:.2f}\n"
+                        f"Detailed summary:\n{decision.detailed_summary}\n\n"
+                        f"Proofs:\n{decision.proofs or 'None'}"
+                    )
+                    break
+                # action == call_agent → 驱动层直调子 agent（不回灌 supervisor 历史）
+                outcome = await _run_sub_agent(decision.agent or "", decision.prompt or "")
+                # 取回完整对话轮次（含首条任务 user），下一轮以 outcome 为 prompt（不重复追加）
+                history.clear()
+                history.extend(result.raw_messages[1:] if getattr(result, "raw_messages", None) else [])
+                # 同时窗口化存储列表本身，避免跨轮无界累积（L3 根治）
+                history[:] = window_messages(history, cfg.history_max_messages, cfg.history_max_tokens)
+                outcome_for_next = (
+                    f"[Delegation result] agent={decision.agent}\n"
+                    f"prompt={decision.prompt or ''}\n"
+                    f"{outcome}"
                 )
             else:
-                confidence_score = 0.5
-                # Ensure detailed_summary is set even for non-SupervisorOutput results
-                output_str = str(supervisor_output)
-                context["last_output"] = output_str
-                context["detailed_summary"] = output_str
-                context["task_achieved"] = False
-                context["proofs"] = ""
-                context["supervisor_response"] = output_str
+                # 未达 complete 且未触顶（理论上 usage_limits 已先触顶）→ 兜底
+                emit(f"[SUPERVISOR-LOOP] exceeded {max_rounds} rounds without completion.")
+                if confidence_score is None:
+                    confidence_score = 0.5
+                context.setdefault("task_achieved", False)
+                context.setdefault("detailed_summary", "[SUPERVISOR-LOOP] exceeded max rounds without completion.")
+                context.setdefault("proofs", "")
+                context.setdefault("supervisor_response", context.get("detailed_summary", ""))
+            context["supervisor_history"] = agent_context
 
             validation_input = self._build_validation_input(
                 confidence_score=confidence_score,
