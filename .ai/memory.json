@@ -1,0 +1,115 @@
+{
+  "project": "pobi_v2",
+  "last_updated": "2026-09-05T23:56:00+08:00",
+  "current_test_task": {
+    "task_id": "3e1d7d33-0409-49d5-a00c-c851be2945b2",
+    "name": "dvwa-sqli-test-v2",
+    "target_id": "d20f12a3-7e0c-4818-b90b-5b7c8760e49e",
+    "target_name": "dvwa",
+    "target_url": "http://122.51.72.186:8081/",
+    "objective": "找到一个sql注入漏洞，不需要扩展",
+    "agent_mode": "yolo",
+    "auth_mode": "auto",
+    "auth_username": "admin",
+    "auth_login_url": "http://122.51.72.186:8081/login.php",
+    "max_turns": 50,
+    "status": "completed",
+    "created_at": "2026-09-05T15:48:00Z",
+    "started_at": "2026-09-05T15:51:07Z",
+    "finished_at": "2026-09-05T15:53:08Z",
+    "duration_seconds": 121,
+    "total_tokens": 117594,
+    "local_task_dir": "/Users/kid/.pobi_v2/tasks/3e1d7d33-0409-49d5-a00c-c851be2945b2",
+    "report_path": "/Users/kid/Desktop/02_Projects/pobi_v2/test_reports/dvwa-sqli-report-3e1d7d33.md",
+    "finding": "经典 SQL 注入（UNION SELECT）确认于 /vulnerabilities/sqli/ 的 id 参数，后台数据库 MariaDB"
+  },
+  "issues": [
+    {
+      "id": "ISSUE-001",
+      "severity": "low",
+      "status": "fixed",
+      "title": "FTS5 查询函数调用错误",
+      "description": "_fts_query 定义为 @staticmethod (store.py:1776)，但在第626行被当作裸函数调用 _fts_query(keyword)，缺少 self. 前缀。",
+      "evidence_code": "pobi_agent/recon/store.py:626",
+      "evidence_log": "worker.log 频繁出现 'RECON FTS5 查询失败（回退普通检索）: name '_fts_query' is not defined'",
+      "solution": "改为 self._fts_query(keyword)",
+      "fixed_at": "2026-09-05T23:48:00+08:00"
+    },
+    {
+      "id": "ISSUE-002",
+      "severity": "critical",
+      "status": "fixed",
+      "title": "StructuredContext 对象无 log 属性导致 exploitation 阶段崩溃",
+      "description": "architecture.py:252 访问 self.context.structured.log，但 StructuredContext 类没有 log 属性（正确属性为 current_task_log）。导致 ADaPT _solve 方法在 exploitation 阶段抛出 AttributeError，任务直接失败。",
+      "evidence_code": "pobi_agent/agents/architecture.py:252 - len(self.context.structured.log)",
+      "evidence_log": "任务 02ec39de 失败，error: 'StructuredContext' object has no attribute 'log'",
+      "impact": "任务在 recon 完成后进入 exploitation 阶段时立即崩溃，无法进行任何实际注入测试",
+      "solution": "改为 len(self.context.structured.current_task_log)",
+      "fixed_at": "2026-09-05T23:48:00+08:00"
+    },
+    {
+      "id": "ISSUE-003",
+      "severity": "medium",
+      "status": "observed",
+      "title": "requester agent 未使用 auth_profile 参数导致重复登录循环",
+      "description": "requester 子 agent 在 pw_send_payload 调用中未使用 auth_profile='preauth'，反复手动登录但会话不共享，26轮迭代中0次实际注入尝试。",
+      "evidence_log": "事件141-195显示 agent 多次登录后仍提示'会话仍然未共享'，最终仅完成recon未尝试注入",
+      "impact": "recon 阶段浪费大量 token 在重复登录上，延缓整体进度",
+      "solution": "待观察 - exploitation 阶段使用不同 agent（supervisor ADaPT），可能不存在此问题",
+      "discovered_at": "2026-09-05T23:40:00+08:00"
+    },
+    {
+      "id": "ISSUE-004",
+      "severity": "low",
+      "status": "observed",
+      "title": "total_tokens 始终为0",
+      "description": "任务详情中 total_tokens/prompt_tokens/completion_tokens 始终为0。",
+      "impact": "成本核算功能失效",
+      "solution": "待调查",
+      "discovered_at": "2026-09-05T23:35:00+08:00"
+    }
+  ],
+  "code_changes": [
+    {
+      "id": "CHANGE-001",
+      "file": "pobi_agent/agents/architecture.py",
+      "line": 252,
+      "change": "self.context.structured.log -> self.context.structured.current_task_log",
+      "reason": "修复 AttributeError: 'StructuredContext' object has no attribute 'log'，该错误导致 exploitation 阶段崩溃",
+      "decision": "StructuredContext 类定义中日志属性名为 current_task_log，非 log",
+      "changed_at": "2026-09-05T23:48:00+08:00"
+    },
+    {
+      "id": "CHANGE-002",
+      "file": "pobi_agent/recon/store.py",
+      "line": 626,
+      "change": "_fts_query(keyword) -> self._fts_query(keyword)",
+      "reason": "修复 FTS5 查询函数调用错误，_fts_query 是 staticmethod 需通过 self 调用",
+      "decision": "保持 staticmethod 设计，通过 self 引用调用",
+      "changed_at": "2026-09-05T23:48:00+08:00"
+    }
+  ],
+  "test_history": [
+    {
+      "task_id": "02ec39de-9be7-4ccd-ae21-2e19791f9e86",
+      "name": "dvwa-sqli-system-test",
+      "created_at": "2026-09-05T15:31:33Z",
+      "finished_at": "2026-09-05T15:46:04Z",
+      "status": "failed",
+      "error": "'StructuredContext' object has no attribute 'log'",
+      "duration_seconds": 871,
+      "note": "pre_recon完成，recon阶段requester agent 26轮迭代仅做信息收集未尝试注入，进入exploitation阶段时因architecture.py:252的AttributeError崩溃。已修复bug。"
+    },
+    {
+      "task_id": "3e1d7d33-0409-49d5-a00c-c851be2945b2",
+      "name": "dvwa-sqli-test-v2",
+      "created_at": "2026-09-05T15:48:00Z",
+      "started_at": "2026-09-05T15:51:07Z",
+      "finished_at": "2026-09-05T15:53:08Z",
+      "status": "completed",
+      "duration_seconds": 121,
+      "total_tokens": 117594,
+      "note": "修复 StructuredContext.log 和 FTS5 bug 后重跑成功。2分钟完成，确认 /vulnerabilities/sqli/ id 参数经典 SQL 注入（UNION SELECT），后台 MariaDB。报告已导出到 test_reports/。"
+    }
+  ]
+}

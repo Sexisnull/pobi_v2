@@ -249,7 +249,7 @@ class ADaPTAgent:
             logger.debug(
                 "[ADAPT] 上下文快照 | task_id=%s | iter=%d | unified_context_len=%d | structured_log_len=%d",
                 getattr(node, "task_id", "?"), iteration,
-                len(unified_context), len(self.context.structured.log),
+                len(unified_context), len(self.context.structured.current_task_log),
             )
 
             history_block = task_state.render_history()

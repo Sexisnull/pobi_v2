@@ -623,7 +623,7 @@ class ReconStore:
                     rows = session.execute(
                         __import__("sqlalchemy").text(
                             "SELECT rowid FROM recon_facts_fts WHERE recon_facts_fts MATCH :kw"
-                        ).bindparams(kw=_fts_query(keyword))
+                        ).bindparams(kw=self._fts_query(keyword))
                     ).fetchall()
                     fts_ids = {r[0] for r in rows}
                 except Exception as exc:  # noqa: BLE001 - FTS 不可用时不阻断
