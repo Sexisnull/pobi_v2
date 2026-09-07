@@ -263,7 +263,7 @@ class AgentRunner:
             limits_dict = {}
             if usage_limits:
                 limits_dict["requests"] = getattr(usage_limits, 'request_limit', None) or float('inf')
-                limits_dict["tools"] = getattr(usage_limits, 'tool_call_limit', None) or float('inf')
+                limits_dict["tools"] = getattr(usage_limits, 'tool_calls_limit', None) or float('inf')
 
             # Run CoreAgent
             result = await self.agent.run(

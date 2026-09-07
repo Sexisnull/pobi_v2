@@ -353,7 +353,7 @@ class ADaPTAgent:
             logger.info(
                 "[ADAPT] 策略决策 | task_id=%s | confidence=%.2f | decision=%s | 阈值(fail<%.2f,expand>=%.2f)",
                 getattr(node, "task_id", "?"), confidence_score, decision,
-                self.FAIL_THRESHOLD, self.EXPAND_THRESHOLD,
+                self.FAIL_THRESHOLD, self.EXPLORE_THRESHOLD,
             )
 
             if decision == "fail":

@@ -347,6 +347,26 @@ class CoreAgent:
         while iteration < max_iterations:
             iteration += 1
 
+            # ── 每轮用量刹车（修复：原 _check_limits 仅在 run 入口执行一次，
+            #    循环内不检查，request_limit 形同虚设，子 agent 可跑满 50 轮致
+            #    上下文膨胀 / token 爆炸 / 1800s 熔断）。请求数与工具调用数任一
+            #    触顶即抛 UsageLimitExceeded → AgentRunner 转 FallbackAgentResult。──
+            if usage_limits:
+                if self.request_count >= usage_limits.get("requests", float("inf")):
+                    raise UsageLimitExceeded(
+                        f"Request limit reached: {usage_limits['requests']}"
+                    )
+                if self.tool_call_count >= usage_limits.get("tools", float("inf")):
+                    raise UsageLimitExceeded(
+                        f"Tool call limit reached: {usage_limits['tools']}"
+                    )
+            elif iteration <= 2 or iteration % 10 == 0:
+                # 诊断：usage_limits 未传入时打印一次，辅助定位刹车失效场景
+                logger.debug(
+                    "[CORE-AGENT] %s iter=%d usage_limits=None（刹车未生效）req=%d tools=%d",
+                    self.name, iteration, self.request_count, self.tool_call_count,
+                )
+
             # ── 协作式取消检查点：用户主动取消时立即抛出 CancelledError，
             #    由 executor 据 is_cancelled 标记任务为 cancelled（而非 failed）。
             #    is_interrupted 为同步接口，内部按 backend 直查取消标志，异常兜底 False。──
@@ -406,8 +426,14 @@ class CoreAgent:
             # Rate limit check
             if self.rate_limiter:
                 async with self.rate_limiter:
+                    # 循环内消息窗口化（在真正发送前）：控制单次 run 内消息
+                    # 无界累积导致的 token 爆炸（requester 曾 30 分钟消耗 118 万 token）。
+                    self._window_loop_messages(messages)
                     response = await self._call_llm_with_retry(messages, tool_schemas)
             else:
+                # 循环内消息窗口化（在真正发送前）：控制单次 run 内消息
+                # 无界累积导致的 token 爆炸（requester 曾 30 分钟消耗 118 万 token）。
+                self._window_loop_messages(messages)
                 response = await self._call_llm_with_retry(messages, tool_schemas)
 
             self.request_count += 1
@@ -647,6 +673,59 @@ class CoreAgent:
             request_count=self.request_count,
             tool_call_count=self.tool_call_count,
         )
+
+    def _window_loop_messages(
+        self,
+        messages: list[dict],
+        max_messages: int = 30,
+        max_content_chars: int = 4000,
+    ) -> None:
+        """单次 run 循环内消息窗口化（原地裁剪 messages），控制 token 膨胀。
+
+        背景：CoreAgent 循环内多轮工具调用把结果无限 append 进 messages，
+        无窗口化时 prompt 随轮次线性膨胀（requester 曾 30 分钟消耗 118 万 token、
+        消息 105 条触顶后仍不收敛）。此处做双约束：
+
+        - 单条内容截断：超长工具结果（如完整 HTTP 响应）保留头尾，防单块巨文撑爆窗口；
+        - 条数窗口：保留 system + 首条 user（任务 prompt，连续性锚点）+
+          最近 max_messages-2 条，被裁掉的中间轮次用一条汇总提示占位，
+          提示 LLM 关键事实已落库、需要时可重新探测。
+        """
+        if not messages:
+            return
+        # 1) 单条内容截断
+        for m in messages:
+            content = m.get("content")
+            if isinstance(content, str) and len(content) > max_content_chars:
+                m["content"] = content[:max_content_chars] + (
+                    f"\n...[内容过长已截断：原文 {len(content)} 字符，保留前后 {max_content_chars // 2} 字符]"
+                )
+        # 2) 条数窗口
+        if len(messages) <= max_messages:
+            return
+        head = messages[:1]  # system 指令
+        anchor: tuple[int, dict] | None = None
+        for i, m in enumerate(messages[1:], start=1):
+            if m.get("role") == "user":
+                anchor = (i, m)
+                break
+        tail = messages[-(max_messages - 2):] if max_messages > 2 else messages[-1:]
+        dropped = len(messages) - (1 + (1 if anchor else 0) + len(tail))
+        if dropped <= 0:
+            return
+        summary = {
+            "role": "user",
+            "content": (
+                f"[上下文窗口化：较早的 {dropped} 条消息已从窗口移除。"
+                "关键事实已落库（recon_facts），如需旧信息请重新探测或查询，勿假设未提供的内容。]"
+            ),
+        }
+        new_msgs = [head[0]]
+        if anchor is not None:
+            new_msgs.append(anchor[1])
+        new_msgs.append(summary)
+        new_msgs.extend(tail)
+        messages[:] = new_msgs
 
     def _build_messages(self, prompt: str, message_history: list | None) -> list[dict]:
         """Build message list from prompt and history.

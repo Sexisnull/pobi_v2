@@ -2064,11 +2064,38 @@ class ReconStore:
             # ---- 2) 站点端点综述（recon_endpoints + recon_http_transactions）----
             site_overview = self._build_site_overview_json(task_id)
 
+            # ---- 3) 历史威胁建模结论（recon_threats 已确认/可疑清单）----
+            # 来自 seed_from_pg 跨任务灌入或本任务已建模威胁。注入 supervisor 后
+            # 引导「先验证历史漏洞是否仍存在/已修复，再补充新发现」，避免重复全量威胁建模。
+            threats: list[Dict[str, Any]] = []
+            with self._session_factory() as session:
+                th_rows = (
+                    session.query(ReconThreat)
+                    .filter(ReconThreat.task_id == task_id)
+                    .order_by(ReconThreat.updated_at.desc())
+                    .limit(30)
+                    .all()
+                )
+                for th in th_rows:
+                    if th.status in ("confirmed", "exploited", "suspected"):
+                        threats.append(
+                            {
+                                "title": th.title,
+                                "category": th.category,
+                                "severity": th.severity,
+                                "status": th.status,
+                                "confidence": th.confidence,
+                                "affected_endpoint": th.affected_endpoint or "",
+                                "evidence": (th.evidence_summary or "")[:200],
+                            }
+                        )
+
             result["pre_recon"] = {
                 "target": target,
                 "fingerprint": fingerprint,
                 "waf": waf,
                 "site_overview": site_overview,
+                "historical_threats": threats,
             }
         except Exception as exc:  # noqa: BLE001
             logger.warning("RECON 组装 pre_recon JSON 失败（返回空结构）: %s", exc)

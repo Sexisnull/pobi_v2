@@ -55,6 +55,11 @@ class Settings(BaseSettings):
 
     # ---- 任务执行默认上限（M2 使用）----
     task_max_turns: int = 50
+    # DeadEndAgent 单次调用子超时（秒）：低于该值视为未收敛死循环，熔断标记 failed。
+    # 默认 55 分钟：完整 DVWA 全量利用需 威胁建模(~5min)+利用(~45min)+报告(~5min)，
+    # 1800s 原默认在利用阶段即被熔断（2026-09-07 实测 2 次，均在 30min 整熔断）。
+    # 任务级硬上限由 ARQ job_timeout（默认 6h）兜底。
+    agent_sub_timeout_seconds: int = 55 * 60
 
     # ---- Worker 并发（方案 A+B：多任务并行消费）----
     # 单个 ARQ Worker 进程内同时执行的任务协程数（ARQ 参数 max_jobs，默认 10）。

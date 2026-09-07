@@ -815,8 +815,29 @@ class AgentExecutor:
                             footprint_prefix = f"\n{fp}\n"
                 except Exception as _fp_exc:  # noqa: BLE001
                     logger.debug("requester 足迹摘要注入失败（忽略）: %s", _fp_exc)
+                # 认证会话复用：authenticator 已落库 authentication facts 时，
+                # 告知 requester 已有可用 auth_profile，避免重复登录（ISSUE-002）。
+                auth_prefix = ""
+                try:
+                    if ctx.deps.context is not None:
+                        auth_facts = [
+                            f for f in getattr(ctx.deps.context, "facts", {}).values()
+                            if getattr(f, "category", None) == "authentication"
+                        ]
+                        if auth_facts:
+                            profiles = sorted({
+                                str((f.details or {}).get("profile", "?"))
+                                for f in auth_facts
+                            })
+                            auth_prefix = (
+                                "\n[已有认证会话可用，auth_profile="
+                                f"{profiles}。访问受保护页面时必须在工具参数中传 "
+                                "auth_profile 复用会话，禁止重新登录。]\n"
+                            )
+                except Exception as _auth_exc:  # noqa: BLE001
+                    logger.debug("requester 认证会话注入失败（忽略）: %s", _auth_exc)
                 result = await ctx.deps.requester_agent.run(
-                    f"{memory_prefix}{footprint_prefix}{prompt}",
+                    f"{memory_prefix}{footprint_prefix}{auth_prefix}{prompt}",
                     deps=ctx.deps.requester_deps,
                     message_history=ctx.deps.message_history,
                     usage=ctx.usage,
@@ -980,9 +1001,26 @@ class AgentExecutor:
                     return empty
                 if not results:
                     return empty
+                # 钳制返回体：单条结果截断（防完整 facts 撑爆 supervisor 上下文，
+                # 曾致 supervisor 陷入 recon_lookup 查询循环 50 轮不收敛）。
+                _MAX_LOOKUP_ITEMS = 20
+                _MAX_ITEM_CHARS = 800
+                trimmed = []
+                for r in results[: _MAX_LOOKUP_ITEMS]:
+                    if not isinstance(r, dict):
+                        trimmed.append(r)
+                        continue
+                    r2 = dict(r)
+                    for key in ("value", "detail", "description", "content", "path"):
+                        v = r2.get(key)
+                        if isinstance(v, str) and len(v) > _MAX_ITEM_CHARS:
+                            r2[key] = v[:_MAX_ITEM_CHARS] + (
+                                f"...[截断：原文 {len(v)} 字符]"
+                            )
+                    trimmed.append(r2)
                 return json.dumps(
-                    {"found": True, "count": len(results), "results": results,
-                     "hint": "命中本地侦察资产，可复用历史结论"},
+                    {"found": True, "count": len(trimmed), "results": trimmed,
+                     "hint": "命中本地侦察资产，可复用历史结论（结果已截断，按需缩小 limit 精查）"},
                     ensure_ascii=False, indent=2,
                 )
 
@@ -1035,10 +1073,15 @@ class AgentExecutor:
                     )
                     if pre_recon_block:
                         supervisor_prompt += (
-                            "## 前置侦查结构化结论（指纹/WAF/端点综述）:\n"
+                            "## 前置侦查结构化结论（指纹/WAF/端点综述/历史威胁）:\n"
                             "<pre_recon_json>\n"
                             f"{pre_recon_block}\n"
                             "</pre_recon_json>\n"
+                            "## 复用指引：\n"
+                            "若 pre_recon_json.historical_threats 非空，这些是历史任务已建模的漏洞结论，"
+                            "请优先对每一项做「存在性验证」：重新探测对应 affected_endpoint/PoC，"
+                            "确认漏洞仍存在则复用该结论并标记 confirmed；已修复则明确标注排除；"
+                            "在此基础上再补充未被覆盖的新漏洞。禁止对已有结论的端点做重复全量侦查。\n"
                         )
             except Exception as _pr_exc:  # noqa: BLE001
                 logger.debug("前置侦查 JSON 注入失败（忽略）: %s", _pr_exc)
