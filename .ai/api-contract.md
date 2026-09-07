@@ -84,7 +84,23 @@
 ### 持久化查询 `/api/v1`（`routers/persistence.py`）
 - `GET /tasks/{task_id}/findings` 漏洞/风险点
 - `GET /tasks/{task_id}/artifacts` 产物（截图/PoC/报告/日志元数据）
-- `GET /audit` 全局结构化审计日志（按 task/target/action 过滤）
+- `GET /audit` 全局结构化审计日志（按 `task_id`/`target_id`/`action`/`actor`/`trace_id` 过滤，2026-09-07 增补后两项）
+
+**审计动作字典（`AuditEvent.action`，2026-09-07 生效）**
+
+| action | 落点 | outcome | 说明 |
+|---|---|---|---|
+| `auth.login` / `auth.login_failed` | `routers/auth.py` | success / denied | 登录成功、凭据错误或账号停用 |
+| `tenant.create` | `routers/auth.py` | success | 创建租户 |
+| `target.created` / `target.updated` / `target.deleted` | `routers/targets.py` | success | 目标 CRUD，`meta.changed` 记录变更字段；删除后 `target_id` 被 FK 置空，URL 写入 `detail` |
+| `approval.decision` | `routers/approval.py` | success(approve) / denied(reject) | `meta.approval_id` 关联 `ApprovalRequest` |
+| `agent.high_risk_tool` | `engine/approval.py` 审批闸门 | info / success / denied | 阶段 `meta.stage`：requested / auto_approved / decided；`tool_args` 截断 2000 字符 |
+| `agent.delegate` | `engine/event_bus.py` | success | `agent_start` 且 `depth>0` 的子 Agent 委派 |
+| `guardrail.scope_denied` | `engine/scan_tools.py` | denied | 越权出站拦截（host 级 / path 级） |
+| `agent.run_summary` | `engine/executor.py` | success | 任务完成汇总：`meta` 含 engine / tool_calls / high_risk_calls / total_tokens / duration_seconds |
+| `task.*`（terminated / probe_start / probe_done / scope_check / cancelled / engine_fallback / completed / reconciled / cancel_requested） | `executor.py` / `reconcile.py` / `routers/tasks.py` | — | 既有任务生命周期动作 |
+
+**`AuditEvent` 字段契约**：`actor` **无默认值、强制传入**（API 侧 `user.email` + `actor_id=user.id`，Worker 侧 `task.operator`）；`trace_id`/`span_id` 写入时取自当前 OTel span（API 侧通常为空）；`prev_hash`/`hash` 构成行级哈希链（见 `constraints.md`）。`task_events` 同步新增 `trace_id`/`span_id`。迁移 `0021_audit_governance`。
 
 > **⚠ 路由重复（源码事实）**：本模块另注册了 `GET /api/v1/tasks/{task_id}` 与 `GET /api/v1/tasks/{task_id}/events`，与 `routers/tasks.py` 的同名路径**重复**。`main.py` 注册顺序为 `tasks`(:88) **先于** `persistence`(:92)，FastAPI 按注册顺序匹配 ⇒ **这两个端点永不命中，实际生效的是 `tasks.py` 的实现**（前者返回 `TaskDetailRead`，后者为 list 而非 `EventReplay`）。修改此处的同名端点不会生效，勿误改。
 

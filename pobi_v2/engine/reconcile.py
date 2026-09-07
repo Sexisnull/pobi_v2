@@ -118,7 +118,7 @@ async def task_reconcile() -> dict:
                             t.error = reason
                             t.finished_at = datetime.now(timezone.utc)
                             await record_audit(
-                                s2, action="task.reconciled",
+                                s2, action="task.reconciled", actor=t.operator,
                                 outcome="error" if new_status == TaskStatus.failed else "success",
                                 detail=reason, task_id=task.id, target_id=task.target_id,
                                 tenant_id=task.tenant_id,

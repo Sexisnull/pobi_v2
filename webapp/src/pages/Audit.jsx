@@ -114,7 +114,7 @@ export default function Audit() {
       <PageHead
         title="审计日志"
         icon="scroll"
-        desc="平台所有操作的不可篡改记录：登录、目标变更、任务调度、审批决策与护栏拦截。"
+        desc="平台操作的追加式记录（哈希链防篡改）：登录、目标变更、任务调度、审批决策、护栏拦截与 Agent 高危动作。"
         actions={
           <Button icon="refresh" onClick={reload} disabled={loading}>
             刷新
@@ -153,6 +153,21 @@ export default function Audit() {
               <span className="kv__v kv__v--mono">{dt(detail.created_at)}</span>
               <span className="kv__k">操作者</span>
               <span className="kv__v kv__v--mono">{detail.actor}</span>
+              {detail.actor_id && (
+                <>
+                  <span className="kv__k">操作者 ID</span>
+                  <span className="kv__v kv__v--mono">{detail.actor_id}</span>
+                </>
+              )}
+              {detail.trace_id && (
+                <>
+                  <span className="kv__k">追溯 ID</span>
+                  <span className="kv__v kv__v--mono">
+                    {detail.trace_id}
+                    {detail.span_id ? ` / ${detail.span_id}` : ''}
+                  </span>
+                </>
+              )}
               <span className="kv__k">事件 ID</span>
               <span className="kv__v kv__v--mono">{detail.id}</span>
               {detail.task_id && (

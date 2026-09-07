@@ -388,6 +388,24 @@ async def persist_event_worker() -> None:
                     event_type,
                     detail,
                 )
+                # 子 Agent 委派（depth>0）属高风险动作，独立入审计链
+                if event_type == "agent_start" and (detail.get("depth") or 0) > 0:
+                    from pobi_v2.db.persistence import record_audit_safe
+
+                    task = await session.get(Task, task_uuid)
+                    if task is not None:
+                        await record_audit_safe(
+                            session, action="agent.delegate", actor=task.operator,
+                            task_id=task_uuid, target_id=task.target_id,
+                            tenant_id=task.tenant_id,
+                            detail=f"子 Agent 委派：{detail.get('agent_name') or 'unknown'}",
+                            meta={
+                                "agent_name": detail.get("agent_name"),
+                                "depth": detail.get("depth"),
+                                "parent_task_id": detail.get("parent_task_id"),
+                                "role": detail.get("role"),
+                            },
+                        )
                 since_touch += 1
                 if since_touch >= _TOUCH_EVERY:
                     since_touch = 0

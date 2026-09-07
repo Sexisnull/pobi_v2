@@ -10,6 +10,7 @@ from pobi_v2.core.deps import get_current_user, require_scope
 from pobi_v2.core.exceptions import AppError, ConflictError, NotFoundError
 from pobi_v2.core.security import create_access_token, hash_password, verify_password
 from pobi_v2.db.models import Tenant, User
+from pobi_v2.db.persistence import record_audit_safe
 from pobi_v2.db.session import get_session
 from pobi_v2.schemas.auth import (
     TenantCreate,
@@ -73,10 +74,23 @@ async def login(body: UserLogin, session: AsyncSession = Depends(get_session)) -
         await session.execute(select(User).where(User.email == body.email))
     ).scalar_one_or_none()
     if user is None or not verify_password(body.password, user.hashed_password):
+        await record_audit_safe(
+            session, action="auth.login_failed", actor=body.email, outcome="denied",
+            detail="邮箱或密码错误",
+            tenant_id=user.tenant_id if user is not None else None,
+        )
         raise AppError("邮箱或密码错误", status_code=status.HTTP_401_UNAUTHORIZED)
     if not user.is_active:
+        await record_audit_safe(
+            session, action="auth.login_failed", actor=user.email, actor_id=user.id,
+            outcome="denied", detail="用户已停用", tenant_id=user.tenant_id,
+        )
         raise AppError("用户已停用", status_code=status.HTTP_403_FORBIDDEN)
     token = create_access_token(str(user.id), str(user.tenant_id))
+    await record_audit_safe(
+        session, action="auth.login", actor=user.email, actor_id=user.id,
+        tenant_id=user.tenant_id,
+    )
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -105,4 +119,8 @@ async def create_tenant(
     session.add(tenant)
     await session.commit()
     await session.refresh(tenant)
+    await record_audit_safe(
+        session, action="tenant.create", actor=user.email, actor_id=user.id,
+        tenant_id=tenant.id, detail=body.name, meta={"slug": slug},
+    )
     return tenant

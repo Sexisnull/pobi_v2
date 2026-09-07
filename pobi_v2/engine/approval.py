@@ -41,6 +41,59 @@ def evaluate_tool_call(tool_name: str, high_risk_tools=None) -> bool:
     return tool_name.lower() in {t.lower() for t in tools}
 
 
+async def _approval_status(session_factory, request_id: UUID) -> str:
+    """读取审批终态（approved / rejected / expired），读取失败返回 unknown。"""
+    try:
+        async with session_factory() as session:
+            req = await session.get(ApprovalRequest, request_id)
+            return req.status.value if req is not None else "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _truncate_args(tool_args, limit: int = 2000) -> str:
+    """工具入参截断后落审计：凭据类长参数只保留前 limit 字符。"""
+    try:
+        return json.dumps(tool_args, ensure_ascii=False, default=str)[:limit]
+    except (TypeError, ValueError):
+        return str(tool_args)[:limit]
+
+
+async def _audit_high_risk(
+    session_factory,
+    *,
+    tenant_id: UUID | None,
+    task_id: UUID | None,
+    target_id: UUID | None,
+    operator: str | None,
+    tool_name: str | None,
+    tool_args,
+    outcome: str,
+    detail: str,
+    meta: dict | None = None,
+) -> None:
+    """高危工具调用留痕：审批创建 / 自动批准 / 人工决策 / 超时拒绝。
+
+    审计失败绝不阻断审批链路（``record_audit_safe`` 已兜底，此处再防一层）。
+    """
+    try:
+        from pobi_v2.db.persistence import record_audit_safe
+
+        async with session_factory() as session:
+            await record_audit_safe(
+                session, action="agent.high_risk_tool", actor=operator or "unknown",
+                outcome=outcome, detail=detail, task_id=task_id, target_id=target_id,
+                tenant_id=tenant_id,
+                meta={
+                    **(meta or {}),
+                    "tool_name": str(tool_name or "unknown"),
+                    "tool_args": _truncate_args(tool_args),
+                },
+            )
+    except Exception:  # noqa: BLE001 - 审计失败不得影响审批放行判定
+        pass
+
+
 async def create_approval_request(
     session,
     task_id: UUID,
@@ -121,6 +174,8 @@ def make_approval_callback(
     timeout_seconds: float = 300.0,
     tenant_id: UUID | None = None,
     task_id: UUID | None = None,
+    target_id: UUID | None = None,
+    operator: str | None = None,
     auto_approve: bool | None = None,
 ):
     """构造兼容 ``PobiAgent.set_approval_callback`` 的异步回调。
@@ -174,6 +229,14 @@ def make_approval_callback(
             except Exception:
                 # 创建失败不应阻断 agent；仍走 fail-closed 等待逻辑
                 pass
+            else:
+                await _audit_high_risk(
+                    session_factory, tenant_id=tenant_id, task_id=task_id,
+                    target_id=target_id, operator=operator, tool_name=tool_name,
+                    tool_args=tool_args, outcome="info",
+                    detail=f"高危工具待审批：{tool_name}",
+                    meta={"approval_id": str(call_id), "stage": "requested"},
+                )
 
         if effective_auto_approve:
             try:
@@ -182,10 +245,36 @@ def make_approval_callback(
                     await session.commit()
             except Exception:
                 pass
+            await _audit_high_risk(
+                session_factory, tenant_id=tenant_id, task_id=task_id,
+                target_id=target_id, operator=operator, tool_name=tool_name,
+                tool_args=tool_args, outcome="success",
+                detail=f"高危工具自动批准：{tool_name}",
+                meta={"approval_id": str(call_id), "stage": "auto_approved"},
+            )
             return "approve"
 
-        return await wait_for_decision(
+        decision = await wait_for_decision(
             session_factory, call_id, timeout_seconds=timeout_seconds
         )
+        status = await _approval_status(session_factory, call_id)
+        await _audit_high_risk(
+            session_factory, tenant_id=tenant_id, task_id=task_id,
+            target_id=target_id, operator=operator, tool_name=tool_name,
+            tool_args=tool_args,
+            outcome="success" if decision == "approve" else "denied",
+            detail=(
+                f"高危工具批准执行：{tool_name}"
+                if decision == "approve"
+                else f"高危工具未获批准（{status}）：{tool_name}"
+            ),
+            meta={
+                "approval_id": str(call_id),
+                "stage": "decided",
+                "decision": decision,
+                "approval_status": status,
+            },
+        )
+        return decision
 
     return _callback

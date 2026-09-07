@@ -9,6 +9,7 @@ from uuid import UUID
 from pobi_v2.core.deps import get_current_user, require_scope
 from pobi_v2.core.exceptions import NotFoundError
 from pobi_v2.db.models import ApprovalRequest, ApprovalStatus, Task, User
+from pobi_v2.db.persistence import record_audit_safe
 from pobi_v2.db.session import get_session
 from pobi_v2.engine.approval import decide_request
 from pobi_v2.schemas.approval import ApprovalDecision, ApprovalRead
@@ -70,4 +71,15 @@ async def decide(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc))
     await session.commit()
     await session.refresh(req)
+    await record_audit_safe(
+        session, action="approval.decision", actor=user.email, actor_id=user.id,
+        outcome="success" if body.decision == "approve" else "denied",
+        tenant_id=user.tenant_id, task_id=req.task_id, detail=body.reason,
+        meta={
+            "approval_id": str(req.id),
+            "tool_name": req.tool_name,
+            "agent_name": req.agent_name,
+            "decision": body.decision,
+        },
+    )
     return req

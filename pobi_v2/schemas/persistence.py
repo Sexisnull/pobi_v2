@@ -15,6 +15,8 @@ class TaskEventRead(BaseModel):
     seq: int
     event_type: str
     payload: dict = {}
+    trace_id: str | None = None
+    span_id: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -55,11 +57,14 @@ class AuditEventRead(BaseModel):
     id: UUID
     task_id: UUID | None
     target_id: UUID | None
+    actor_id: UUID | None
     actor: str
     action: str
     outcome: str
     detail: str | None
     meta: dict
+    trace_id: str | None
+    span_id: str | None
     created_at: datetime
 
     model_config = {"from_attributes": True}

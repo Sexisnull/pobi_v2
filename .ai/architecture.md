@@ -77,6 +77,29 @@
 5. 完成 → 状态 `completed`/`failed`/`cancelled`，`result` 写入；报告经 `routers/report.py` 导出。
 6. SSE 断连 → `GET /api/v1/tasks/{id}/events`（`after_seq` 游标）回放，弥补断连即丢。
 
+## 审计写入链路（2026-09-07 增强，P0+P1）
+
+**单点收敛**：所有审计经 `db/persistence.record_audit` 写入，函数内统一完成
+「actor 校验 → 取当前 OTel span 填 `trace_id`/`span_id` → PG advisory lock 串行化 → 计算行哈希」。
+`record_audit_safe` 是其 best-effort 包装（提交失败只记日志），用于路由层，避免治理留痕反噬可用性。
+
+```
+routers/auth.py 登录/租户 ┐
+routers/targets.py CRUD   ├─→ record_audit_safe ─┐
+routers/approval.py 决策  ┘                      │
+engine/executor.py 生命周期+汇总                  ├─→ record_audit ─→ audit_events（哈希链，append-only）
+engine/approval.py 高危闸门（创建/自动批准/决策） │        ↑
+engine/event_bus.py 子 Agent 委派（depth>0）      │   core/otel.current_trace_ids
+engine/scan_tools.py 越权拦截                    ┘
+```
+
+- **人做了什么**（路由层）与**Agent 做了什么**（Worker 执行链路）二分，动作清单见 `api-contract.md` 审计字典。
+- **高风险逐条 + 任务汇总**：高风险动作（高危工具、委派、越权）逐条入 `audit_events`；
+  任务完成时 `executor._record_run_summary` 追加一条 `agent.run_summary` 汇总（工具调用数 / 高危次数 / token / 耗时），
+  避免全量工具调用膨胀审计表。
+- **证据留存**：`audit_events.tenant_id` 由 CASCADE 改 SET NULL（迁移 0021），删除租户/任务不再抹除证据；
+  `task_events` 仍随任务级联删除（改外键会破坏既有删除流），故高风险证据必须写 `audit_events` 而非仅落事件表。
+
 ## 上下文与记忆分层（ContextEngine，2026-09-03 依源码校正）
 
 > 本节用于消除「记忆架构」相关描述与代码的偏差：**L0/L1/L2 分层索引与威胁状态机均已上线**，真正缺失的是「工作记忆窗口 / 落盘摘要的结构化回流 / 生产路径创建威胁」。

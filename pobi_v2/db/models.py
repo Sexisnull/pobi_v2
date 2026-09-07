@@ -265,6 +265,9 @@ class TaskEvent(Base):
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     # 事件负载（JSONB，灵活 schema）
     payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # 追踪关联（P1）：写入时取自当前 OTel span，用于从事件跳转到链路
+    trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    span_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     task: Mapped[Task] = relationship(back_populates="events")
@@ -388,14 +391,14 @@ class AuditEvent(Base):
     target_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("targets.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    # M4 归属
+    # M4 归属（审计证据须长于实体本身，故不随租户级联删除）
     tenant_id: Mapped[UUID | None] = mapped_column(
-        Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
+        Uuid, ForeignKey("tenants.id", ondelete="SET NULL"), nullable=True, index=True
     )
     actor_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    actor: Mapped[str] = mapped_column(String(128), nullable=False, default="web-operator")
+    actor: Mapped[str] = mapped_column(String(128), nullable=False)
     action: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     # 结果：success / denied / error
     outcome: Mapped[str] = mapped_column(String(32), nullable=False, default="success")
@@ -405,6 +408,12 @@ class AuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, index=True
     )
+    # 追踪关联（P1）：写入时取自当前 OTel span
+    trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    span_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # 防篡改（P1）：行级哈希链，hash = H(规范化本行内容 + prev_hash)
+    prev_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class PricingConfig(Base):

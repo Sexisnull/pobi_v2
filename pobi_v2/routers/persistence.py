@@ -96,6 +96,8 @@ async def list_audit(
     task_id: UUID | None = Query(default=None),
     target_id: UUID | None = Query(default=None),
     action: str | None = Query(default=None),
+    actor: str | None = Query(default=None, description="按操作者过滤"),
+    trace_id: str | None = Query(default=None, description="按追踪 ID 过滤"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_session),
@@ -108,5 +110,9 @@ async def list_audit(
         stmt = stmt.where(AuditEvent.target_id == target_id)
     if action is not None:
         stmt = stmt.where(AuditEvent.action == action)
+    if actor is not None:
+        stmt = stmt.where(AuditEvent.actor == actor)
+    if trace_id is not None:
+        stmt = stmt.where(AuditEvent.trace_id == trace_id)
     stmt = stmt.order_by(AuditEvent.created_at.desc()).limit(limit).offset(offset)
     return list((await session.execute(stmt)).scalars().all())

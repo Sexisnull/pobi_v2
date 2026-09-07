@@ -406,6 +406,8 @@ async def _run_deadend_agent_body(
         _async_session_factory(),
         tenant_id=task.tenant_id,
         task_id=task_id,
+        target_id=target.id,
+        operator=task.operator,
         auto_approve=auto_approve,
     )
 

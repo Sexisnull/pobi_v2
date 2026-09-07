@@ -15,6 +15,7 @@ from pobi_v2.core.deps import get_current_user, require_scope
 from pobi_v2.core.exceptions import ConflictError, NotFoundError
 from pobi_v2.db.models import Artifact, Finding, Target, Task, User
 from pobi_v2.engine.recon_access import delete_task_local_data
+from pobi_v2.db.persistence import record_audit_safe
 from pobi_v2.db.recon_models import ReconEndpointAgg, ReconFactAgg, ReconThreatAgg
 from pobi_v2.db.session import get_session
 from pobi_v2.schemas.recon import (
@@ -48,6 +49,11 @@ async def create_target(
         session.add(target)
         await session.commit()
         await session.refresh(target)
+        await record_audit_safe(
+            session, action="target.created", actor=user.email, actor_id=user.id,
+            tenant_id=user.tenant_id, target_id=target.id, detail=target.url,
+            meta={"changed": sorted(payload.keys())},
+        )
         return target
     except ConflictError:
         raise
@@ -447,6 +453,11 @@ async def update_target(
         setattr(target, key, value)
     await session.commit()
     await session.refresh(target)
+    await record_audit_safe(
+        session, action="target.updated", actor=user.email, actor_id=user.id,
+        tenant_id=user.tenant_id, target_id=target.id, detail=target.url,
+        meta={"changed": sorted(data.model_dump(exclude_unset=True).keys())},
+    )
     return target
 
 
@@ -461,8 +472,15 @@ async def delete_target(
         raise NotFoundError("目标不存在")
     # 先取任务 id：级联删除后 ORM 会清空关系，无法再取。
     task_ids = [t.id for t in target.tasks]
+    target_url = target.url
     await session.delete(target)
     await session.commit()
+    # 目标删除后 audit.target_id 会被置空（FK SET NULL），故 URL 与任务数写入 detail/meta
+    await record_audit_safe(
+        session, action="target.deleted", actor=user.email, actor_id=user.id,
+        tenant_id=user.tenant_id, detail=target_url,
+        meta={"deleted_tasks": len(task_ids)},
+    )
 
     # 清理各任务的本地缓存目录（TASKS_ROOT/<task_id>/）。
     # 本地目录按 task_id 组织，不会随目标删除自动消失，须逐个清理，

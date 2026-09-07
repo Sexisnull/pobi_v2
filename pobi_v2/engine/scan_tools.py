@@ -83,6 +83,35 @@ def _is_safe_shell(target_url: str | None, command: str) -> bool:
     return any(lowered.strip().startswith(p) for p in allowed_prefixes)
 
 
+async def _audit_scope_denied(ctx: ToolContext, url: str, reason: str) -> None:
+    """越权出站留痕（best-effort）：审计失败不影响拦截本身，异常照常抛出。"""
+    if not ctx.session_id:
+        return
+    try:
+        from uuid import UUID
+
+        from pobi_agent.logging import logger
+
+        from pobi_v2.db.models import Task
+        from pobi_v2.db.persistence import record_audit_safe
+        from pobi_v2.db.session import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as session:
+            task = await session.get(Task, UUID(str(ctx.session_id)))
+            if task is None:
+                return
+            await record_audit_safe(
+                session, action="guardrail.scope_denied", actor=task.operator,
+                outcome="denied", detail=reason, task_id=task.id,
+                target_id=task.target_id, tenant_id=task.tenant_id,
+                meta={"url": url},
+            )
+    except Exception as exc:  # noqa: BLE001 - 审计不得阻断越权拦截
+        from pobi_agent.logging import logger
+
+        logger.warning("越权拦截审计写入失败（已忽略）: %s", exc)
+
+
 async def http_request(
     ctx: ToolContext,
     method: str,
@@ -104,6 +133,7 @@ async def http_request(
         from pobi_agent.logging import logger
 
         logger.warning("Scope gate blocked request to %s: %s", url, exc)
+        await _audit_scope_denied(ctx, url, f"目标不在授权范围：{exc}")
         raise
 
     # —— path 级排除（补充原 ScopePolicy 的 host 级粒度）——
@@ -111,6 +141,7 @@ async def http_request(
         from pobi_agent.logging import logger
 
         logger.warning("Scope gate blocked (path-excluded) request to %s", url)
+        await _audit_scope_denied(ctx, url, "URL 命中 out-of-scope 路径规则")
         raise ScopeViolation(f"URL {url} matches an out-of-scope path rule")
 
     async with httpx.AsyncClient(

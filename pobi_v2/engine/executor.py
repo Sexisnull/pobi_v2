@@ -22,8 +22,10 @@ from pobi_agent.logging import logger, task_logger
 
 from pobi_agent.hooks import get_event_hooks
 
+from sqlalchemy import func, select
+
 from pobi_v2.core.config import settings
-from pobi_v2.db.models import ArtifactKind, Task, TaskStatus, Target
+from pobi_v2.db.models import ApprovalRequest, ArtifactKind, Task, TaskEvent, TaskStatus, Target
 from pobi_v2.db.persistence import (
     record_artifact,
     record_audit,
@@ -205,7 +207,7 @@ async def run_task(ctx, task_id: str, **kwargs: object) -> dict:
                     t.completion_tokens = _fu["completion_tokens"]
                     t.total_tokens = _fu["total_tokens"]
                     await record_audit(
-                        s2, action="task.terminated",
+                        s2, action="task.terminated", actor=t.operator,
                         outcome="error" if _status == TaskStatus.failed else "success",
                         detail=_err, task_id=tid, target_id=t.target_id,
                         tenant_id=t.tenant_id,
@@ -232,7 +234,7 @@ async def _run_probe_branch(tid, task, target, hooks, session) -> dict:
     from pobi_v2.engine import probe_runner
 
     await record_audit(
-        session, action="task.probe_start", outcome="info",
+        session, action="task.probe_start", actor=task.operator, outcome="info",
         detail="链路探针：在共享 Kali 中 curl 授权目标并由 LLM 解读",
         task_id=tid, target_id=target.id, tenant_id=task.tenant_id,
     )
@@ -254,7 +256,8 @@ async def _run_probe_branch(tid, task, target, hooks, session) -> dict:
 
     reachable = bool((outcome.get("structured_report") or {}).get("target_reachable"))
     await record_audit(
-        session, action="task.probe_done", outcome="success" if reachable else "info",
+        session, action="task.probe_done", actor=task.operator,
+        outcome="success" if reachable else "info",
         detail=f"目标连通性：{'可达' if reachable else '不可达'}",
         task_id=tid, target_id=target.id, tenant_id=task.tenant_id,
     )
@@ -318,7 +321,7 @@ async def _run_task_body(tid: UUID) -> dict:
             task.error = f"授权范围校验失败: {exc}"
             task.finished_at = _utcnow()
             await record_audit(
-                session, action="task.scope_check", outcome="denied",
+                session, action="task.scope_check", actor=task.operator, outcome="denied",
                 detail=str(exc), task_id=tid, target_id=target.id,
                 tenant_id=task.tenant_id,
                 meta={"objective": task.objective},
@@ -339,10 +342,13 @@ async def _run_task_body(tid: UUID) -> dict:
             AsyncSessionLocal,
             tenant_id=task.tenant_id,
             task_id=tid,
+            target_id=target.id,
+            operator=task.operator,
             auto_approve=(task.agent_mode == "yolo"),
         )
 
         # 分支：链路连通性探针走轻量快路径，不加载重型多智能体 / avfs / RAG。
+        engine_kind = "probe" if task.kind == "probe" else "deadend"
         if task.kind == "probe":
             log.info("[TASK-LIFECYCLE] 进入探针分支")
             outcome = await _run_probe_branch(tid, task, target, hooks, session)
@@ -354,7 +360,6 @@ async def _run_task_body(tid: UUID) -> dict:
             # 含 Docker 沙箱执行验证、多智能体协作、ADaPT 规划、ValidationGate、
             # ReporterAgent）。沙箱为必需依赖；若不可用时回退到轻量 ScanWorkflow。
             outcome = None
-            engine_kind = "deadend"
             try:
                 outcome = await asyncio.wait_for(
                     run_deadend_agent(
@@ -374,7 +379,8 @@ async def _run_task_body(tid: UUID) -> dict:
                     task.finished_at = _utcnow()
                     task.error = "任务在子超时内被取消"
                     await record_audit(
-                        session, action="task.cancelled", outcome="success",
+                        session, action="task.cancelled", actor=task.operator,
+                        outcome="success",
                         task_id=tid, target_id=target.id,
                     tenant_id=task.tenant_id,
                     )
@@ -393,7 +399,8 @@ async def _run_task_body(tid: UUID) -> dict:
                     from pobi_v2.engine.scan_workflow import ScanWorkflow
 
                     await record_audit(
-                        session, action="task.engine_fallback", outcome="info",
+                        session, action="task.engine_fallback", actor=task.operator,
+                        outcome="info",
                         detail="Docker 沙箱不可用，回退到 ScanWorkflow（不含沙箱验证）",
                         task_id=tid, target_id=target.id,
                     tenant_id=task.tenant_id,
@@ -417,7 +424,8 @@ async def _run_task_body(tid: UUID) -> dict:
                             task.finished_at = _utcnow()
                             task.error = "任务在子超时内被取消"
                             await record_audit(
-                                session, action="task.cancelled", outcome="success",
+                                session, action="task.cancelled", actor=task.operator,
+                                outcome="success",
                                 task_id=tid, target_id=target.id,
                             tenant_id=task.tenant_id,
                             )
@@ -435,7 +443,7 @@ async def _run_task_body(tid: UUID) -> dict:
             task.status = TaskStatus.cancelled
             task.finished_at = _utcnow()
             await record_audit(
-                session, action="task.cancelled", outcome="success",
+                session, action="task.cancelled", actor=task.operator, outcome="success",
                 task_id=tid, target_id=target.id,
             tenant_id=task.tenant_id,
             )
@@ -455,11 +463,12 @@ async def _run_task_body(tid: UUID) -> dict:
         task.total_tokens = usage["total_tokens"]
         await _persist_outcome(session, task, target, outcome)
         await record_audit(
-            session, action="task.completed", outcome="success",
+            session, action="task.completed", actor=task.operator, outcome="success",
             task_id=tid, target_id=target.id,
             tenant_id=task.tenant_id,
-            meta={"confidence": outcome.get("confidence")},
+            meta={"confidence": outcome.get("confidence"), "engine": engine_kind},
         )
+        await _record_run_summary(session, task, target, engine_kind)
         await session.commit()
         log.info(
             "[TASK-LIFECYCLE] 任务正常完成 | confidence=%s | tokens=%d",
@@ -467,6 +476,34 @@ async def _run_task_body(tid: UUID) -> dict:
         )
         await _publish_status_change(tid, TaskStatus.completed)
         return {"task_id": task_id, "status": "completed"}
+
+async def _record_run_summary(
+    session, task: Task, target: Target, engine_kind: str
+) -> None:
+    """任务完成时追加一条运行汇总审计（工具调用数 / 高危次数 / token / 耗时）。"""
+    tool_calls = await session.scalar(
+        select(func.count(TaskEvent.id)).where(
+            TaskEvent.task_id == task.id, TaskEvent.event_type == "tool_call_end"
+        )
+    )
+    high_risk = await session.scalar(
+        select(func.count(ApprovalRequest.id)).where(ApprovalRequest.task_id == task.id)
+    )
+    duration = None
+    if task.started_at is not None and task.finished_at is not None:
+        duration = round((task.finished_at - task.started_at).total_seconds(), 1)
+    await record_audit(
+        session, action="agent.run_summary", actor=task.operator, outcome="success",
+        task_id=task.id, target_id=target.id, tenant_id=task.tenant_id,
+        meta={
+            "engine": engine_kind,
+            "tool_calls": int(tool_calls or 0),
+            "high_risk_calls": int(high_risk or 0),
+            "total_tokens": task.total_tokens,
+            "duration_seconds": duration,
+        },
+    )
+
 
 async def _persist_outcome(session, task: Task, target: Target, outcome: dict) -> None:
     """把工作流产出落库：运行轨迹事件 + 结构化发现。"""
