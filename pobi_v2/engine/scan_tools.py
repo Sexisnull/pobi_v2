@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass, field
 from typing import Any
@@ -68,9 +69,13 @@ def _is_safe_shell(target_url: str | None, command: str) -> bool:
     真实高危命令仍由 pobi_v2 的 approval gate（engine/approval.py）二次拦截。
     """
     lowered = command.lower()
+    # 管道喂给解释器（含 `curl <url> | sh` 这类下载即执行变体）：用正则而非精确
+    # 子串，避免命令中间插入 URL / 参数即可绕过。
+    if re.search(r"\|\s*(sudo\s+)?(sh|bash|zsh|dash|python3?|perl)\b", lowered):
+        return False
     banned = (
         "rm -rf", "mkfs", "dd if=", ":(){", "> /dev/sd", "chmod -r",
-        "shutdown", "reboot", "curl | sh", "wget | sh",
+        "shutdown", "reboot",
     )
     for token in banned:
         if token in lowered:

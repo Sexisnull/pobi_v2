@@ -327,7 +327,7 @@ async def _run_task_body(tid: UUID) -> dict:
                 meta={"objective": task.objective},
             )
             await session.commit()
-            return {"task_id": task_id, "status": "failed", "error": str(exc)}
+            return {"task_id": str(tid), "status": "failed", "error": str(exc)}
 
         task.status = TaskStatus.running
         task.started_at = _utcnow()
@@ -386,7 +386,7 @@ async def _run_task_body(tid: UUID) -> dict:
                     )
                     await session.commit()
                     await _publish_status_change(tid, TaskStatus.cancelled)
-                    return {"task_id": task_id, "status": "cancelled"}
+                    return {"task_id": str(tid), "status": "cancelled"}
                 # 无取消请求却超时：视为真卡死，交给 run_task 兜底标记 failed。
                 # 显式补充错误描述：裸 asyncio.TimeoutError 的 str() 为空，直接 raise
                 # 会导致 tasks.error 落库为空字符串，事后无法定位失败原因。
@@ -431,7 +431,7 @@ async def _run_task_body(tid: UUID) -> dict:
                             )
                             await session.commit()
                             await _publish_status_change(tid, TaskStatus.cancelled)
-                            return {"task_id": task_id, "status": "cancelled"}
+                            return {"task_id": str(tid), "status": "cancelled"}
                         raise
                     engine_kind = "scan_workflow"
                 else:
@@ -449,7 +449,7 @@ async def _run_task_body(tid: UUID) -> dict:
             )
             await session.commit()
             await _publish_status_change(tid, TaskStatus.cancelled)
-            return {"task_id": task_id, "status": "cancelled"}
+            return {"task_id": str(tid), "status": "cancelled"}
 
         # 落库：运行结果 + 发现 + 轨迹
         task.status = TaskStatus.completed
