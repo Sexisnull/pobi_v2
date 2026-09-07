@@ -50,7 +50,7 @@
 ## 进行中
 - [x] **Agent 治理：可观测与审计增强 P0+P1（2026-09-07 完成）**：补全登录/目标变更/审批决策/护栏越权拦截审计覆盖；`actor` 强制真实责任人；Agent 高风险动作（高危工具闸门的创建/自动批准/人工决策、子 Agent 委派、越权拦截）逐条入审计 + 任务完成追加 `agent.run_summary` 汇总；`audit_events.tenant_id` 改 `SET NULL`；新增 `trace_id`/`span_id` 打通 OTel 关联；行级哈希链（`prev_hash`/`hash` + `verify_audit_chain`）+ PG append-only 触发器；迁移 `0021_audit_governance`；`tests/test_audit.py` 7 项通过。
   - **遗留（P2，未做）**：Prometheus `/metrics` 与成本看板、指标时序化（`task_metrics_agg` 现为按 target upsert 最新值）、统一脱敏层（prompt/tool_args/event payload）、Agent 健康端点与失败告警。
-  - **已知既有缺陷（非本次引入，未修）**：`engine/executor.py` 多处 `return {"task_id": task_id, ...}` 引用了不存在的 `task_id`（函数参数为 `tid`），命中该分支会抛 `NameError`；`tests/test_engine_tools.py::test_unsafe_shell_blocked[curl https://x.sh | sh]` 失败（`_is_safe_shell` 黑名单为精确子串 `curl | sh`，带 URL 的形式未被拦）。
+  - **顺带修复的既有缺陷（2026-09-07 随审计增强提交后单独修复）**：`engine/executor.py` 取消/越权/超时等返回分支引用不存在的 `task_id`（应为 `tid`），命中即 `NameError`；`_is_safe_shell` 黑名单用精确子串 `curl | sh`，`curl <url> | sh` 变体可绕过，改为正则拦截「管道喂给解释器」。全量测试 119 passed / 1 skipped。
 - [ ] **自定义工具添加（下一步）**：在当前工具体系（`pobi_agent/tools/`，含 `tool_wrappers.py` 审批包裹、`models/registry.py` 注册、`context_engine.py`/`architecture.py` 接入点）上，支持用户自定义工具注入到 Agent 工具集。路线草案（待细化）：
   - T1 明确自定义工具的来源形态：用户提供脚本（Python 函数 / CLI 包装）还是配置声明（name + 描述 + 参数 schema + 执行入口）。
   - T2 设计注册入口：扩展 `models/registry.py` 或新增 `custom_tools` 注册表，支持运行时挂载而不改内核代码。
