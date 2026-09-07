@@ -48,6 +48,7 @@ from pobi_agent.agents.components.validation_strategies import (
     DEADEND_VALIDATION_CONFIG_PATH,
 )
 from pobi_agent.constants import TASKS_ROOT
+from pobi_agent.recon.sqlite_models import infer_severity
 from pobi_agent.storage_context import set_task_root, clear_task_root
 
 from pobi_v2.core.config import settings
@@ -509,12 +510,12 @@ async def _run_deadend_agent_body(
     # 兜底：ReporterAgent 无输出时，读取 agent 工作区中由子 agent 写入的报告文件
     # （如 requester/exploit agent 通过 write_workspace_file 写入的 reports/*.md）。
     # 这些报告包含完整的漏洞确认、payload、证据、复现步骤，是实际有价值的交付物。
-    workspace_reports: list[str] = []
+    workspace_reports: list[tuple[str, str]] = []
     if not report:
         workspace_reports = _collect_workspace_reports(task_root)
         if workspace_reports:
             # 优先选择非 recon 的报告（如 dvwa-sqli.md），其次 recon_report.md
-            report = workspace_reports[0]
+            report = workspace_reports[0][1]
 
     # 实时推送安全评估报告到前端聊天流（前端已具备 report_task_event 渲染分支，
     # 此前后端漏发该事件，导致报告仅落库、UI 不展示）。
@@ -539,16 +540,16 @@ async def _run_deadend_agent_body(
     return outcome
 
 
-def _collect_workspace_reports(task_root: Path) -> list[str]:
+def _collect_workspace_reports(task_root: Path) -> list[tuple[str, str]]:
     """读取 agent 工作区 reports/ 目录下的 Markdown 报告，按价值排序返回。
 
-    排序规则：非 recon 报告优先（如 dvwa-sqli.md、exploit-report.md），
-    recon_report.md 次之。仅读取 .md 文件，跳过空文件。
+    返回 ``(文件名, 正文)`` 列表。排序规则：非 recon 报告优先（如 dvwa-sqli.md、
+    exploit-report.md），recon_report.md 次之。仅读取 .md 文件，跳过空文件。
     """
     reports_dir = task_root / "agent" / "workspace" / "reports"
     if not reports_dir.exists():
         return []
-    collected: list[tuple[str, int]] = []  # (content, priority)
+    collected: list[tuple[str, str, int]] = []  # (name, content, priority)
     for f in sorted(reports_dir.glob("*.md")):
         try:
             content = f.read_text(encoding="utf-8").strip()
@@ -556,11 +557,11 @@ def _collect_workspace_reports(task_root: Path) -> list[str]:
                 continue
             # recon 报告优先级低（值越大越靠后）
             priority = 10 if "recon" in f.name.lower() else 0
-            collected.append((content, priority))
+            collected.append((f.name, content, priority))
         except Exception:
             continue
-    collected.sort(key=lambda x: x[1])
-    return [c[0] for c in collected]
+    collected.sort(key=lambda x: x[2])
+    return [(name, content) for name, content, _ in collected]
 
 
 def _normalize_outcome(
@@ -569,13 +570,22 @@ def _normalize_outcome(
     plan: Any,
     validation_token: str,
     report: str | None = None,
-    workspace_reports: list[str] | None = None,
+    workspace_reports: list[tuple[str, str]] | None = None,
 ) -> dict:
     """把 DeadEndAgent 的产出（recon_report / plan / validation_token / report）归一化。"""
     summary_parts: list[str] = []
     structured_report: dict[str, Any] = {}
     findings: list[dict] = []
     confidence: Optional[float] = None
+
+    # 运行置信度取自本次执行的 TaskNode.confidence_score：验证通过时该值为
+    # ValidationGate Judge 给出的 verdict.confidence，否则为 ADaPT 根任务节点的
+    # 规划置信度。后置解析的 findings 复用它，避免落库成无意义的 0。
+    if plan is not None and hasattr(plan, "confidence_score"):
+        try:
+            confidence = float(plan.confidence_score)
+        except (TypeError, ValueError):
+            confidence = None
 
     if isinstance(recon_report, dict):
         summary_parts.append(str(recon_report.get("summary") or ""))
@@ -600,28 +610,33 @@ def _normalize_outcome(
         summary_parts.append(report[:500])  # 摘要只取前500字符
         structured_report["report"] = report
 
-    # 从工作区报告中提取 findings（报告标题 + 首段作为描述）
+    # 从主报告（排序后的首个工作区报告）中提取 finding。recon 报告不是已确认漏洞，
+    # 不参与提取，否则会把侦察结论误记为漏洞发现。
     if workspace_reports and not findings:
-        for wr in workspace_reports:
-            finding = _extract_finding_from_report(wr)
-            if finding:
-                findings.append(finding)
+        finding = _extract_finding_from_report(workspace_reports[0][1], confidence)
+        if finding:
+            findings.append(finding)
 
-    if plan is not None:
-        if hasattr(plan, "confidence_score"):
-            try:
-                confidence = float(plan.confidence_score)
-            except (TypeError, ValueError):
-                confidence = None
-        if hasattr(plan, "task"):
-            summary_parts.append(f"规划任务: {plan.task}")
+    if plan is not None and hasattr(plan, "task"):
+        summary_parts.append(f"规划任务: {plan.task}")
 
     summary = "\n\n".join(p for p in summary_parts if p).strip() or "扫描完成"
     structured_report.setdefault("summary", summary)
+    if confidence is not None:
+        structured_report["confidence"] = confidence
     if validation_token:
         structured_report["validation_token"] = validation_token
     if findings:
         structured_report["findings"] = findings
+    # 产物清单：工作区报告按原始文件名逐条登记；ReporterAgent 输出无对应文件时
+    # 单独成条，保证「产物」页能拿到全部交付物而非仅有主报告。
+    reports: list[dict[str, str]] = [
+        {"name": name, "content": content} for name, content in (workspace_reports or [])
+    ]
+    if report and not workspace_reports:
+        reports.append({"name": "安全评估报告.md", "content": report})
+    if reports:
+        structured_report["reports"] = reports
 
     return {
         "summary": summary,
@@ -631,18 +646,42 @@ def _normalize_outcome(
     }
 
 
-def _extract_finding_from_report(report_text: str) -> dict | None:
+def _extract_report_title(lines: list[str]) -> str:
+    """按 ReporterAgent 报告契约提取漏洞标题，无则回退文档首行标题。
+
+    ``pobi_prompts/reporter.instructions.jinja2`` 规定报告结构为
+    ``## Confirmed Vulnerability`` + ``### <漏洞名 | Not observed>``，
+    该小节标题才是漏洞名；直接用文档首行标题会捞到 TL;DR 里的 Objective 文案。
+    """
+    in_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            in_section = stripped[3:].strip().lower().startswith("confirmed vulnerability")
+            continue
+        if in_section and stripped.startswith("### "):
+            title = stripped[4:].strip()
+            if title and "not observed" not in title.lower():
+                return title
+    for line in lines:
+        if line.startswith("# "):
+            return line[2:].strip()
+    return ""
+
+
+def _extract_finding_from_report(
+    report_text: str, confidence: float | None = None
+) -> dict | None:
     """从 Markdown 报告文本中提取基本漏洞发现。
 
     解析报告标题（# 开头）和关键信息（漏洞类型、端点、payload），
     生成一条结构化 finding。无法解析时返回 None。
+
+    Args:
+        confidence: 本次运行的置信度；缺省 0.8 表示「来自 agent 亲笔报告」。
     """
     lines = report_text.strip().splitlines()
-    title = ""
-    for line in lines:
-        if line.startswith("# "):
-            title = line[2:].strip()
-            break
+    title = _extract_report_title(lines)
     if not title:
         # 尝试从 TL;DR 或 Confirmed Vulnerability 段提取
         for line in lines:
@@ -662,15 +701,7 @@ def _extract_finding_from_report(report_text: str) -> dict | None:
             break
     description = " ".join(description_parts)[:500]
 
-    # 判断严重级别
-    severity = "info"
-    report_lower = report_text.lower()
-    if any(kw in report_lower for kw in ["rce", "remote code execution", "远程代码执行", "sql injection", "sql 注入", "sqli"]):
-        severity = "high"
-    elif any(kw in report_lower for kw in ["xss", "cross-site", "csrf", "idor", "信息泄露", "information disclosure"]):
-        severity = "medium"
-    elif any(kw in report_lower for kw in ["low", "低危", "信息收集", "recon"]):
-        severity = "low"
+    severity = infer_severity(report_text)
 
     # 提取证据（payload 或 error message）
     evidence = ""
@@ -690,7 +721,7 @@ def _extract_finding_from_report(report_text: str) -> dict | None:
         "title": title[:200],
         "description": description,
         "severity": severity,
-        "confidence": 0.8,  # 来自 agent 写入的报告，置信度较高
+        "confidence": confidence if confidence is not None else 0.8,
         "evidence": evidence,
         "cwe": None,
     }

@@ -76,12 +76,14 @@ def _build_finding_from_report(report: dict) -> list[dict]:
                     "cwe": f.get("cwe"),
                 })
     elif isinstance(report, dict) and report.get("summary"):
-        # 无结构化 findings 时的兜底：整体作为一条 info 级发现
+        # 无结构化 findings 时的兜底：整体作为一条 info 级发现。
+        # 置信度沿用本次运行置信度（task.confidence 由 executor 落库前写入），
+        # 不再固定为 0（0 表示「完全不可信」，与实际已有产出的语义不符）。
         findings.append({
             "title": "扫描摘要",
             "description": str(report.get("summary", ""))[:2000],
             "severity": "info",
-            "confidence": 0.0,
+            "confidence": float(report.get("confidence") or 0.0),
             "evidence": str(report.get("evidence", ""))[:4000],
             "cwe": None,
         })
@@ -489,16 +491,19 @@ async def _persist_outcome(session, task: Task, target: Target, outcome: dict) -
             cwe=f["cwe"],
         )
 
-    # 3) 报告正文落库（阶段完成后的最终版，动态更新期间不写库）
-    report_text = structured.get("report")
-    if report_text:
+    # 3) 报告产物落库（阶段完成后的最终版，动态更新期间不写库）
+    for item in structured.get("reports") or []:
+        content = item.get("content") or ""
+        if not content:
+            continue
+        name = item.get("name") or "报告.md"
         await record_artifact(
             session,
             task_id=task.id,
             target_id=target.id,
-            name=f"{target.name or '目标'} 安全评估报告.md",
+            name=f"{target.name or '目标'} - {name}",
             kind=ArtifactKind.report,
-            content=report_text,
+            content=content,
             content_type="text/markdown",
-            size_bytes=len(report_text.encode("utf-8")),
+            size_bytes=len(content.encode("utf-8")),
         )

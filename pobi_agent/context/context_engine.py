@@ -19,6 +19,13 @@ from pathlib import Path
 from typing import Dict, List, Set, Any, Callable, TYPE_CHECKING
 
 from pobi_agent.logging import logger
+from pobi_agent.recon.sqlite_models import (
+    ReconCategory,
+    ThreatStatus,
+    extract_cve,
+    infer_severity,
+    normalize_category,
+)
 from pobi_agent.utils.functions import num_tokens_from_string
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型标注，避免运行时循环依赖
@@ -1463,7 +1470,12 @@ class ContextEngine:
         source_task: str,
         details: dict | None,
     ) -> None:
-        """旁路写入 recon_facts，异常被吞除以不阻断 agent 主循环。"""
+        """旁路写入 recon_facts，异常被吞除以不阻断 agent 主循环。
+
+        ``vulnerability`` 类事实额外派生 recon_threats 记录：侦察阶段识别出的
+        漏洞线索需要成为利用阶段可消费的「待验证威胁清单」，否则 recon_threats
+        永远为空（生产路径此前无任何 upsert_threat 调用方）。
+        """
         if self.recon_store is None:
             return
         try:
@@ -1479,6 +1491,49 @@ class ContextEngine:
             self._recon_emit_sync()
         except Exception as exc:  # noqa: BLE001 - 旁路写入失败不应影响推理
             logger.warning("RECON 旁路 fact 写入失败（已忽略）: %s", exc)
+
+        if normalize_category(category) != ReconCategory.vulnerability:
+            return
+        details = details or {}
+        self._recon_bypass_threat(
+            title=key[:512],
+            endpoint=str(details.get("endpoint") or details.get("path") or "")[:512],
+            evidence=value,
+            confidence=confidence,
+            source_task=source_task,
+        )
+
+    def _recon_bypass_threat(
+        self,
+        title: str,
+        endpoint: str,
+        evidence: str,
+        confidence: float,
+        source_task: str,
+    ) -> None:
+        """旁路写入 recon_threats，异常被吞除以不阻断 agent 主循环。
+
+        recon_threats 的幂等键是 ``(task_id, cve_id)``：CVE 类威胁用 CVE 编号
+        标识，非 CVE 的自研漏洞（SQLi / XSS / 弱口令等）退化用漏洞名标识，
+        使同一任务下的不同漏洞各自成行。
+        """
+        if self.recon_store is None:
+            return
+        try:
+            self.recon_store.upsert_threat(
+                task_id=self._recon_task_id(),
+                cve_id=extract_cve(title) or extract_cve(evidence) or title[:64],
+                title=title,
+                category=ReconCategory.vulnerability.value,
+                severity=infer_severity(f"{title} {evidence}"),
+                status=ThreatStatus.suspected.value,
+                affected_endpoint=endpoint,
+                evidence_summary=evidence,
+                confidence=confidence,
+            )
+            self._recon_emit_sync()
+        except Exception as exc:  # noqa: BLE001 - 旁路写入失败不应影响推理
+            logger.warning("RECON 旁路 threat 写入失败（已忽略）: %s", exc)
 
     def _recon_bypass_attempt(
         self, task: str, payload: str, result: str, reason: str

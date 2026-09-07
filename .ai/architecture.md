@@ -137,12 +137,20 @@
 | 状态机 `update_threat_status`（suspected→confirmed→exploited→remediated，单向、迁 `exploited` 须带 `evidence_summary`） | `store.py:1628` | 已实现 |
 | 公开入口 `record_threat_status`（旁路语义，内部调 `update_threat_status` + `_recon_emit_sync` 触发 PG 同步） | `context_engine.py:1492` | 已实现，**落库** |
 | 自动推进 `_promote_threat_on_success`（`record_attempt` 成功时调用） | `context_engine.py:1469` | 已接线，但**仅在 payload/reason 能正则匹配 `CVE-\d{4}-\d{4,7}` 时生效** |
-| **生产路径调用方** | — | **无**（`upsert_threat` 仅 `store.py:1556/1730` 两处 `seed_from_pg` 回填调用；`record_threat_status` 无外部调用方） |
+| **创建入口 `ContextEngine._recon_bypass_threat`**（2026-09-07 接入） | `context_engine.py:1509` | 已实现并**已接线**：`_recon_bypass_fact` 写入类别归一为 `vulnerability` 的 fact 时同步 upsert 威胁 |
 
-> **精确结论（勿夸大）**：
+> **精确结论（2026-09-07 校正）**：
 > 1. 状态机本身完备且**落库**（经 `ReconStore` → PG 聚合），并非「只是占位」；
-> 2. 唯一的自动推进路径 `_promote_threat_on_success` **只能识别 CVE 编号**——自研发现的 SQLi / XSS / 弱口令等非 CVE 漏洞永远无法从 `suspected` 推进；
-> 3. 真正的缺口是**「创建」入口完全缺失**：无任何生产路径调用 `upsert_threat` 新建 agent 自身发现的威胁，因此 `recon_threats` 在真实任务中只有 PG 历史回填的记录，利用阶段无结构化「待验证威胁清单」可消费。
+> 2. 创建入口已由侦察旁路接通：`ExploitWebAgent.highly_possible_vulnerabilities`
+>    （`architecture.py:611` 落 `category=vulnerability` 的 fact）经 `_recon_bypass_fact`
+>    派生威胁，随 `upsert_to_pg` 增量同步进 `recon_threats_agg`，目标页「威胁」标签可消费；
+> 3. **身份键约定**：`recon_threats` 幂等键为 `(task_id, cve_id)`，故非 CVE 的自研漏洞
+>    退化为「CVE 编号 → 漏洞名」标识（`extract_cve` 取不到时用 `title[:64]`），
+>    与 `seed_from_pg` 既有的 `cve_id or title` 身份口径一致；前端 CVE 列经
+>    `isCveId` 守卫，非 CVE 编号显示 `—`，不把漏洞名当 CVE 展示；
+> 4. 遗留缺口：`_promote_threat_on_success` **只能识别 CVE 编号**，故自研发现的
+>    SQLi / XSS / 弱口令等非 CVE 漏洞**无法从 `suspected` 自动推进**（状态机能力已有，
+>    缺非 CVE 的定位策略），需另行设计（如按 title 精确匹配）。
 
 ### 已知缺口汇总（真缺口）
 
@@ -150,7 +158,7 @@
    - 其中 **`message_history` 跨轮无界**（L3 主膨胀源）已由路径 A（驱动循环 + `window_messages` 窗口化 + `UsageLimits` 刹车）于 2026-09-05 根治；SECTION 3/4 全量注入与 fact 全文（L2 渲染）由正交的 M1 计划治理，不并入路径 A。
 2. **无工作记忆窗口**：无 `working_memory`，即时上下文散在 `message_history` / `current_task_log`，无聚焦的「当前 1-3 步」区。
 3. **摘要未结构化回流**：内存 `thoughts` 最近 5 条已由 SECTION 7 注入，但落盘摘要（`agent/memory/summaries/*.md`）与注入之间无结构化桥梁——无 `add_agent_summary`、无 decision/outcome/token_cost 结构化字段、无跨轮持久化的摘要队列，摘要消费仍靠每轮 `MemoryAgent` LLM 重汇总（成本随轮次线性增长）。
-4. **威胁未落库**：见上。
+4. ~~**威胁未落库**~~（2026-09-07 已修复，创建入口接入，见上）。遗留：非 CVE 漏洞的状态自动推进。
 5. **响应级去重**：`recon_http_transactions` **刻意无幂等键**（`sqlite_models.py:330` 注释：保留每次请求历史以便对比 katana 403 vs requester 200），去重只能在 PG 聚合层 `recon_http_transactions_agg` 做；**禁止**在原始流水表加 `(uri_template, body_md5)` 唯一索引。
 
 ## Supervisor 驱动循环与 message_history 窗口化（路径 A，2026-09-05 落地）

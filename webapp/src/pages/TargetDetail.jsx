@@ -26,6 +26,12 @@ const TABS = [
   { value: 'artifacts', label: '产物' },
 ]
 
+const CVE_ID_RE = /^CVE-\d{4}-\d{4,7}$/i
+
+function isCveId(value) {
+  return !!value && CVE_ID_RE.test(String(value).trim())
+}
+
 export default function TargetDetail() {
   const { targetId } = useParams()
   const navigate = useNavigate()
@@ -344,7 +350,8 @@ function ThreatsPanel({ targetId }) {
                     <span className="task-name__sub">{truncate(t.evidence_summary, 70)}</span>
                   </div>
                 </td>
-                <td className="mono" style={{ fontSize: 12 }}>{t.cve_id || '—'}</td>
+                {/* 自研漏洞（无 CVE 编号）时 cve_id 存的是漏洞名，仅 CVE 编号才展示 */}
+                <td className="mono" style={{ fontSize: 12 }}>{isCveId(t.cve_id) ? t.cve_id : '—'}</td>
                 <td className="num">{t.cvss_score ?? '—'}</td>
                 <td>
                   <Badge tone={st.tone}>{st.label}</Badge>

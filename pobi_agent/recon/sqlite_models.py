@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import re as _re
 from enum import Enum
 from typing import Any, Dict, List
 
@@ -120,6 +121,71 @@ def normalize_category(category: str | ReconCategory) -> ReconCategory:
     if value in ReconCategory.values():
         return ReconCategory(value)
     return _CATEGORY_ALIASES.get(value, ReconCategory.misc)
+
+
+_CVE_RE = _re.compile(r"CVE-\d{4}-\d{4,7}", _re.IGNORECASE)
+
+# 漏洞文本 → 严重度启发式关键词表，按严重度从高到低依次匹配。
+# 取值与 pobi_v2.db.recon_models.ReconThreatAgg.severity 一致
+# （info / low / medium / high / critical）。
+_SEVERITY_KEYWORDS: tuple = (
+    (
+        "critical",
+        ("remote code execution", "rce", "远程代码执行", "反序列化", "deserialization"),
+    ),
+    (
+        "high",
+        (
+            "sql injection",
+            "sql 注入",
+            "sql注入",
+            "sqli",
+            "盲注",
+            "命令注入",
+            "command injection",
+            "文件上传",
+            "file upload",
+            "认证绕过",
+            "auth bypass",
+            "ssrf",
+        ),
+    ),
+    (
+        "medium",
+        (
+            "xss",
+            "cross-site",
+            "跨站脚本",
+            "csrf",
+            "idor",
+            "越权",
+            "信息泄露",
+            "information disclosure",
+            "目录遍历",
+            "path traversal",
+            "开放重定向",
+            "open redirect",
+        ),
+    ),
+    ("low", ("信息收集", "recon", "指纹", "fingerprint", "版本泄露", "version disclosure")),
+)
+
+
+def extract_cve(text: Any) -> str:
+    """从任意文本中提取首个 CVE 编号，无则返回空串。"""
+
+    match = _CVE_RE.search(str(text or ""))
+    return match.group(0).upper() if match else ""
+
+
+def infer_severity(text: Any) -> str:
+    """按关键词把漏洞文本映射为严重度，无法判定时返回 ``info``。"""
+
+    lowered = str(text or "").lower()
+    for severity, keywords in _SEVERITY_KEYWORDS:
+        if any(keyword in lowered for keyword in keywords):
+            return severity
+    return "info"
 
 
 def _now() -> _dt.datetime:
