@@ -60,3 +60,9 @@ scripts/monitor_run_*.log
 # 文档与脚本目录（非源码，整体不入库，本地保留）
 docs/
 scripts/
+
+# AI 记忆库（本地会话状态，非源码）
+.ai/memory.json
+
+# 测试运行产物（任务报告导出，非源码）
+test_reports/
