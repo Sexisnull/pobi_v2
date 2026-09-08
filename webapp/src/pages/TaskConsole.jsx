@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   Badge,
   Button,
@@ -17,6 +17,7 @@ import Icon from '../components/Icons.jsx'
 import { useAction, useApi, usePolling } from '../hooks.js'
 import { approvalsApi, openTaskStream, tasksApi } from '../api.js'
 import AuthPanel from '../components/AuthPanel.jsx'
+import ReplayBar from '../components/attackflow/ReplayBar.jsx'
 import { categoryOf, describeEvent, eventTone, EVENT_CATEGORY, typeLabel } from '../events.js'
 import { TASK_STATUS, ago, duration, dt, num, statusOf, truncate } from '../format.js'
 
@@ -80,16 +81,96 @@ export default function TaskConsole() {
     }
   }, [taskId])
 
-  const fetchReplay = useCallback(() => tasksApi.events(taskId, { limit: 500 }), [taskId])
-  const { data: replay, loading: replayLoading, reload: reloadReplay } = useApi(
-    fetchReplay,
-    [taskId],
-    { enabled: false },
-  )
+  // 回放：先取 seq 区间元信息（range），再按 seq 游标分窗口取明细，
+  // 长任务不一次加载全量事件。
+  const [replayEvents, setReplayEvents] = useState([])
+  const [replayRange, setReplayRange] = useState(null)
+  const [replayLoading, setReplayLoading] = useState(false)
+  const [replayDone, setReplayDone] = useState(false)
+  const [cursor, setCursor] = useState(0)
+  const [cursorActive, setCursorActive] = useState(false)
+  const [playing, setPlaying] = useState(false)
+  const [speed, setSpeed] = useState(1)
+
+  const loadReplay = useCallback(async () => {
+    setReplayLoading(true)
+    try {
+      const [range, page] = await Promise.all([
+        tasksApi.eventsRange(taskId),
+        tasksApi.events(taskId, { limit: 500 }),
+      ])
+      setReplayRange(range)
+      const items = page?.events || []
+      setReplayEvents(items)
+      setReplayDone(items.length < 500)
+      setCursor(items.length ? items.length - 1 : 0)
+    } finally {
+      setReplayLoading(false)
+    }
+  }, [taskId])
+
+  const loadMoreReplay = useCallback(async () => {
+    if (replayLoading || replayDone || !replayEvents.length) return
+    setReplayLoading(true)
+    try {
+      const page = await tasksApi.events(taskId, {
+        after_seq: replayEvents[replayEvents.length - 1].seq,
+        limit: 500,
+      })
+      const items = page?.events || []
+      setReplayEvents((prev) => [...prev, ...items])
+      if (items.length < 500) setReplayDone(true)
+    } finally {
+      setReplayLoading(false)
+    }
+  }, [taskId, replayLoading, replayDone, replayEvents])
 
   useEffect(() => {
-    if (tab === 'replay') reloadReplay().catch(() => {})
-  }, [tab, reloadReplay])
+    setReplayEvents([])
+    setReplayRange(null)
+    setReplayDone(false)
+    setCursor(0)
+    setCursorActive(false)
+    setPlaying(false)
+  }, [taskId])
+
+  useEffect(() => {
+    if (tab !== 'replay' || replayEvents.length || replayLoading) return
+    loadReplay().catch(() => {})
+  }, [tab, replayEvents.length, replayLoading, loadReplay])
+
+  // 播放推进：走到已加载末尾时自动续页，全部加载完则停止
+  useEffect(() => {
+    if (tab !== 'replay' || !playing || !replayEvents.length) return undefined
+    if (cursor >= replayEvents.length - 1) {
+      if (replayDone) {
+        setPlaying(false)
+        return undefined
+      }
+      loadMoreReplay().catch(() => {})
+      return undefined
+    }
+    const timer = setTimeout(() => setCursor((c) => c + 1), Math.max(60, 420 / speed))
+    return () => clearTimeout(timer)
+  }, [tab, playing, cursor, speed, replayEvents.length, replayDone, loadMoreReplay])
+
+  // 从目标攻击流时间轴跳入（?at=<iso>）：切到回放并定位到该时刻前最后一条事件
+  const [params, setParams] = useSearchParams()
+  const atParam = params.get('at')
+  useEffect(() => {
+    if (!atParam || !replayEvents.length) return
+    const ts = new Date(atParam).getTime()
+    setTab('replay')
+    setCursorActive(true)
+    let idx = 0
+    for (let i = 0; i < replayEvents.length; i += 1) {
+      if (new Date(replayEvents[i].created_at).getTime() <= ts) idx = i
+      else break
+    }
+    setCursor(idx)
+    params.delete('at')
+    setParams(params, { replace: true })
+  }, [atParam, replayEvents, params, setParams])
 
   const fetchApprovals = useCallback(() => approvalsApi.list({ task_id: taskId, status: 'pending' }), [taskId])
   const { data: approvals, reload: reloadApprovals } = useApi(fetchApprovals, [taskId])
@@ -139,7 +220,8 @@ export default function TaskConsole() {
 
   const rawEvents = useMemo(() => {
     if (tab === 'replay') {
-      return (replay?.events || []).map((e) => ({
+      const src = cursorActive ? replayEvents.slice(0, cursor + 1) : replayEvents
+      return src.map((e) => ({
         key: `r-${e.seq}`,
         type: e.type,
         payload: e.payload || {},
@@ -153,7 +235,7 @@ export default function TaskConsole() {
       payload: e.payload || {},
       ts: e.created_at,
     }))
-  }, [tab, replay, streamEvents, live])
+  }, [tab, replayEvents, cursor, cursorActive, streamEvents, live])
 
   const events = useMemo(
     () => (filter === 'all' ? rawEvents : rawEvents.filter((e) => categoryOf(e.type) === filter)),
@@ -310,7 +392,7 @@ export default function TaskConsole() {
             ))}
           </div>
           <div className="console__col-body" style={{ padding: '0 16px' }}>
-            {tab === 'replay' && replayLoading ? (
+            {tab === 'replay' && replayLoading && !replayEvents.length ? (
               <LoadingBlock />
             ) : events.length ? (
               <div className="timeline">
@@ -326,6 +408,40 @@ export default function TaskConsole() {
               />
             )}
           </div>
+          {tab === 'replay' && (
+            <ReplayBar
+              index={cursor}
+              total={replayRange?.total ?? replayEvents.length}
+              loaded={replayEvents.length}
+              playing={playing}
+              speed={speed}
+              cursorActive={cursorActive}
+              currentType={replayEvents[cursor]?.type}
+              currentAt={replayEvents[cursor]?.created_at ? dtShort(replayEvents[cursor].created_at) : ''}
+              loading={replayLoading}
+              onToggle={() => {
+                setCursorActive(true)
+                setPlaying((p) => !p)
+              }}
+              onStep={(d) => {
+                setCursorActive(true)
+                setPlaying(false)
+                setCursor((c) => Math.min(Math.max(0, c + d), Math.max(0, replayEvents.length - 1)))
+              }}
+              onSeek={(v) => {
+                setCursorActive(true)
+                setPlaying(false)
+                setCursor(Math.max(0, Math.min(v, replayEvents.length - 1)))
+                if (v >= replayEvents.length - 1 && !replayDone) loadMoreReplay().catch(() => {})
+              }}
+              onSpeed={setSpeed}
+              onShowAll={() => {
+                setCursorActive(false)
+                setPlaying(false)
+              }}
+              onLoadMore={() => loadMoreReplay().catch(() => {})}
+            />
+          )}
           <InstructionBar taskId={taskId} disabled={!active} onSent={reloadTask} />
         </div>
 

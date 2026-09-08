@@ -37,6 +37,17 @@
 - `GET /targets/{target_id}/threats` → `{target_id,total,items[]}` 威胁，`confidence` 降序
 - `GET /targets/{target_id}/findings` → `{target_id,total,items[]}` 利用验证结果，`created_at` 降序
 - `GET /targets/{target_id}/artifacts` → `{target_id,total,items[]}` 产物，`created_at` 降序
+- `GET /targets/{target_id}/attack-flow` → `AttackFlowOut{target_id,graph,timeline}`（2026-09-07 新增，攻击流三视图数据源）
+  - query：`full_endpoints: bool=false`（是否展开全部端点，默认仅威胁连通子图）、`buckets: int=240`（`ge=20 le=300`，时间桶数上限）
+  - `graph{nodes[],edges[],truncated}`：节点 id 前缀 `threat:` / `fact:` / `endpoint:` / `finding:`
+    - 边 `supports`（`recon_threat_evidence_link` 显式证据，`fact → threat`，kind=explicit）
+    - 边 `targets`（`threat.target_endpoint` 与 `endpoint.path_normalized` 路径匹配，**与 `/tree` 同口径**：全等优先、回退子串、根路径只参与全等，kind=derived）
+    - 边 `proves`（`finding → threat`，仅当 finding 的 `task_id ∈ threat.source_tasks` **且** finding 的 title/cwe/description 命中威胁 `cve_id` 或 `category`；否则不连边，禁止臆造血缘，kind=derived）
+    - 节点上限 `_MAX_GRAPH_NODES=300`，超限按「威胁优先、高严重度优先」截断并置 `truncated=true`
+  - `timeline{start,end,bucket_ms,lanes[],truncated}`：每任务一条泳道，桶只回传非空桶（空档即空转区）
+    - `TimelineBucketOut{index,start,end,counts}`；`counts` 键为 `recon`/`tool`/`finding`/`error`/`other`
+    - 泳道上限 `_MAX_LANES=20`（`created_at` 降序）、每泳道事件骨架上限 `_MAX_LANE_EVENTS=20000`，超限置 `truncated=true`
+    - **只 select `created_at`/`event_type`（不取 payload）**，桶宽按毫秒阶梯自适应，保证桶数 ≤ `buckets`
 - 列表类接口 `limit` 默认 200、`ge=1`、`le=500`；空数据返回空数组而非 5xx
 
 **隔离约定**：`recon_*_agg` 表自带 `tenant_id`，`findings`/`artifacts`/`tasks` 自带 `target_id`
@@ -54,6 +65,9 @@
 - `GET /tasks/{task_id}/stream` **SSE** 实时事件流（思考/工具调用/置信度/状态）
 - `GET /tasks/{task_id}/live` 实时态聚合（阶段/智能体/计划/待生效指令/最近事件/各 Agent 工作片段 `agent_work`/`last_event_at`）
 - `GET /tasks/{task_id}/events` 运行轨迹回放：`type` 过滤 + `after_seq` 游标分页，`limit` 默认 100，返回 `EventReplay{events,total,next_after_seq}`
+- `GET /tasks/{task_id}/events/range` → `TaskEventRangeOut{task_id,total,min_seq,max_seq,first_at,last_at}`（2026-09-07 新增，回放播放器定位用）
+  - 只做 `count/min/max` 聚合，**不取 payload**；无事件时 `total=0`、`min_seq`/`max_seq` 为 `null`
+  - 明细仍走 `GET /tasks/{task_id}/events?after_seq=&limit=`（≤500）按窗口滑动取，长任务不一次加载全量
 - `GET /tasks/{task_id}/plan` 执行计划步骤与进度（`PlanSummary`）
 - `POST /tasks/{task_id}/instructions` 追加指令（协作式检查点消费注入）
 - `GET /tasks/usage/summary` 全部任务 token 汇总
@@ -103,6 +117,7 @@
 **`AuditEvent` 字段契约**：`actor` **无默认值、强制传入**（API 侧 `user.email` + `actor_id=user.id`，Worker 侧 `task.operator`）；`trace_id`/`span_id` 写入时取自当前 OTel span（API 侧通常为空）；`prev_hash`/`hash` 构成行级哈希链（见 `constraints.md`）。`task_events` 同步新增 `trace_id`/`span_id`。迁移 `0021_audit_governance`。
 
 > **⚠ 路由重复（源码事实）**：本模块另注册了 `GET /api/v1/tasks/{task_id}` 与 `GET /api/v1/tasks/{task_id}/events`，与 `routers/tasks.py` 的同名路径**重复**。`main.py` 注册顺序为 `tasks`(:88) **先于** `persistence`(:92)，FastAPI 按注册顺序匹配 ⇒ **这两个端点永不命中，实际生效的是 `tasks.py` 的实现**（前者返回 `TaskDetailRead`，后者为 list 而非 `EventReplay`）。修改此处的同名端点不会生效，勿误改。
+> 例外：本模块的 `GET /tasks/{task_id}/events/range`（2026-09-07 新增）路径不与 `tasks.py` 重复，**正常命中本模块实现**。
 
 ### 审批 `/api/v1/approvals`
 - `GET /approvals` 本租户审批请求（按 status 过滤）

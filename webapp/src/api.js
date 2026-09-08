@@ -113,6 +113,7 @@ export const targetsApi = {
   findings: (id, signal) => request(`/targets/${id}/findings`, { signal }),
   artifacts: (id, signal) => request(`/targets/${id}/artifacts`, { signal }),
   assets: (id, signal) => request(`/targets/${id}/assets`, { signal }),
+  attackFlow: (id, query, signal) => request(`/targets/${id}/attack-flow`, { query, signal }),
 }
 
 // ---------------------------------------------------------------- 任务
@@ -129,6 +130,7 @@ export const tasksApi = {
   live: (id, signal) => request(`/tasks/${id}/live`, { signal }),
   plan: (id, signal) => request(`/tasks/${id}/plan`, { signal }),
   events: (id, query, signal) => request(`/tasks/${id}/events`, { query, signal }),
+  eventsRange: (id, signal) => request(`/tasks/${id}/events/range`, { signal }),
   usage: (id, signal) => request(`/tasks/${id}/usage`, { signal }),
   usageSummary: (signal) => request('/tasks/usage/summary', { signal }),
   findings: (id, signal) => request(`/tasks/${id}/findings`, { signal }),

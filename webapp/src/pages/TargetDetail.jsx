@@ -1,10 +1,11 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { PageHead } from '../components/Layout.jsx'
 import {
   Badge,
   Button,
   Card,
+  Checkbox,
   EmptyState,
   LoadingBlock,
   SeverityTag,
@@ -13,9 +14,23 @@ import {
 } from '../components/ui.jsx'
 import Icon from '../components/Icons.jsx'
 import { useApi } from '../hooks.js'
-import { targetsApi } from '../api.js'
+import { openTaskStream, targetsApi } from '../api.js'
 import { TaskCreateModal } from './Tasks.jsx'
-import { THREAT_STATUS, ago, bytes, dt, dtShort, num, pct, shortId, statusOf, truncate } from '../format.js'
+import Timeline from '../components/attackflow/Timeline.jsx'
+import GraphView from '../components/attackflow/GraphView.jsx'
+import {
+  THREAT_STATUS,
+  ago,
+  bytes,
+  dt,
+  dtShort,
+  duration,
+  num,
+  pct,
+  shortId,
+  statusOf,
+  truncate,
+} from '../format.js'
 
 const TABS = [
   { value: 'tree', label: '页面树' },
@@ -24,6 +39,7 @@ const TABS = [
   { value: 'threats', label: '威胁' },
   { value: 'findings', label: '漏洞发现' },
   { value: 'artifacts', label: '产物' },
+  { value: 'attack-flow', label: '攻击流' },
 ]
 
 const CVE_ID_RE = /^CVE-\d{4}-\d{4,7}$/i
@@ -162,7 +178,112 @@ function TabPanel({ targetId, tab }) {
   if (tab === 'facts') return <FactsPanel targetId={targetId} />
   if (tab === 'threats') return <ThreatsPanel targetId={targetId} />
   if (tab === 'findings') return <FindingsPanel targetId={targetId} />
+  if (tab === 'attack-flow') return <AttackFlowPanel targetId={targetId} />
   return <ArtifactsPanel targetId={targetId} />
+}
+
+function AttackFlowPanel({ targetId }) {
+  const navigate = useNavigate()
+  const [view, setView] = useState('timeline')
+  const [fullEndpoints, setFullEndpoints] = useState(false)
+  const [hidden, setHidden] = useState(() => new Set())
+
+  const fetcher = useCallback(
+    () => targetsApi.attackFlow(targetId, { full_endpoints: fullEndpoints ? 'true' : 'false' }),
+    [targetId, fullEndpoints],
+  )
+  const { data, loading, reload } = useApi(fetcher, [targetId, fullEndpoints])
+
+  const lanes = data?.timeline?.lanes || []
+  const runningIds = lanes
+    .filter((l) => l.status === 'running' || l.status === 'queued')
+    .map((l) => l.task_id)
+
+  // 运行中任务由既有 SSE 流推进（总线无 replay 语义，故只用作"有新事件"的信号，
+  // 聚合结果仍走只读接口重取）。
+  useEffect(() => {
+    if (!runningIds.length) return undefined
+    let timer
+    const bump = () => {
+      clearTimeout(timer)
+      timer = setTimeout(() => reload().catch(() => {}), 2500)
+    }
+    const streams = runningIds.map((id) => openTaskStream({ taskId: id, onEvent: bump }))
+    return () => {
+      clearTimeout(timer)
+      streams.forEach((s) => s.close())
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runningIds.join(','), reload])
+
+  const toggleLane = (id) =>
+    setHidden((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  const eventTotal = lanes.reduce((acc, l) => acc + (l.total || 0), 0)
+  const span = duration(data?.timeline?.start, data?.timeline?.end)
+
+  return (
+    <div className="attackflow">
+      <div className="attackflow__bar">
+        <Tabs
+          value={view}
+          onChange={setView}
+          tabs={[
+            { value: 'timeline', label: '执行时间轴' },
+            { value: 'graph', label: '关系图谱' },
+          ]}
+        />
+        <span className="tl__spacer" />
+        <span className="muted" style={{ fontSize: 12 }}>
+          {num(eventTotal)} 条事件 · 跨度 {span}
+        </span>
+        {!!runningIds.length && <Badge tone="accent">实时推进中</Badge>}
+        {view === 'graph' && (
+          <Checkbox
+            label="展开全部端点"
+            checked={fullEndpoints}
+            onChange={(e) => setFullEndpoints(e.target.checked)}
+          />
+        )}
+      </div>
+
+      {view === 'timeline' && lanes.length > 0 && (
+        <div className="attackflow__lanes">
+          <span className="attackflow__lanes-label muted">任务泳道</span>
+          {lanes.map((l) => (
+            <button
+              key={l.task_id}
+              type="button"
+              className={`event-chip ${hidden.has(l.task_id) ? '' : 'event-chip--active'}`}
+              onClick={() => toggleLane(l.task_id)}
+              title={l.name}
+            >
+              {truncate(l.name, 18)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="attackflow__body">
+        {loading && !data ? (
+          <LoadingBlock text="聚合攻击流…" />
+        ) : view === 'timeline' ? (
+          <Timeline
+            timeline={data?.timeline}
+            hidden={hidden}
+            onPick={(taskId, at) => navigate(`/tasks/${taskId}?at=${encodeURIComponent(at)}`)}
+          />
+        ) : (
+          <GraphView graph={data?.graph} truncated={data?.graph?.truncated} />
+        )}
+      </div>
+    </div>
+  )
 }
 
 function TreePanel({ targetId }) {

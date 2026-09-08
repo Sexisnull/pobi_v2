@@ -22,6 +22,21 @@ class TaskEventRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TaskEventRangeOut(BaseModel):
+    """任务事件的 seq 区间元信息（回放播放器定位用）。
+
+    只含聚合值不含 payload：播放器据此把进度条映射到 seq，再用现有
+    ``GET /tasks/{id}/events?after_seq=`` 按窗口滑动取明细。
+    """
+
+    task_id: str
+    total: int = 0
+    min_seq: int | None = None
+    max_seq: int | None = None
+    first_at: str | None = None
+    last_at: str | None = None
+
+
 class FindingRead(BaseModel):
     id: UUID
     task_id: UUID

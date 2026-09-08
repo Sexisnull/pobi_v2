@@ -275,6 +275,13 @@
   cursor: pointer;
 }
 
+/* 内联紧凑下拉（工具条内使用，宽度随内容而非撑满容器） */
+.select--sm {
+  width: auto;
+  height: 28px;
+  font-size: var(--fs-sm);
+}
+
 .checkbox { display: flex; align-items: center; gap: var(--sp-2); cursor: pointer; user-select: none; }
 .checkbox input {
   appearance: none;

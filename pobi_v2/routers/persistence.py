@@ -18,6 +18,7 @@ from pobi_v2.schemas.persistence import (
     AuditEventRead,
     FindingRead,
     TaskDetailRead,
+    TaskEventRangeOut,
     TaskEventRead,
 )
 
@@ -59,6 +60,42 @@ async def list_task_events(
         .offset(offset)
     )
     return list((await session.execute(stmt)).scalars().all())
+
+
+@router.get("/tasks/{task_id}/events/range", response_model=TaskEventRangeOut)
+async def get_task_event_range(
+    task_id: UUID,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_scope("tasks:read")),
+) -> TaskEventRangeOut:
+    """任务事件 seq 区间元信息（回放播放器定位用）。
+
+    只做 count/min/max 聚合，不取 payload。播放器据此把进度条映射到 seq，
+    再用 ``GET /tasks/{id}/events?after_seq=&limit=`` 按播放窗口滑动取明细，
+    避免长任务一次性加载全量事件。
+    """
+    task = await session.get(Task, task_id)
+    if task is None or task.tenant_id != user.tenant_id:
+        raise NotFoundError("任务不存在")
+    total, min_seq, max_seq, first_at, last_at = (
+        await session.execute(
+            select(
+                func.count(TaskEvent.id),
+                func.min(TaskEvent.seq),
+                func.max(TaskEvent.seq),
+                func.min(TaskEvent.created_at),
+                func.max(TaskEvent.created_at),
+            ).where(TaskEvent.task_id == task_id)
+        )
+    ).one()
+    return TaskEventRangeOut(
+        task_id=str(task_id),
+        total=int(total or 0),
+        min_seq=int(min_seq) if min_seq is not None else None,
+        max_seq=int(max_seq) if max_seq is not None else None,
+        first_at=first_at.isoformat() if first_at else None,
+        last_at=last_at.isoformat() if last_at else None,
+    )
 
 
 @router.get("/tasks/{task_id}/findings", response_model=list[FindingRead])

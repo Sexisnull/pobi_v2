@@ -48,6 +48,12 @@
   - 剩余可选项（非阻塞）：本地↔PG evidence 双向同步、真实 PG e2e、secret 级密钥管理（当前 AES-GCM 占位明文）。
 
 ## 进行中
+- [x] **目标详情页「攻击流」三视图（2026-09-07 完成）**：目标详情页 6 个 Tab 全是静态清单快照，无法回答「什么时候发生的 / 这条攻击路径为什么成立 / 当时怎么跑的」。新增：
+  - 后端 `GET /targets/{id}/attack-flow`：图谱（事实 → 威胁 → 端点，发现反证威胁）+ 任务泳道事件密度时间轴，**零迁移**，只消费 `recon_*_agg` + `recon_threat_evidence_link` + `findings`；时间轴只 select `created_at`/`event_type`（不取 payload），按固定桶数聚合，渲染量与事件总量解耦。
+  - 后端 `GET /tasks/{id}/events/range`：只做 `count/min/max` 聚合，供回放播放器把进度条映射到 seq；明细仍走既有 `?after_seq=` 游标分页。
+  - 前端 `components/attackflow/`：`Timeline`（零依赖，泳道 + 时间桶 + 滚轮缩放 / 拖拽框选 / hover 明细 / 点击跳任务回放）、`GraphView`（`@xyflow/react` + dagre 自动布局、严重度配色、类型与状态过滤、点击下钻详情抽屉）、`ReplayBar`（播放/暂停/单步/倍速/进度条 seek，接入 `TaskConsole` 回放页签）。
+  - 新增依赖 `@xyflow/react`、`dagre`。测试 `tests/test_attack_flow.py` 12 项通过；全量 131 passed / 1 skipped。
+  - **顺带消化 P3**：「资产覆盖图前端」的诉求（回答"测没测全""为什么成立"）已由关系图谱 + 时间轴覆盖，P3 不再单独立项。
 - [x] **Agent 治理：可观测与审计增强 P0+P1（2026-09-07 完成）**：补全登录/目标变更/审批决策/护栏越权拦截审计覆盖；`actor` 强制真实责任人；Agent 高风险动作（高危工具闸门的创建/自动批准/人工决策、子 Agent 委派、越权拦截）逐条入审计 + 任务完成追加 `agent.run_summary` 汇总；`audit_events.tenant_id` 改 `SET NULL`；新增 `trace_id`/`span_id` 打通 OTel 关联；行级哈希链（`prev_hash`/`hash` + `verify_audit_chain`）+ PG append-only 触发器；迁移 `0021_audit_governance`；`tests/test_audit.py` 7 项通过。
   - **遗留（P2，未做）**：Prometheus `/metrics` 与成本看板、指标时序化（`task_metrics_agg` 现为按 target upsert 最新值）、统一脱敏层（prompt/tool_args/event payload）、Agent 健康端点与失败告警。
   - **顺带修复的既有缺陷（2026-09-07 随审计增强提交后单独修复）**：`engine/executor.py` 取消/越权/超时等返回分支引用不存在的 `task_id`（应为 `tid`），命中即 `NameError`；`_is_safe_shell` 黑名单用精确子串 `curl | sh`，`curl <url> | sh` 变体可绕过，改为正则拦截「管道喂给解释器」。全量测试 119 passed / 1 skipped。
@@ -130,7 +136,7 @@
   - 验证：重跑 DVWA 类任务，从任务创建到首次真实注入的工具调用轮数 < 10（与 R1–R3 同一验收口径）。
 - [ ] **P2 plan todolist 持久化（成本最低）**：把 `plan_step` 事件从「事件展示」升级为持久化 `plan_steps` 表（`status: pending/ready/done` + `depends_on`），`seed_from_pg` / `seed_local_artifacts` 续跑时一并读回，替代粗粒度 `covered_block`。
   - 验证：任务取消后续跑，planner 能定位攻击链当前位置，不重复已完成步骤。
-- [ ] **P3 资产覆盖图前端（后端零改动）**：渲染已就绪的 coverage / endpoints / facts / summary / target assets 接口，回答「agent 到底测没测全」。
+- [ ] ~~**P3 资产覆盖图前端（后端零改动）**~~：**2026-09-07 由「攻击流三视图」消化**（见「进行中」首条），不再单独立项。
 - [ ] **P4 探索图血缘（需迁移，最后做）**：`recon_techniques` 加 `intent_id` / `parent_fact_id`，`findings` 落库带 `evidence_technique_ids`（新增 alembic 迁移）。**禁止**一上来照搬 ARTEX 的 5 类节点 + 4 类边完整模型。
 
 ### 待判断的架构选项
