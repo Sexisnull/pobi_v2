@@ -99,6 +99,9 @@ def upgrade() -> None:
             ["id"],
             ondelete="SET NULL",
         )
+        # 先回填哈希链，再启用 append-only 触发器：回填需要对 audit_events 执行 UPDATE，
+        # 若先建触发器会被 append-only 约束拦截（原顺序导致迁移失败）
+        _backfill_hash_chain()
         op.execute(_APPEND_ONLY_FN)
         op.execute(
             "CREATE TRIGGER audit_events_no_update BEFORE UPDATE ON audit_events"
@@ -108,8 +111,8 @@ def upgrade() -> None:
             "CREATE TRIGGER audit_events_no_delete BEFORE DELETE ON audit_events"
             " FOR EACH ROW EXECUTE FUNCTION audit_events_append_only()"
         )
-
-    _backfill_hash_chain()
+    else:
+        _backfill_hash_chain()
 
 
 def downgrade() -> None:
