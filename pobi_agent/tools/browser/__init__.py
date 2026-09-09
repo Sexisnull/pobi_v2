@@ -11,6 +11,7 @@ The **browser_run_steps** tool lives in ``run_browser_steps_tool.py``. It forwar
 navigation, DOM interaction, state extraction, and session import/export.
 """
 
+from pobi_agent.tools.browser.authenticate import authenticate, authenticate_service
 from pobi_agent.tools.browser.browser import (
     BrowserSession,
     CheckStep,
@@ -20,6 +21,7 @@ from pobi_agent.tools.browser.browser import (
     PressStep,
     SelectStep,
 )
+from pobi_agent.tools.browser.observe_login_surface import observe_login_surface
 from pobi_agent.tools.browser.run_browser_steps_tool import (
     BrowserCheckStep,
     BrowserClickStep,
@@ -28,11 +30,9 @@ from pobi_agent.tools.browser.run_browser_steps_tool import (
     BrowserSelectStep,
     BrowserStep,
     browser_run_steps,
-    parse_browser_steps,
     browser_step_to_interaction,
+    parse_browser_steps,
 )
-from pobi_agent.tools.browser.authenticate import authenticate, authenticate_service
-from pobi_agent.tools.browser.observe_login_surface import observe_login_surface
 from pobi_agent.tools.browser.validate_refresh import (
     refresh_auth_context,
     refresh_auth_context_service,
@@ -41,28 +41,28 @@ from pobi_agent.tools.browser.validate_refresh import (
 )
 
 __all__ = [
-    "BrowserSession",
-    "BrowserStep",
-    "BrowserFillStep",
-    "BrowserSelectStep",
     "BrowserCheckStep",
     "BrowserClickStep",
+    "BrowserFillStep",
     "BrowserPressStep",
-    "parse_browser_steps",
-    "run_browser_steps",
-    "browser_run_steps",
-    "authenticate",
-    "authenticate_service",
-    "observe_login_surface",
-    "validate_auth_context",
-    "validate_auth_context_service",
-    "refresh_auth_context",
-    "refresh_auth_context_service",
+    "BrowserSelectStep",
+    "BrowserSession",
+    "BrowserStep",
     "CheckStep",
     "ClickStep",
     "FillStep",
     "InteractionStep",
     "PressStep",
     "SelectStep",
+    "authenticate",
+    "authenticate_service",
+    "browser_run_steps",
     "browser_step_to_interaction",
+    "observe_login_surface",
+    "parse_browser_steps",
+    "refresh_auth_context",
+    "refresh_auth_context_service",
+    "run_browser_steps",
+    "validate_auth_context",
+    "validate_auth_context_service",
 ]

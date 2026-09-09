@@ -13,12 +13,9 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from pobi_agent.agents.factory import AgentOutput
 from pobi_agent.recon.store import ReconStore
 from pobi_agent.tools.browser.authenticate import _auto_submit_login
-
 from pobi_v2.engine import preauth
 
 
@@ -132,7 +129,7 @@ async def test_run_auto_auth_writes_recon_facts(tmp_path, monkeypatch):
     keys = {r["key"] for r in rows}
     assert "auth_profile" in keys
     assert "auth_status" in keys
-    profile_row = [r for r in rows if r["key"] == "auth_profile"][0]
+    profile_row = next(r for r in rows if r["key"] == "auth_profile")
     assert profile_row["value"] == "preauth"
     assert profile_row["source"] == "preauth_auto"
 
@@ -267,7 +264,6 @@ async def test_verify_credentials_exception(monkeypatch):
 
 async def test_verify_credentials_no_persistence(tmp_path, monkeypatch):
     """预检使用临时目录与唯一 profile：不触碰任务 auth_context、不残留临时目录。"""
-    import shutil
 
     real_mkdtemp = preauth.tempfile.mkdtemp
     tmp_dirs: list[str] = []
@@ -508,7 +504,7 @@ def test_write_auth_facts_no_username(tmp_path):
     store = ReconStore.for_task(task_id, str(tmp_path))
     store.ensure_session(task_id, target="https://example.com")
     rows = store.list_facts(task_id, category="authentication")
-    status_row = [r for r in rows if r["key"] == "auth_status"][0]
+    status_row = next(r for r in rows if r["key"] == "auth_status")
     details = status_row.get("details") or {}
     assert "username" not in details
     assert "admin" not in json.dumps(status_row)

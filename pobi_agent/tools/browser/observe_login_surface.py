@@ -93,13 +93,15 @@ async def _probe_http_basic(
     try:
         connector = _build_connector(verify_ssl)
         timeout = aiohttp.ClientTimeout(total=timeout_s)
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            async with session.get(url, allow_redirects=True) as resp:
-                www_auth = resp.headers.get("WWW-Authenticate", "")
-                out["http_basic"] = bool(www_auth)
-                out["probe_status"] = resp.status
-                out["probe_content_type"] = resp.headers.get("Content-Type", "")
-                out["probe_final_url"] = str(resp.url)
+        async with (
+            aiohttp.ClientSession(connector=connector, timeout=timeout) as session,
+            session.get(url, allow_redirects=True) as resp,
+        ):
+            www_auth = resp.headers.get("WWW-Authenticate", "")
+            out["http_basic"] = bool(www_auth)
+            out["probe_status"] = resp.status
+            out["probe_content_type"] = resp.headers.get("Content-Type", "")
+            out["probe_final_url"] = str(resp.url)
     except Exception as exc:  # noqa: BLE001 — 探测失败不阻断浏览器观察
         logger.warning("observe_login_surface: HTTP probe failed: %s", exc)
     return out

@@ -34,6 +34,7 @@ from pobi_agent.logging import logger
 from pobi_agent.recon.store import ReconStore
 from pobi_agent.storage_context import clear_task_root, set_task_root
 from pobi_agent.tools.browser.authenticate import authenticate_service
+
 # [DISABLED 2026-09-01] 仅手动登录分支使用；手动分支搁置后无引用
 # from pobi_agent.tools.browser.browser import BrowserSession, ClickStep, FillStep, PressStep
 
@@ -328,7 +329,7 @@ async def run_auto_auth(
             ),
             timeout=PREAUTH_AGENT_TIMEOUT_S,
         )
-    except asyncio.TimeoutError as exc:  # noqa: BLE001 — 超时降级为 failed
+    except TimeoutError:  # 前置认证超时降级为 failed
         status, error = "failed", f"前置认证超时（超过 {PREAUTH_AGENT_TIMEOUT_S} 秒）"
         _write_auth_facts(
             task_id=task_id,

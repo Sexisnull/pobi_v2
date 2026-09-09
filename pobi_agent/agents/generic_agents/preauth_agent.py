@@ -37,8 +37,6 @@ class PreAuthOutput(AgentOutput):
     约束：任何字段不得包含真实 cookie 值、token、密码或用户名。
     """
 
-    pass
-
 
 class PreAuthAgent(AgentRunner):
     """任务创建阶段的前置认证子代理（LLM 驱动，替换固定 form 分支）。
