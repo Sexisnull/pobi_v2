@@ -218,7 +218,9 @@ class ADaPTAgent:
             yield emit(f"[FAIL] Task exceeded max attempts ({self.MAX_TASK_ATTEMPTS}): '{node.task[:50]}...'")
             return
 
-        task_record["attempts"] += 1
+        # P0-2 修复：attempts 自增移入 while 每轮迭代（原仅在 _solve 入口自增，
+        # while 内 expand/refine 递归返回后迭代不经过入口，MAX_TASK_ATTEMPTS=3 失效，
+        # 同一 node 可无限迭代直至外部超时熔断）。
         self.context.clear_current_task_log()
         self._set_task_status(node, "in_progress")
 
@@ -237,9 +239,17 @@ class ADaPTAgent:
             getattr(node, "task_id", "?"), node.task[:60], depth,
         )
 
-        while not should_exit or node.status != "completed":
-            # ----- 1. Execute supervisor -----
+        # P0-1 修复：退出条件 or → and。原 or 语义下 `should_exit=True`（全局退出已触发）
+        # 但 status 未变 completed 时条件仍为 True，父节点会继续迭代（exit_loop 机制失效）。
+        while (not should_exit) and (node.status != "completed"):
+            # ----- 0. 迭代上限：attempts 每轮迭代自增并检查，使 MAX_TASK_ATTEMPTS 生效 -----
             iteration += 1
+            task_record["attempts"] += 1
+            if task_record["attempts"] > self.MAX_TASK_ATTEMPTS:
+                self._set_task_status(node, "failed:max_attempts", task_record["best_confidence"])
+                yield emit(f"[FAIL] Task exceeded max attempts ({self.MAX_TASK_ATTEMPTS}): '{node.task[:50]}...'")
+                return
+            # ----- 1. Execute supervisor -----
             logger.info(
                 "[ADAPT] 迭代开始 | task_id=%s | iter=%d",
                 getattr(node, "task_id", "?"), iteration,

@@ -3,6 +3,13 @@
 > **以源码为准**。本文件是演进计划的唯一清单：早期引用的 `docs/PROJECT_GOAL.md`（§2.4 工程治理 / §2.5 扫描内核优化）**该文件已不存在**，其条目已内联至下方「待办」的 A1–A7 与 S1–S6，勿再按原路径引用。
 
 ## 已落地（本轮更新确认）
+- [x] **ADaPT 外层循环缺陷修复（2026-09-09）**：评测定位 P0-1/P0-2 两个循环致命缺陷并修复（另顺带 P1-3/P1-4 刹车配置）。
+  - **P0-1 退出条件**：`architecture.py` 外层 `while not should_exit or node.status != "completed"` 的 `or` 应为 `and`——子任务触发 `ValidationStopEvent`（exit_loop=True）后父节点仍继续迭代，全局退出机制失效。真实代码验证：修复前 root 收到 3 次 exit_loop 仍迭代至 executor 第 7 次调用（人为打断），修复后 2 次即正常退出。
+  - **P0-2 迭代无上限**：attempts 自增从 `_solve` 入口移入 while 每轮迭代并检查——原实现 expand/refine 递归返回后迭代不经过入口，`MAX_TASK_ATTEMPTS=3` 失效，同一 node 可无限迭代（复刻实测 32 次 executor 调用仍不终止）直至外部超时熔断。修复后恒 conf=0.5（expand 区间）有界（≤10 次调用）、恒 conf=0.7（refine 区间）恰好 3 次后 `failed:max_attempts`。
+  - **P1-3 轮次/预算解耦**：`SupervisorLoopConfig` 新增 `max_rounds=40` 独立于 `request_limit=80`——原 `max_rounds=request_limit` 导致每轮恰好 1 次请求时 usage 刹车永不先于 for 触发，且 recon_lookup 工具调用额外扣减决策轮次。
+  - **P1-4 子 agent 独立预算**：新增 `_SUB_AGENT_USAGE_LIMITS`（request_limit=200）替代共享 supervisor 预算——原共享 40 次累计，高频子 agent（requester）单次深度测试即耗尽，后续轮次一调用即触顶永久降级。
+  - 测试：新增 `tests/test_adapt_loop.py` 3 例（exit_loop 停止 / expand 有界 / refine 有界），更新 `test_supervisor_loop.py` 配置断言；全量 220 passed / 2 skipped。
+
 - [x] **§8 路径 A：Supervisor 决策器 + 驱动循环（2026-09-05）**：根治 L3 主膨胀源（`message_history` 跨轮无界 + 无 `usage_limits` 刹车）。`supervisor.instructions.jinja2` 由 router 改写为 decider（`SupervisorDecision{action, agent, prompt, ...}`）；`executor.execute_supervisor` 新增驱动循环（`window_messages` 窗口化 → `supervisor.run` → 解析决策 → `_run_sub_agent` 直调子 agent → compact turn 回传 → 再窗口化），并在 `architecture.py` ADaPT 外层 `while` 跨轮持久 `supervisor_history`；恢复 `_DEFAULT_SUPERVISOR_LOOP_CONFIG` 有界 `UsageLimits` 原生刹车（`FallbackAgentResult` 触顶即终止）。落库闭包零改动，findings 无回归；`tests/test_supervisor_loop.py` 8 例全绿。与 M1（治 L2 渲染）正交，未并入。
 
 - [x] **前置侦查 pre_recon + 指纹识别（2026-09-01）**：平台层自动通道，任务启动后、智能体侦查前自动执行指纹识别 + WAF 识别并落库、推送前端实时流。新增独立明细表 `recon_fingerprints`（幂等键 task_id+target_url）；引擎收敛到 `pobi_agent/tools/fingerprint/engine.py`（无 ctx）；认证感知（读取 PreAuth `preauth` 会话注入 cookies，无凭证降级外部探测）；落库四通道（fingerprint 明细 + technology facts + endpoints tech_stack + fingerprint|host 足迹）。**指纹识别不再作为 agent 工具**（已从 requester 装配移除），agent 通过 L0/L1 注入与 recon_lookup 复用结论。测试 `tests/recon/test_pre_recon.py` 5 项 + `test_fingerprint.py` 8 项，全量 recon 66 passed / 1 skipped。

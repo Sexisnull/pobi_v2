@@ -17,6 +17,8 @@
 
 ## 历史踩坑记录
 
+- **[ADaPT 外层循环死循环（2026-09-09 修复）]** 评测发现 `architecture.py` 外层 `while` 两个致命缺陷：① 退出条件 `not should_exit or node.status != "completed"` 用 `or`——`should_exit=True`（全局退出已触发）但 status 未变 completed 时条件仍真，exit_loop 机制失效（真实代码验证：root 收到 3 次 exit_loop 仍迭代 7 次 executor 调用）；② attempts 仅在 `_solve` 入口自增，while 内 expand/refine 递归返回后迭代不经过入口，`MAX_TASK_ATTEMPTS=3` 失效，同一 node 无限迭代直至外部超时熔断（复刻实测 32 次 executor 调用仍不终止）。**修复**：`or` → `and`；attempts 自增移入 while 每轮迭代并检查。**约束**：① while 退出条件必须保持 `and`，勿回退 `or`（exit_loop 是全局退出唯一传播通道）；② attempts 只能由 while 迭代自增，禁止在 `_solve` 入口再自增（双倍计数会改变 `MAX_TASK_ATTEMPTS=3` 语义，测试 `tests/test_adapt_loop.py` 锁死行为）。
+- **[Supervisor 轮次/请求预算耦合（2026-09-09 修复）]** `executor.py` 原 `max_rounds = cfg.request_limit`：每轮恰好 1 次请求时两者同步耗尽，usage 刹车永不先于 for 触发（else 兜底注释"理论上 usage_limits 已先触顶"与实际不符）；supervisor 调用 recon_lookup 等工具（额外 LLM 请求）会扣减决策轮次。**修复**：`SupervisorLoopConfig` 新增 `max_rounds=40` 独立字段，`request_limit` 提升 40→80 作累计请求预算（40 轮决策 + 工具调用余量）。**约束**：① 轮次上限与请求预算解耦，改 `max_rounds`/`request_limit` 须同步评估两者语义，禁止把 `max_rounds` 重新绑定到 `request_limit`；② 子 agent 预算独立为 `_SUB_AGENT_USAGE_LIMITS`（request_limit=200），禁止回退为共享 supervisor 预算（高频子 agent 单次深度测试即耗尽，后续轮次永久降级）。
 - **[AVFS not mounted]** `DeadEndAgent` 以 `agent_id` 命名空间挂载 memory，子 Agent 须统一用 `memory_session_id` 访问；误用 `session_id`(task_id) 曾累计阻塞 131 次。修复点：`executor.py:113-115/:157`、`pobi_agent.py:438-440`。→ 读写 memory 必须用同一命名空间。
 - **[function-call 序列化]** `parse_browser_steps` 兼容模型将 `steps` 字符串化（先 `json.loads` 解包 `{"steps":[...]}`），避免 `'str' object has no attribute 'items'`。
 - **[认证死循环]** `wait_for_auth_success` 假阳性修复；`authenticate_service` 增加 `validated` 真实校验 + 连续失败熔断（`_AUTH_FAIL_LIMIT=3` 直接 `aborted`）。来源：监控报告 A/B（DVWA 登录 33 分钟死循环）。

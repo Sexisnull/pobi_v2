@@ -164,9 +164,12 @@ def test_window_messages_token_budget_drops_middle():
 # --------------------------------------------------------------------------- #
 def test_supervisor_loop_config_usage_limits_bounded():
     cfg = SupervisorLoopConfig()
+    # 轮次上限与请求预算解耦（P1-3）：for 边界 = max_rounds，usage 刹车 = request_limit
+    assert cfg.max_rounds == 40
+    assert cfg.request_limit == 80  # 40 轮决策 + 每轮至多 1 次工具调用的请求预算
     ul = cfg.usage_limits
     assert isinstance(ul, UsageLimits)
-    assert ul.request_limit == 40
+    assert ul.request_limit == 80
     assert ul.tool_calls_limit is None  # compat 层仅 request_limit 生效
 
 

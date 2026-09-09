@@ -31,12 +31,17 @@ from pobi_agent.agents.factory import FallbackAgentResult
 class SupervisorLoopConfig:
     """Supervisor 驱动循环配置（路径 A）。
 
-    - request_limit：单 ADaPT 迭代内 supervisor 最大轮次。CoreAgent compat 仅把
-      request_limit 映射到 limits_dict["requests"] 生效（tool_calls_limit / total_tokens_limit
-      在 compat 层被丢弃），故刹车以 request_limit 为准。
+    - max_rounds：决策轮次上限（驱动循环 for 边界）。与请求预算解耦：原实现
+      max_rounds = request_limit，每轮恰好 1 次请求时两者同步耗尽，usage 刹车
+      永不先于 for 触发（P1-3）；调 recon_lookup 等工具还会额外扣减决策轮次。
+    - request_limit：supervisor 累计 LLM 请求总预算（含工具调用）。每轮决策至少
+      1 次请求，预留工具调用余量；触顶即 FallbackAgentResult 终止循环。
+      CoreAgent compat 仅把 request_limit 映射到 limits_dict["requests"] 生效
+      （tool_calls_limit / total_tokens_limit 在 compat 层被丢弃）。
     - history_max_messages / history_max_tokens：run() 边界窗口化双约束。
     """
-    request_limit: int = 40
+    max_rounds: int = 40
+    request_limit: int = 80
     history_max_messages: int = 24
     history_max_tokens: int = 6000
 
@@ -46,6 +51,13 @@ class SupervisorLoopConfig:
 
 
 _DEFAULT_SUPERVISOR_LOOP_CONFIG = SupervisorLoopConfig()
+
+# 子 agent 独立预算（P1-4）：每个子 agent 实例累计请求上限，独立于 supervisor 轮次预算。
+# 子 agent 实例在 execute_supervisor 内创建一次、跨 40 轮复用，原共享 supervisor 的
+# request_limit=40 会在单次深度测试（CoreAgent max_iterations=50 兜底）后耗尽，
+# 导致后续轮次该子 agent 一调用即触顶、永久降级为 FallbackAgentResult。
+_SUB_AGENT_REQUEST_LIMIT = 200
+_SUB_AGENT_USAGE_LIMITS = UsageLimits(request_limit=_SUB_AGENT_REQUEST_LIMIT, tool_calls_limit=None)
 
 
 class LogEvent(BaseModel):
@@ -1111,9 +1123,11 @@ class AgentExecutor:
             # 每次独立 message_history（不回灌 supervisor 历史），仅 compact 结果进 history。
             cfg = _DEFAULT_SUPERVISOR_LOOP_CONFIG
             effective_limits = usage_limits or cfg.usage_limits
-            # 子 agent 调用：独立历史 + 有界刹车（经 call_* 的 ctx.deps 读取）
+            # 子 agent 调用：独立历史 + 独立预算（经 call_* 的 ctx.deps 读取）。
+            # P1-4：子 agent 预算与 supervisor 轮次预算解耦，避免高频子 agent
+            # （如 requester）单次深度测试耗尽共享预算导致后续轮次永久降级。
             supervisor_deps.message_history = None
-            supervisor_deps.usage_limits = effective_limits
+            supervisor_deps.usage_limits = _SUB_AGENT_USAGE_LIMITS
 
             history = message_history if message_history is not None else []
             logger.info(
@@ -1124,7 +1138,8 @@ class AgentExecutor:
             )
             first_round = True
             decision: SupervisorDecision | None = None
-            max_rounds = max(1, int(cfg.request_limit or 1))
+            # P1-3：轮次上限与请求预算解耦（cfg.max_rounds 独立于 request_limit）。
+            max_rounds = max(1, int(cfg.max_rounds or 1))
             outcome_for_next: str = ""
             for _round in range(max_rounds):
                 windowed = window_messages(history, cfg.history_max_messages, cfg.history_max_tokens)
@@ -1187,7 +1202,9 @@ class AgentExecutor:
                     f"{outcome}"
                 )
             else:
-                # 未达 complete 且未触顶（理论上 usage_limits 已先触顶）→ 兜底
+                # 未达 complete 且未触顶：每轮恰好 1 次请求时，supervisor 累计请求
+                # 数随轮次同步逼近 request_limit，usage 刹车不先于 for 触发；若轮内
+                # 调用 recon_lookup 等工具产生额外请求，则会提前触顶走 FallbackAgentResult。→ 兜底
                 emit(f"[SUPERVISOR-LOOP] exceeded {max_rounds} rounds without completion.")
                 if confidence_score is None:
                     confidence_score = 0.5
