@@ -1,0 +1,190 @@
+# 威胁建模与利用阶段：上下文选取策略与重复侦察探查
+
+> 本文是 `context-explosion-analysis.md` 的补充与延伸，聚焦两个被上一轮评估误判/未深挖的问题：
+> - **问题 A**：`get_unified_context()` 是"全量注入"还是"按需检索"？
+> - **问题 B**：`threat_model` 阶段是否重复做了 `pre_recon` 已完成的侦察？
+>
+> 性质：代码探查 + 根因分析 + 顶层方案设计。**不含任何代码实现改动。**
+> 探查基于 `pobi_agent/context/context_engine.py`、`pobi_agent/recon/store.py`、`pobi_agent/pobi_agent.py` 当前实现。
+
+---
+
+## 0. 结论速览（先给结论）
+
+| 问题 | 上一轮判断 | 探查后修正结论 |
+|------|-----------|---------------|
+| **A. 上下文全量 vs 按需** | "似乎把沉淀全量拼进 prompt，会撑大 token、截断关键资产" | **部分正确但机制判断偏了**：已有分层预算 + `max_tokens` 截断保护，不会无限膨胀；**真正问题是"确定性 top-N 截取，不做相关性检索"**——注入内容与"当前子任务在做什么"无关，导致无关资产占用预算、相关资产被裁掉。 |
+| **B. threat_model 重复侦察** | "威胁建模没消费 pre_recon，空想计划" | **该判断已推翻**（见历史对话）。真实情况是：资产已通过 `get_unified_context` 流入 LLM；**但 `threat_model` 与 `run_exploitation` 的 supervisor prompt 都命令 LLM"用工具去侦察"，而 `pre_recon` 已是平台层自动侦察 —— 两阶段各自做一次侦察，存在重复劳动。** 且 `covered_block`（跳过重复工作）**只注入到 `run_exploitation`，未注入 `threat_model`**。 |
+
+**真正影响效率与速度的根因不是"有没有消费 pre_recon"，而是：**
+1. 上下文注入是**与当前任务无关的确定性 top-N**，而非"针对当前子任务的相关性检索"；
+2. `pre_recon`（平台自动）与 `threat_model`（LLM 驱动）是**两次独立的侦察**，且 `threat_model` 缺 `covered_block` 约束，无法利用历史跳过重复枚举。
+
+---
+
+## 1. 问题 A：上下文注入是"全量"还是"按需检索"
+
+### 1.1 证据：注入链路的两段式结构
+
+`get_unified_context` 在 `ContextEngine` 层分两段拼装：
+
+**第一段 —— `StructuredContext.get_unified_context`（`context_engine.py:642-835`）**
+按固定 section 顺序拼装，并受 `max_tokens` 预算保护：
+
+```642:835:pobi_agent/context/context_engine.py
+def get_unified_context(self, max_tokens: int = 6000) -> str:
+    ...
+    # SECTION 1: TARGET + GOAL
+    # SECTION 2: FLAG FOUND (FULL reproduction steps)
+    # SECTION 3: TEST HISTORY (success 全保留, failure 每 endpoint 最多 5 条)
+    # SECTION 4: KEY DISCOVERIES (按 confidence 取前 20 条)
+    # SECTION 5: IDENTIFIED ENDPOINTS (最多 50 条)
+    # SECTION 6: VULNERABILITIES (按 confidence 取前 20 条)
+    # SECTION 6.5: AUTHENTICATION
+    # SECTION 7: AGENT INSIGHTS (最近 5 条)
+    # max_tokens 总预算：按优先级从低到高删除 section，直到 <= max_tokens
+```
+
+要点：**不是无脑全量**——它有 `max_tokens` 预算，且删除优先级从低到高（HEAD/FLAG 最高优先不删，其余按 `deprioritized` 列表删，最终硬截断）。这与"全量撑爆"的判断不符。
+
+**第二段 —— RECON 分层注入块（`context_engine.py:1132-1176`）**
+
+```1132:1161:pobi_agent/context/context_engine.py
+def get_unified_context(self, max_tokens: int = 6000) -> str:
+    base = self.structured.get_unified_context(max_tokens=max_tokens)
+    # 挂载 RECON 本地库 L0/L1/L2 分层注入块
+    recon_block = self._build_recon_index_block()
+    if recon_block:
+        return f"{recon_block}\n\n{base}"
+    return base
+```
+
+`recon_block` 来自 `recon_store.build_index_view`，同样有分层 token 预算（L1≤500、L2≤1500）。
+
+### 1.2 证据：选取逻辑是"确定性 top-N"，不是"相关性检索"
+
+`build_index_view`（`store.py:692-798`）的选取全部是**按固定排序的前 N 条**，与"当前在做什么子任务"完全无关：
+
+- **L0 目标基线**：取 `confidence >= 0.8` 的事实前 15 条 + 站点总览（`store.py:720-724`）；
+- **L1 端点与技术栈**：取按 `confidence` 降序的前 20 个端点，再 `_fit_budget` 截断到 500 tokens（`store.py:754-763`）；
+- **L2 历史利用复用**：取 `status in (confirmed, exploited)` 的前 10 条威胁 + 成功 technique 前 10 条，截断到 1500 tokens（`store.py:778-790`）。
+
+`StructuredContext.get_unified_context` 同样按 `confidence` 排序取前 20/50 条，**没有任何基于 `objective` 或当前 `task` 的语义过滤**。
+
+### 1.3 根因分析
+
+上下文注入是**"与任务无关的全集 top-N 截断"**，而非"针对当前子任务的相关性检索"。后果：
+
+1. **无关资产占用预算**：若目标有 200 个端点，L1 永远只取 confidence 最高的前 20 个——但当前子任务可能恰恰需要的是那第 50 个"低频但相关"的端点（如一个隐藏的管理后台），它永远进不了上下文。
+2. **相关资产被裁掉**：当 section 超 `max_tokens`，删除优先级固定的"低优先级 section"（如 `## ENDPOINTS`、`## VULNERABILITIES`）会被整段删掉，而真正与当前子任务相关的端点/漏洞可能正埋在这些 section 里。
+3. **`build_index_view(task_id, objective="")` 的 `objective` 参数形同虚设**：签名预留了 `objective`，但函数体从未用它做过滤（`store.py:692-714` 直接 `select(...).where(task_id==...)` 全量捞取后排序截取）。
+
+> 这与 `context-explosion-analysis.md` 描述的"L2 结构化重渲染层"同源：L2 是"单轮上下文无上限重渲染"，本文补充的是"即使加了预算，选取也是非相关性的"——两个问题叠加，既可能膨胀也可能误裁。
+
+### 1.4 解决方案（顶层，不实现）
+
+| 方案 | 描述 | 预期收益 | 改动量 |
+|------|------|---------|--------|
+| **A1. 相关性检索注入** | 让 `build_index_view(task_id, objective)` 真正消费 `objective`：用 `objective`/当前 `task_node.task` 做 embedding 或关键词匹配，对端点/事实/威胁做相似度排序后取 top-N，而非纯 `confidence` 排序。可复用已有的 RAG 连接器。 | 上下文"精准命中"当前子任务，相关资产不再被裁，无关资产不再占预算。 | 中 |
+| **A2. 分阶段动态预算** | 不同 phase 用不同预算权重：recon 阶段重端点（L1 预算↑、L2↓），exploit 阶段重漏洞/历史利用（L2↑、L1↓）。当前 L1/L2 预算是写死的常量（`store.py:61-62`）。 | 每个阶段只带"当下最有用"的资产，token 更省、信号更密。 | 小 |
+| **A3. 按需 lazy 检索接口** | 保留 L0 基线全注入，L1/L2 改为"索引 + 检索指令"：在 prompt 里告诉 LLM"如需某端点/技术的细节，调用 `query_recon(keyword)` 工具主动拉取"。把"推"改成"推索引 + 拉细节"。 | 彻底解除 top-N 截断导致的信息丢失，且 token 占用恒定。 | 大 |
+
+---
+
+## 2. 问题 B：threat_model 是否重复侦察 pre_recon 已完成的侦察
+
+### 2.1 证据：pre_recon 是平台层自动侦察（一次）
+
+`pre_recon` 在任务启动早期自动执行指纹识别、WAF 识别、站点地图爬取，结果写入 `recon_fingerprints` / `recon_endpoints` / `recon_facts` 等表（`pre_recon.py` 的 `persist_fingerprint` 等落库逻辑）。这是**无 LLM 参与的平台自动步骤**。
+
+### 2.2 证据：threat_model 的 supervisor prompt 仍命令 LLM "用工具去侦察"（第二次）
+
+`threat_model`（`pobi_agent.py:536-563`）的 prompt 明确：
+
+```536:563:pobi_agent/pobi_agent.py
+prompt_task = f"""
+Prepare the necessary information (reconnaissance) to achieve the following task: {task}
+...
+Critical rules:
+- Make requests to the target and analyze responses
+- Follow forms, links, and endpoints to discover relevant information
+- Extract endpoints, authentication info, and secrets from actual tool responses
+- Do NOT invent or guess endpoints - only use what is discovered
+...
+"""
+```
+
+同时 `threat_model` 通过 `execute_supervisor(phase="recon")` 执行（`pobi_agent.py:593-599`），子 agent 会实际调用 `requester` / `webapp_analyzer` 等工具**再次访问目标**。也就是说，**pre_recon 已探明的端点/技术栈，threat_model 又用 LLM 工具探了一遍**。
+
+### 2.3 证据：covered_block 未注入 threat_model，只在 run_exploitation 注入
+
+`covered_block`（"已覆盖资产，禁止重复劳动"）的注入点：
+
+```831:831:pobi_agent/pobi_agent.py
+{covered_block}   # run_exploitation 第一阶段
+```
+```905:905:pobi_agent/pobi_agent.py
+{covered_block}   # run_exploitation 第二阶段
+```
+```1087:1091:pobi_agent/pobi_agent.py
+{covered_block}
+### 跳过重复工作规则（历史任务已覆盖，禁止重复劳动）
+- 上述「已覆盖资产」来自同一授权目标的历史任务沉淀。除非本任务目标明确指向它们，**禁止重复扫描、重复枚举、重复验证**。
+```
+
+而 `threat_model` 的 prompt（`pobi_agent.py:536-563`）**完全没有 `{covered_block}` 占位符**，其 `execute_supervisor` 调用也只传了 `agent_context=target_context`（588 行），未携带 covered 约束。
+
+> 子 agent 虽可通过 `context.get_unified_context()` 间接读到 `recon_block`（L0/L1/L2），但 **L0/L1/L2 是"已知资产清单"，不是"禁止重复枚举"的指令**——它告诉 LLM"这些是已知的"，但没有像 `covered_block` 那样明确"不要再去探它们"。因此 threat_model 阶段仍会倾向用工具重新验证。
+
+### 2.4 根因分析
+
+"重复侦察"不是 bug，而是**两阶段设计各自内置侦察职责**的必然结果：
+
+- `pre_recon`：平台自动、无 LLM、快、全量；
+- `threat_model`：LLM 驱动、慢、按任务相关；
+
+二者职责重叠在"端点发现/技术栈识别"上。由于 `threat_model` 缺少 `covered_block` 这样的"信任预侦察结论、跳过重复枚举"的硬约束，LLM 会重新发起请求，产生：
+
+1. **时间浪费**：同一批端点被请求两次（pre_recon 一次 + threat_model 子 agent 一次）；
+2. **token 浪费**：threat_model 的工具响应又灌回 `message_history`（即 `context-explosion-analysis.md` 的 L3 层），加剧膨胀；
+3. **速率/风控风险**：对同一目标重复请求，更易触发 WAF/速率限制（pre_recon 已识别 WAF 却未在 threat_model 复用该结论做限速）。
+
+### 2.5 解决方案（顶层，不实现）
+
+| 方案 | 描述 | 预期收益 | 改动量 |
+|------|------|---------|--------|
+| **B1. threat_model 注入 covered_block** | 把 `run_exploitation` 已有的 `{covered_block}` + "禁止重复枚举"规则，同样注入 `threat_model` 的 prompt（`pobi_agent.py:536` 处）。让威胁建模阶段"信任 pre_recon 结论，只在缺口处补探"。 | 消除 threat_model 对 pre_recon 已覆盖端点的重复请求，省一轮侦察时间。 | 小 |
+| **B2. pre_recon 结论作为 threat_model 的"只读基线"** | 在 `threat_model` 启动前，把 `pre_recon` 落库的端点/技术栈/WAF 结论以结构化"已知基线"块注入，并显式指令"这些已探明，仅对新发现的攻击面发起请求"。 | 让 LLM 从"重新侦察"转为"校验+补充"，轮次显著下降。 | 小 |
+| **B3. 两阶段侦察职责拆分** | 明确契约：`pre_recon` 负责"资产发现"（端点/技术栈/认证面），`threat_model` 只负责"基于已知资产做攻击面推理与优先级排序"，禁止 threat_model 发起广谱爬取类请求。 | 从设计上消除重叠，而非靠 prompt 约束。 | 中 |
+
+---
+
+## 3. 两问题的耦合关系
+
+A 与 B 并非独立：
+
+- **B 的重复侦察 → 放大 A 的膨胀**：threat_model 重复请求产生的工具响应进入 L3 `message_history`，同时新发现又写入 `facts`，使 L2 `get_unified_context` 的 top-N 池更大、更杂，进一步稀释"相关性"。
+- **A 的非相关性选取 → 削弱 B 的复用价值**：即使 `covered_block` 注入 threat_model，若 `get_unified_context` 注入的 L1 端点都是"高 confidence 但无关当前任务"的，LLM 仍会倾向自己探。
+
+**建议落地顺序**（按杠杆 / 改动量）：
+1. **B1（小）**：threat_model 注入 covered_block —— 立即减少一轮重复侦察；
+2. **A2（小）**：phase 动态预算 —— 让每个阶段上下文信号更密；
+3. **A1（中）**：objective 相关性检索 —— 根治"无关资产占预算"；
+4. **B3（中）**：两阶段职责拆分 —— 从设计上消除重叠。
+
+---
+
+## 4. 验证方法（度量先行，不改动）
+
+在动手前，建议先补 phase 级耗时与 token 度量（呼应 `context-explosion-analysis.md` 的"先度量后治理"）：
+
+- 在 `deadend_runner.py` 各 phase 边界（pre_recon / threat_model / exploitation / report）落 `duration_ms` 与 `prompt_tokens`（pre_recon 已有 `fingerprint.duration_ms` 先例）；
+- 统计 `threat_model` 阶段子 agent 发出的请求中，**与 pre_recon 已落库端点重叠的比例**——若 >30%，则 B 问题成立且 B1 收益可观；
+- 统计 `get_unified_context` 注入 token 中，**与当前 task 无关（后续未被任何工具/决策引用）的占比**——若高，则 A1 收益可观。
+
+---
+
+## 5. 关联文档
+
+- `context-explosion-analysis.md`：上下文窗口超限（L2 重渲染无上限 + L3 跨轮累积无刹车），本文是其"内容选取策略"维度的补充。
+- `architecture.md` / `constraints.md`：若后续落地 A1/B3，涉及 supervisor prompt 契约与 recon 选取逻辑变更，应同步更新。

@@ -32,6 +32,7 @@ from pobi_agent.tools.browser.run_browser_steps_tool import (
     browser_step_to_interaction,
 )
 from pobi_agent.tools.browser.authenticate import authenticate, authenticate_service
+from pobi_agent.tools.browser.observe_login_surface import observe_login_surface
 from pobi_agent.tools.browser.validate_refresh import (
     refresh_auth_context,
     refresh_auth_context_service,
@@ -52,6 +53,7 @@ __all__ = [
     "browser_run_steps",
     "authenticate",
     "authenticate_service",
+    "observe_login_surface",
     "validate_auth_context",
     "validate_auth_context_service",
     "refresh_auth_context",

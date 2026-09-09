@@ -1,0 +1,35 @@
+{% raw %}
+Observe the target's real login surface and return a secret-free structured snapshot. Use this **before** calling ``authenticate`` when you have no recon context yet — it tells you which auth flow applies and gives you the real form fields / buttons / submit method.
+
+## WHEN TO USE
+
+- Task creation-time pre-auth: the user supplied credentials, but you don't know yet whether the target uses an HTML form, a JSON API login, HTTP Basic, or an OAuth redirect.
+- You need real selectors (``input[name=...]``, button texts) to build ``steps`` for ``authenticate``.
+
+## INPUT
+
+| Argument | Type | Meaning |
+|---|---|---|
+| ``login_url`` | string \| null | Login page URL. Defaults to the task's configured login URL, then the target URL. |
+| ``navigation_timeout_ms`` | int \| null | Page navigation timeout in ms (default 25000). |
+
+## OUTPUT (all values are secret-free)
+
+| Field | Type | Meaning |
+|---|---|---|
+| ``success`` | bool | Whether observation succeeded. |
+| ``final_url`` / ``title`` | string | Final URL after redirects and page title. |
+| ``http_basic`` | bool | HTTP Basic challenge detected (``WWW-Authenticate`` header). |
+| ``oauth_redirect`` | bool | Final URL host differs from requested host (likely OAuth / IdP redirect). |
+| ``has_pw`` | bool | A password input exists on the page. |
+| ``inputs`` | array | Every ``<input>``: type / name / id / placeholder / autocomplete / required. |
+| ``buttons`` | array | Every button / submit input: tag / type / visible text. |
+| ``forms`` | array | Every ``<form>``: action / method. |
+| ``body_text`` | string | Visible page text (max 1500 chars). |
+
+## RULES
+
+- Never include cookie values, input ``value`` attributes or credentials in any output.
+- If the page requires JS hydration, still report what the static DOM shows; you may combine this with ``authenticate``'s ``post_login_wait_ms`` later.
+- If observation fails (``success=false``), report the ``error`` and do not invent a login surface.
+{% endraw %}

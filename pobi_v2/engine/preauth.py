@@ -5,7 +5,8 @@
 与 exploitation 阶段复用。
 
 两个分支：
-- auto   ：复用 ``authenticate_service``（form/json/http 自动登录），无主控调度、无 LLM 决策。
+- auto   ：LLM 驱动前置认证（``PreAuthAgent`` + ``observe_login_surface``），由模型
+  观察登录面后决策 form/json/http/oauth 形态并调用 ``authenticate`` 落盘会话。
 - manual ：（已禁用，2026-09-01 搁置，见 .ai/roadmap.md MFA 演进计划）临时 ``BrowserSession`` + 截图轮询远程控制。
 
 设计约束（与原生认证体系对齐）：
@@ -25,20 +26,14 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from pobi_agent.auth_resolver.auth_context_utils import auth_context_from_browser_state
 from pobi_agent.auth_resolver.auth_resolver import (
-    AuthContextHandler,
-    AuthFlow,
     AuthType,
     CredentialsStore,
 )
 from pobi_agent.logging import logger
 from pobi_agent.recon.store import ReconStore
 from pobi_agent.storage_context import clear_task_root, set_task_root
-from pobi_agent.tools.browser.authenticate import (
-    authenticate_service,
-    write_playwright_storage_state,
-)
+from pobi_agent.tools.browser.authenticate import authenticate_service
 # [DISABLED 2026-09-01] 仅手动登录分支使用；手动分支搁置后无引用
 # from pobi_agent.tools.browser.browser import BrowserSession, ClickStep, FillStep, PressStep
 
@@ -47,6 +42,9 @@ from pobi_agent.tools.browser.authenticate import (
 
 # MFA / 二次验证启发式关键词：自动认证失败时用于归类 auth_status=mfa
 _MFA_HINTS = ("mfa", "2fa", "two-factor", "two factor", "otp", "totp", "验证码", "二次验证", "短信", "authenticator")
+
+# LLM 前置认证（PreAuthAgent）整体超时（秒）：观察登录面 + LLM 决策 + 登录 + 落盘
+PREAUTH_AGENT_TIMEOUT_S = 180
 
 
 class PreAuthError(Exception):
@@ -69,6 +67,26 @@ def _auth_status_from_result(result: dict[str, Any]) -> tuple[str, str | None]:
     if any(h in blob for h in _MFA_HINTS):
         return "mfa", str(result.get("error") or "检测到二次验证（MFA/验证码），需人工登录")
     return "failed", str(result.get("error") or "认证失败")
+
+
+def _status_from_agent_result(result: Any) -> tuple[str, str | None]:
+    """把 PreAuthAgent 运行结果归类为 auth_status。
+
+    优先证据是 AuthContext 落盘文件（由 run_auto_auth 先检查）；走到这里时
+    文件未落盘，只能依据 LLM 输出归类：MFA 标记 → mfa，其余 → failed。
+    """
+    out = getattr(result, "output", None)
+    summary = ""
+    if out is not None:
+        summary = " ".join(
+            str(getattr(out, field, "") or "")
+            for field in ("detailed_summary", "thoughts", "proofs")
+        )
+    low = summary.lower()
+    if "requires_interactive_auth" in low or any(h in low for h in _MFA_HINTS):
+        return "mfa", "检测到二次验证（MFA/验证码），需人工登录"
+    error = str(getattr(result, "error", None) or "") or summary.strip() or "认证未成功"
+    return "failed", error[:500]
 
 
 def _write_auth_facts(
@@ -245,28 +263,89 @@ async def run_auto_auth(
     profile: str = "preauth",
     auth_flow: str = "form",
 ) -> dict[str, Any]:
-    """自动分支：调用 authenticate_service 完成登录并持久化会话。
+    """自动分支：LLM 驱动前置认证（PreAuthAgent）完成登录并持久化会话。
+
+    PreAuthAgent 先 ``observe_login_surface`` 观察真实登录面，再由 LLM 决策
+    auth_flow（form/json/http/oauth）与步骤，调用 ``authenticate`` 落盘
+    ``preauth`` AuthContext。凭据经任务钱包（profile=preauth）解析，
+    明文不进入 LLM 上下文。
 
     返回结构化结果：{status, profile, storage_path, error, detail}。
     调用方负责更新任务 auth_status 与 auth_error。
     """
-    token = set_task_root(task_root)
+    # 凭据先落任务钱包（幂等）：LLM 认证走 wallet 解析，明文不进上下文。
+    # 落钱包失败不阻断认证（仅导致 wallet 无凭据，authenticate 会失败归类）。
     try:
-        result = await authenticate_service(
+        save_task_credentials(
+            task_root=task_root,
             target=target,
-            agent_id=None,
-            session_id=uuid4(),
-            auth_url=login_url,
-            profile=profile,
-            auth_flow=auth_flow,
-            auth_type=AuthType.SESSION_COOKIE.value,
             username=username,
             password=password,
-            headless=True,
-            auto_submit=True,
+            login_url=login_url,
         )
+    except Exception as exc:  # noqa: BLE001 — 凭据落文件失败不阻断 LLM 认证流程
+        logger.warning(
+            "[PREAUTH] 任务凭据落钱包失败 | task_id=%s | error=%s", task_id, exc
+        )
+
+    token = set_task_root(task_root)
+    try:
+        from pobi_agent.agents.generic_agents.preauth_agent import PreAuthAgent
+        from pobi_agent.utils.structures import PreAuthDeps
+        from pobi_v2.llm import get_model_spec
+
+        model = get_model_spec()
+        session_id = uuid4()
+        deps = PreAuthDeps(
+            target=target,
+            agent_id=uuid4(),
+            session_id=session_id,
+            login_url=login_url or target,
+            task_root=str(task_root),
+            task_id=task_id,
+        )
+        agent = PreAuthAgent(
+            model=model,
+            deps_type=PreAuthDeps,
+            target_information=target,
+            requires_approval=False,
+            phase="preauth",
+        )
+        prompt = (
+            f"任务创建阶段前置认证：使用已配置凭据（wallet profile={profile}）"
+            f"登录目标并落盘认证会话。\n目标：{target}\n"
+            f"登录地址：{login_url or target}\n"
+            "完成后报告使用的 auth_flow、匹配的 success 信号；"
+            "若遇 MFA/验证码，在摘要中标记 requires_interactive_auth=true。"
+        )
+        result = await asyncio.wait_for(
+            agent.run(
+                prompt=prompt,
+                deps=deps,
+                message_history=[],
+                usage=None,
+                usage_limits=None,
+            ),
+            timeout=PREAUTH_AGENT_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError as exc:  # noqa: BLE001 — 超时降级为 failed
+        status, error = "failed", f"前置认证超时（超过 {PREAUTH_AGENT_TIMEOUT_S} 秒）"
+        _write_auth_facts(
+            task_id=task_id,
+            task_root=task_root,
+            target=target,
+            profile=profile,
+            source="preauth_auto",
+            auth_status=status,
+            username=username,
+            error=error,
+        )
+        logger.warning(
+            "[PREAUTH] 前置认证超时 | task_id=%s | profile=%s | error=%s", task_id, profile, error
+        )
+        return {"status": status, "profile": profile, "storage_path": None, "error": error}
     except Exception as exc:  # noqa: BLE001 — 认证异常必须归类为失败并降级，不抛给调用链
-        status, _ = "failed", f"认证异常: {exc}"
+        status, error = "failed", f"前置认证异常: {exc}"
         _write_auth_facts(
             task_id=task_id,
             task_root=task_root,
@@ -277,11 +356,19 @@ async def run_auto_auth(
             username=username,
             error=str(exc),
         )
+        logger.warning(
+            "[PREAUTH] 前置认证异常 | task_id=%s | profile=%s | error=%s", task_id, profile, error
+        )
         return {"status": status, "profile": profile, "storage_path": None, "error": str(exc)}
     finally:
         clear_task_root(token)
 
-    status, error = _auth_status_from_result(result)
+    # 判定优先看落盘证据（authenticate 成功必然写 {profile}.playwright.json）。
+    storage_path = Path(task_root) / "agent" / "auth_context" / f"{profile}.playwright.json"
+    if storage_path.exists():
+        status, error = "success", None
+    else:
+        status, error = _status_from_agent_result(result)
     _write_auth_facts(
         task_id=task_id,
         task_root=task_root,
@@ -293,9 +380,8 @@ async def run_auto_auth(
         error=error,
     )
     if status == "success":
-        storage_path = AuthContextHandler(target, None, uuid4()).playwright_storage_path(profile)
         logger.info(
-            "[PREAUTH] 凭据已写入本地 | task_id=%s | profile=%s | username=%s | "
+            "[PREAUTH] LLM 前置认证成功 | task_id=%s | profile=%s | username=%s | "
             "storage_path=%s | auth_context_dir=%s",
             task_id,
             profile,
@@ -305,21 +391,28 @@ async def run_auto_auth(
         )
     else:
         logger.warning(
-            "[PREAUTH] 凭据写入本地失败 | task_id=%s | profile=%s | username=%s | status=%s | error=%s",
+            "[PREAUTH] LLM 前置认证失败 | task_id=%s | profile=%s | username=%s | status=%s | error=%s",
             task_id,
             profile,
             username,
             status,
             error,
         )
+    detail: dict[str, Any] = {}
+    out = getattr(result, "output", None)
+    if out is not None:
+        detail = {
+            "agent_summary": str(getattr(out, "detailed_summary", "") or "")[:1000],
+            "confidence_score": getattr(out, "confidence_score", None),
+        }
+    elif getattr(result, "error", None):
+        detail = {"agent_error": str(result.error)[:1000]}
     return {
         "status": status,
         "profile": profile,
-        "storage_path": str(AuthContextHandler(target, None, uuid4()).playwright_storage_path(profile))
-        if status == "success"
-        else None,
+        "storage_path": str(storage_path) if status == "success" else None,
         "error": error,
-        "detail": result,
+        "detail": detail,
     }
 
 

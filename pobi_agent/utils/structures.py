@@ -156,6 +156,26 @@ class RequesterDeps:
     # 由 executor 组装 deps 时注入；未注入时为 None，写入安全 no-op。
     context: Optional["ContextEngine"] = None
 
+
+@dataclass
+class PreAuthDeps:
+    """任务创建阶段前置认证（PreAuthAgent）的轻量依赖。
+
+    api 侧（create_task 后台 /auth/auto）使用，不需要 embedder / RAG / shell
+    基础设施。``authenticate`` 工具只读 target/agent_id/session_id/proxy_url；
+    ``observe_login_surface`` 额外读 login_url/verify_ssl；task_root/task_id
+    供 run_auto_auth 做 AuthContext 落盘定位与状态记账。
+    """
+
+    target: str
+    agent_id: uuid.UUID | None = None
+    session_id: uuid.UUID | None = None
+    proxy_url: str | None = None
+    login_url: str | None = None
+    verify_ssl: bool = False
+    task_root: str | None = None
+    task_id: str | None = None
+
 @dataclass
 class WebappreconDeps:
     """

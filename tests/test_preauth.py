@@ -2,18 +2,20 @@
 
 覆盖：
 - 认证结果归类（success / mfa / failed / aborted）
-- run_auto_auth 异常安全与 recon_facts 落库
-- 手动会话超时判定
+- run_auto_auth（LLM 驱动 PreAuthAgent）异常安全与 recon_facts 落库
 - 创建前凭据预检（verify_credentials）
 - 自动填表登录（_auto_submit_login）成功/失败判定
+- 登录面观察（observe_login_surface）URL 决策与结果合并
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from pobi_agent.agents.factory import AgentOutput
 from pobi_agent.recon.store import ReconStore
 from pobi_agent.tools.browser.authenticate import _auto_submit_login
 
@@ -22,6 +24,55 @@ from pobi_v2.engine import preauth
 
 def _status_of(d: dict) -> str:
     return d.get("status", "failed")
+
+
+def _patch_preauth_agent(monkeypatch, behavior: str = "success"):
+    """用 FakePreAuthAgent 替换 PreAuthAgent 并 stub get_model_spec。
+
+    behavior:
+    - success: run 模拟 authenticate 落盘 preauth.playwright.json → status=success
+    - failed : run 返回无 MFA 标记的失败摘要 → status=failed
+    - mfa    : run 返回 requires_interactive_auth 标记 → status=mfa
+    - boom   : run 抛异常 → status=failed
+    """
+    import pobi_agent.agents.generic_agents.preauth_agent as pa_mod
+    import pobi_v2.llm as llm_mod
+
+    instances: list = []
+
+    class FakePreAuthAgent:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.run_kwargs = None
+            instances.append(self)
+
+        async def run(self, **kwargs):
+            self.run_kwargs = kwargs
+            task_root = Path(kwargs["deps"].task_root)
+            if behavior == "boom":
+                raise RuntimeError("browser crash")
+            if behavior == "mfa":
+                out = AgentOutput(
+                    detailed_summary="requires_interactive_auth=true 需要短信验证码",
+                    proofs="", confidence_score=0.1, thoughts="",
+                )
+            elif behavior == "failed":
+                out = AgentOutput(
+                    detailed_summary="登录失败：表单字段不匹配", proofs="",
+                    confidence_score=0.1, thoughts="",
+                )
+            else:
+                p = task_root / "agent" / "auth_context" / "preauth.playwright.json"
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text("{}", encoding="utf-8")
+                out = AgentOutput(
+                    detailed_summary="登录成功", proofs="", confidence_score=0.9, thoughts="",
+                )
+            return SimpleNamespace(output=out, error=None)
+
+    monkeypatch.setattr(pa_mod, "PreAuthAgent", FakePreAuthAgent)
+    monkeypatch.setattr(llm_mod, "get_model_spec", lambda: SimpleNamespace())
+    return instances
 
 
 def test_status_classify_success():
@@ -53,11 +104,8 @@ def test_status_classify_mfa_cn_hint():
 
 
 async def test_run_auto_auth_writes_recon_facts(tmp_path, monkeypatch):
-    """认证成功后 recon_facts 落库（category=authentication，source=preauth_auto）。"""
-    async def fake_authenticate_service(**kwargs):
-        return {"success": True, "status": "ok"}
-
-    monkeypatch.setattr(preauth, "authenticate_service", fake_authenticate_service)
+    """LLM 认证成功后 recon_facts 落库（category=authentication，source=preauth_auto）。"""
+    instances = _patch_preauth_agent(monkeypatch, behavior="success")
 
     result = await preauth.run_auto_auth(
         task_id="t-1",
@@ -70,6 +118,13 @@ async def test_run_auto_auth_writes_recon_facts(tmp_path, monkeypatch):
     )
     assert _status_of(result) == "success"
     assert result["profile"] == "preauth"
+    assert result["storage_path"] == str(Path(tmp_path) / "agent" / "auth_context" / "preauth.playwright.json")
+    # 走 LLM 驱动：PreAuthAgent 被构造（requires_approval=False）并运行，凭据不进 prompt
+    assert instances and instances[0].kwargs["requires_approval"] is False
+    assert instances[0].run_kwargs is not None
+    prompt = instances[0].run_kwargs["prompt"]
+    assert "preauth" in prompt
+    assert "pass" not in prompt and "user" not in prompt.split("目标：")[0]
 
     store = ReconStore.for_task("t-1", str(tmp_path))
     store.ensure_session("t-1", target="https://example.com")
@@ -83,11 +138,8 @@ async def test_run_auto_auth_writes_recon_facts(tmp_path, monkeypatch):
 
 
 async def test_run_auto_auth_exception_degrades(tmp_path, monkeypatch):
-    """authenticate_service 抛异常时归类 failed，不向上抛，不阻断调用链。"""
-    async def boom(**kwargs):
-        raise RuntimeError("browser crash")
-
-    monkeypatch.setattr(preauth, "authenticate_service", boom)
+    """PreAuthAgent 抛异常时归类 failed，不向上抛，不阻断调用链。"""
+    _patch_preauth_agent(monkeypatch, behavior="boom")
 
     result = await preauth.run_auto_auth(
         task_id="t-2",
@@ -102,11 +154,8 @@ async def test_run_auto_auth_exception_degrades(tmp_path, monkeypatch):
 
 
 async def test_run_auto_auth_mfa_degrades(tmp_path, monkeypatch):
-    """MFA 拦截归类为 mfa（降级提示人工分支）。"""
-    async def fake_authenticate_service(**kwargs):
-        return {"success": False, "error": "账号密码正确，但需要短信验证码"}
-
-    monkeypatch.setattr(preauth, "authenticate_service", fake_authenticate_service)
+    """LLM 报告 MFA 拦截归类为 mfa（降级提示人工分支）。"""
+    _patch_preauth_agent(monkeypatch, behavior="mfa")
 
     result = await preauth.run_auto_auth(
         task_id="t-3",
@@ -254,16 +303,19 @@ async def test_verify_credentials_no_persistence(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_auto_auth_enables_auto_submit(monkeypatch):
-    """run_auto_auth 必须启用 auto_submit（自动填表登录）。"""
-    called: dict = {}
+async def test_run_auto_auth_uses_preauth_agent(monkeypatch):
+    """run_auto_auth 走 LLM 驱动（PreAuthAgent），不再直接调 authenticate_service。
 
-    async def fake_authenticate_service(**kwargs):
-        called.update(kwargs)
-        return {"success": True, "status": "ok"}
+    authenticate_service 被替换为抛异常：若 run_auto_auth 仍直接调用它，
+    认证必然失败；走 PreAuthAgent（成功落盘）则 status=success。
+    """
+    _patch_preauth_agent(monkeypatch, behavior="success")
 
-    monkeypatch.setattr(preauth, "authenticate_service", fake_authenticate_service)
-    await preauth.run_auto_auth(
+    async def boom(**kwargs):
+        raise AssertionError("run_auto_auth 不应直接调用 authenticate_service")
+
+    monkeypatch.setattr(preauth, "authenticate_service", boom)
+    result = await preauth.run_auto_auth(
         task_id="t-6",
         task_root=Path("/tmp/preauth-test"),
         target="https://example.com",
@@ -271,7 +323,7 @@ async def test_auto_auth_enables_auto_submit(monkeypatch):
         username="u",
         password="p",
     )
-    assert called.get("auto_submit") is True
+    assert _status_of(result) == "success"
 
 
 async def test_verify_credentials_enables_auto_submit(monkeypatch):
@@ -460,3 +512,82 @@ def test_write_auth_facts_no_username(tmp_path):
     details = status_row.get("details") or {}
     assert "username" not in details
     assert "admin" not in json.dumps(status_row)
+
+
+# ---------------------------------------------------------------------------
+# 登录面观察（observe_login_surface）
+# ---------------------------------------------------------------------------
+
+
+async def test_observe_login_surface_merges_probe_and_observe(monkeypatch):
+    """HTTP 探测与浏览器观察结果合并；缺省登录地址回退 deps.login_url。"""
+    import importlib
+    obs_mod = importlib.import_module("pobi_agent.tools.browser.observe_login_surface")
+    from pobi_agent.utils.structures import PreAuthDeps
+
+    ctx = SimpleNamespace(
+        deps=PreAuthDeps(target="https://example.com", login_url="https://example.com/login")
+    )
+
+    async def fake_probe(url, verify_ssl, timeout_s=10.0):
+        return {"http_basic": True, "probe_status": 401, "probe_content_type": "text/html", "probe_final_url": url}
+
+    async def fake_observe(*, url, proxy_url=None, verify_ssl=False, navigation_timeout_ms=None):
+        return {"success": True, "inputs": [{"name": "user", "type": "text"}], "has_pw": True, "final_url": url}
+
+    monkeypatch.setattr(obs_mod, "_probe_http_basic", fake_probe)
+    monkeypatch.setattr(obs_mod, "_observe_login_surface", fake_observe)
+
+    r = await obs_mod.observe_login_surface(ctx)
+    assert r["http_basic"] is True
+    assert r["success"] is True
+    assert r["final_url"] == "https://example.com/login"
+
+
+async def test_observe_login_surface_falls_back_to_target(monkeypatch):
+    """无 login_url 时回退 deps.target。"""
+    import importlib
+    obs_mod = importlib.import_module("pobi_agent.tools.browser.observe_login_surface")
+    from pobi_agent.utils.structures import PreAuthDeps
+
+    ctx = SimpleNamespace(deps=PreAuthDeps(target="https://example.com"))
+    seen: dict = {}
+
+    async def fake_probe(url, verify_ssl, timeout_s=10.0):
+        seen["probe_url"] = url
+        return {"http_basic": False, "probe_status": 200, "probe_content_type": "", "probe_final_url": url}
+
+    async def fake_observe(**kwargs):
+        seen["observe_url"] = kwargs["url"]
+        return {"success": True, "final_url": kwargs["url"]}
+
+    monkeypatch.setattr(obs_mod, "_probe_http_basic", fake_probe)
+    monkeypatch.setattr(obs_mod, "_observe_login_surface", fake_observe)
+
+    r = await obs_mod.observe_login_surface(ctx)
+    assert r["success"] is True
+    assert seen["probe_url"] == "https://example.com"
+    assert seen["observe_url"] == "https://example.com"
+
+
+async def test_observe_login_surface_observe_failure(monkeypatch):
+    """浏览器观察失败 → success=false 且保留探测信息。"""
+    import importlib
+    obs_mod = importlib.import_module("pobi_agent.tools.browser.observe_login_surface")
+    from pobi_agent.utils.structures import PreAuthDeps
+
+    ctx = SimpleNamespace(deps=PreAuthDeps(target="https://example.com"))
+
+    async def fake_probe(url, verify_ssl, timeout_s=10.0):
+        return {"http_basic": False, "probe_status": 200, "probe_content_type": "", "probe_final_url": url}
+
+    async def fake_observe(**kwargs):
+        return {"success": False, "error": "导航失败"}
+
+    monkeypatch.setattr(obs_mod, "_probe_http_basic", fake_probe)
+    monkeypatch.setattr(obs_mod, "_observe_login_surface", fake_observe)
+
+    r = await obs_mod.observe_login_surface(ctx)
+    assert r["success"] is False
+    assert "导航失败" in r["error"]
+    assert r["http_basic"] is False

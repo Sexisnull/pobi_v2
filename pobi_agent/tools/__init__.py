@@ -19,6 +19,7 @@ from .browser_automation import (
 from .browser import (
     authenticate,
     browser_run_steps,
+    observe_login_surface,
     refresh_auth_context,
     validate_auth_context,
 )
@@ -69,6 +70,7 @@ __all__ = [
     "cleanup_playwright_session_for_target",
     "browser_run_steps",
     "authenticate",
+    "observe_login_surface",
     "validate_auth_context",
     "refresh_auth_context",
     # web app analyzer
