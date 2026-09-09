@@ -350,7 +350,7 @@ class AgentExecutor:
             confidence_score=confidence_score,
             latest_response=str(result_context.get("supervisor_response", result_context.get("last_output", ""))),
             subagent_log=result_context.get("log", ""),
-            supervisor_history=result_context.get("supervisor_history", ""),
+            supervisor_history=result_context.get("agent_context", ""),
         )
 
     def _build_validation_context(
@@ -1190,12 +1190,25 @@ class AgentExecutor:
                     )
                     break
                 # action == call_agent → 驱动层直调子 agent（不回灌 supervisor 历史）
-                outcome = await _run_sub_agent(decision.agent or "", decision.prompt or "")
+                # P2-3：空值防护——缺 agent 或 prompt 时不得委派（空 prompt 会让子 agent
+                # 收到空任务乱跑），回灌明确错误提示让 supervisor 下一轮修正决策。
+                if not decision.agent or not decision.prompt:
+                    outcome = (
+                        f"[invalid supervisor decision] action=call_agent 缺少 agent 或 prompt"
+                        f"（agent={decision.agent!r}, prompt={decision.prompt!r}），请重新输出完整决策。"
+                    )
+                else:
+                    outcome = await _run_sub_agent(decision.agent, decision.prompt)
                 # 取回完整对话轮次（含首条任务 user），下一轮以 outcome 为 prompt（不重复追加）
                 history.clear()
                 history.extend(result.raw_messages[1:] if getattr(result, "raw_messages", None) else [])
                 # 同时窗口化存储列表本身，避免跨轮无界累积（L3 根治）
                 history[:] = window_messages(history, cfg.history_max_messages, cfg.history_max_tokens)
+                # P2-1：role 序列净化——tool 结果消息必须紧跟带 tool_calls 的 assistant，
+                # CoreAgent 因 max_iterations 自然退出且最后一条为 tool 时，窗口化后的
+                # history 以 tool 结尾，下一轮 messages=[..., tool, user] 会触发 API 400。
+                while history and history[-1].get("role") == "tool":
+                    history.pop()
                 outcome_for_next = (
                     f"[Delegation result] agent={decision.agent}\n"
                     f"prompt={decision.prompt or ''}\n"
@@ -1212,7 +1225,10 @@ class AgentExecutor:
                 context.setdefault("detailed_summary", "[SUPERVISOR-LOOP] exceeded max rounds without completion.")
                 context.setdefault("proofs", "")
                 context.setdefault("supervisor_response", context.get("detailed_summary", ""))
-            context["supervisor_history"] = agent_context
+            # P2-2：字段澄清——此处存的是入参 agent_context（unified_context +
+            # task_state 决策摘要 + tasks_context），即 supervisor 实际看到的输入，
+            # 而非驱动循环内的对话历史；原键名 supervisor_history 有误导性。
+            context["agent_context"] = agent_context
 
             validation_input = self._build_validation_input(
                 confidence_score=confidence_score,

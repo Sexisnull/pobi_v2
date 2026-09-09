@@ -263,3 +263,75 @@ def test_driver_loop_terminates_on_usage_limit_brake(monkeypatch):
     result_events = [e for e in events if e.__class__.__name__ == "ResultEvent"]
     assert result_events, "usage limit 触发后必须产出 ResultEvent 并终止循环"
     assert len(call_log) == 0  # 未委派任何子 agent
+
+
+# --------------------------------------------------------------------------- #
+# P2 回归：role 序列净化 / 空决策防护
+# --------------------------------------------------------------------------- #
+def test_driver_loop_strips_trailing_tool_message(monkeypatch):
+    """P2-1 回归：raw_messages 以 tool 结尾（CoreAgent 因 max_iterations 自然退出的
+    场景）时，下一轮 supervisor.run 的 message_history 不得以 tool 结尾，
+    否则 messages=[..., tool, user] 会触发 API 400。"""
+    decisions = [
+        SupervisorDecision(action="call_agent", agent="requester", prompt="step1"),
+        SupervisorDecision(action="complete", task_achieved=True, confidence_score=0.9,
+                           detailed_summary="done", proofs="p"),
+    ]
+    received: list = []
+
+    class _ToolTailSup:
+        def __init__(self, *a, **k):
+            self._i = 0
+            self.agent = types.SimpleNamespace(tool=lambda f: f)
+
+        async def run(self, prompt, **kwargs):
+            received.append(list(kwargs.get("message_history") or []))
+            d = decisions[min(self._i, len(decisions) - 1)]
+            self._i += 1
+            return _ToolTailResult(d)
+
+    class _ToolTailResult:
+        def __init__(self, decision):
+            self.output = decision
+            # 末条为 tool 结果（无后续 assistant 配对）
+            self.raw_messages = [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "task"},
+                {"role": "assistant", "content": "calling",
+                 "tool_calls": [{"function": {"name": "recon_lookup", "arguments": "{}"}}]},
+                {"role": "tool", "name": "recon_lookup", "content": "{}"},
+            ]
+
+    call_log: list = []
+    executor = _build_executor(monkeypatch, [], call_log)
+    monkeypatch.setattr(
+        "pobi_agent.agents.components.executor.SupervisorAgent", _ToolTailSup
+    )
+    node = types.SimpleNamespace(task="test task", task_id="t1", status="in_progress")
+    _collect(executor, node, "ctx", [])
+
+    assert len(received) == 2, f"supervisor 应被调用 2 轮，实际 {len(received)}"
+    second_history = received[1]
+    assert not second_history or second_history[-1].get("role") != "tool", (
+        f"第二轮 message_history 以 tool 结尾（role 序列非法）: {second_history[-1]}"
+    )
+    assert call_log == ["step1"]  # 正常委派一次
+
+
+def test_driver_loop_blocks_empty_agent_prompt(monkeypatch):
+    """P2-3 回归：call_agent 决策缺 agent 或 prompt 时不得委派子 agent
+    （空 prompt 会让子 agent 收到空任务乱跑），回灌错误提示由 supervisor 修正。"""
+    decisions = [
+        SupervisorDecision(action="call_agent", agent="requester", prompt=None),
+        SupervisorDecision(action="call_agent", agent="", prompt="step-without-agent"),
+        SupervisorDecision(action="complete", task_achieved=False, confidence_score=0.3,
+                           detailed_summary="fixed", proofs=""),
+    ]
+    call_log: list = []
+    executor = _build_executor(monkeypatch, decisions, call_log)
+    node = types.SimpleNamespace(task="test task", task_id="t1", status="in_progress")
+    events = _collect(executor, node, "ctx", [])
+
+    assert call_log == [], f"缺 agent/prompt 的决策不应委派子 agent，实际委派 {len(call_log)} 次"
+    result_events = [e for e in events if e.__class__.__name__ == "ResultEvent"]
+    assert result_events, "应产出 ResultEvent 终止"

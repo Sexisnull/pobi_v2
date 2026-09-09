@@ -3,6 +3,12 @@
 > **以源码为准**。本文件是演进计划的唯一清单：早期引用的 `docs/PROJECT_GOAL.md`（§2.4 工程治理 / §2.5 扫描内核优化）**该文件已不存在**，其条目已内联至下方「待办」的 A1–A7 与 S1–S6，勿再按原路径引用。
 
 ## 已落地（本轮更新确认）
+- [x] **agent 循环 P2 低危项修复（2026-09-09）**：循环收敛性外的三类健壮性修复。
+  - **P2-1 role 序列净化**：`executor.py` 驱动循环在 `window_messages` 后剔除末尾 `role=="tool"` 消息——CoreAgent 因 `max_iterations=50` 自然退出且最后一条为 tool 结果时，窗口化后的 history 以 tool 结尾，下一轮 `messages=[..., tool, user]` 触发 API 400。测试 `test_driver_loop_strips_trailing_tool_message`。
+  - **P2-2 字段名澄清**：`context["supervisor_history"]` 更名 `context["agent_context"]`（实际存的是入参 agent_context = unified_context + task_state + tasks_context，非驱动循环对话历史），`_build_validation_input` 同步读取；`ValidationInput.supervisor_history` 字段名保留（公共接口）。
+  - **P2-3 空决策防护**：`action=call_agent` 缺 `agent` 或 `prompt` 时不再委派子 agent（空 prompt 会让子 agent 收到空任务乱跑），回灌 `[invalid supervisor decision]` 提示由 supervisor 修正。测试 `test_driver_loop_blocks_empty_agent_prompt`。
+  - 全量 222 passed / 2 skipped。
+
 - [x] **ADaPT 外层循环缺陷修复（2026-09-09）**：评测定位 P0-1/P0-2 两个循环致命缺陷并修复（另顺带 P1-3/P1-4 刹车配置）。
   - **P0-1 退出条件**：`architecture.py` 外层 `while not should_exit or node.status != "completed"` 的 `or` 应为 `and`——子任务触发 `ValidationStopEvent`（exit_loop=True）后父节点仍继续迭代，全局退出机制失效。真实代码验证：修复前 root 收到 3 次 exit_loop 仍迭代至 executor 第 7 次调用（人为打断），修复后 2 次即正常退出。
   - **P0-2 迭代无上限**：attempts 自增从 `_solve` 入口移入 while 每轮迭代并检查——原实现 expand/refine 递归返回后迭代不经过入口，`MAX_TASK_ATTEMPTS=3` 失效，同一 node 可无限迭代（复刻实测 32 次 executor 调用仍不终止）直至外部超时熔断。修复后恒 conf=0.5（expand 区间）有界（≤10 次调用）、恒 conf=0.7（refine 区间）恰好 3 次后 `failed:max_attempts`。
