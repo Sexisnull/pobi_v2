@@ -39,6 +39,7 @@ from pobi_agent.agents.reporter import ReporterAgent
 from pobi_agent.config.settings import ModelSpec
 from pobi_agent.core_agent import CoreAgent
 from pobi_agent.hooks import EventHooks
+from pobi_agent.logging import logger
 
 from pobi_v2.core.config import settings
 from pobi_v2.engine.scan_tools import ToolContext, build_scope_policy, http_request, run_shell
@@ -271,7 +272,29 @@ class ScanWorkflow:
         )
 
         context = "\n".join(self.memory[-10:])
+        drain_failures = 0
         for i in range(self.max_turns):
+            # 指令检查点（回退路径，修复 B 同构）：每轮迭代消费用户追加指令，
+            # 拼入本地上下文，下一轮 supervisor 提示词必然可见。
+            # key 用 self.session_id（== task_id），与写入侧
+            # routers/instruction.py 的 queue_instruction(str(task.id)) 一致。
+            try:
+                from pobi_v2.engine.instruction_channel import drain_instructions
+
+                pending = await drain_instructions(self.session_id)
+                for item in pending:
+                    context += (
+                        f"\n### Operator追加指令（最高优先级，须立即纳入后续行动）\n"
+                        f"{item.instruction}\n"
+                    )
+                    logger.info("已注入运行指令（ScanWorkflow 回退路径）: %s", item.instruction[:80])
+                drain_failures = 0
+            except Exception as _exc:  # noqa: BLE001
+                drain_failures += 1
+                logger.warning(
+                    "指令检查点读取失败（ScanWorkflow 连续 %d 次，任务级 warning）: %s",
+                    drain_failures, _exc,
+                )
             self.hooks.emit_agent_start(
                 session_id=self.session_id,
                 agent_name="supervisor",

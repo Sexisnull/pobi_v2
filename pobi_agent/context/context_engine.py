@@ -179,6 +179,12 @@ class StructuredContext:
         self._max_log_chars: int = 50000  # Limit current log size
         self._max_executions: int = 50  # Keep last N executions
         self._max_thoughts: int = 20  # Keep last N thoughts
+        # 人工干预通道：用户经任务控制台追加的运行期指令（operator instructions）。
+        # 在 get_unified_context 中作为最高优先级 section 注入，供 supervisor /
+        # 子 agent 在下一轮决策中读取。仅保留最近的 MAX 条，避免指令无限累积。
+        self.operator_instructions: List[str] = []
+        self._max_operator_instructions: int = 8
+        self._max_operator_instruction_chars: int = 300
 
     def set_goal(self, goal: str) -> None:
         """Set the primary goal for context."""
@@ -187,6 +193,28 @@ class StructuredContext:
     def set_target(self, target: str) -> None:
         """Set the target URL/host for context."""
         self.target = target
+
+    def add_operator_instruction(self, instruction: str) -> None:
+        """追加一条人工干预指令（operator instruction）。
+
+        指令进入 ``get_unified_context`` 的最高优先级 section，supervisor 在
+        下一轮重建上下文时必然看到。裁剪规则：仅保留最近的
+        ``_max_operator_instructions`` 条，每条截断到
+        ``_max_operator_instruction_chars`` 字符，防止指令无限累积撑爆上下文。
+        """
+        text = (instruction or "").strip()
+        if not text:
+            return
+        if len(text) > self._max_operator_instruction_chars:
+            text = text[: self._max_operator_instruction_chars] + "…[截断]"
+        self.operator_instructions.append(text)
+        if len(self.operator_instructions) > self._max_operator_instructions:
+            overflow = len(self.operator_instructions) - self._max_operator_instructions
+            self.operator_instructions = self.operator_instructions[overflow:]
+
+    def get_operator_instructions(self) -> List[str]:
+        """返回当前待生效的人工干预指令（读不改）。"""
+        return list(self.operator_instructions)
 
     def add_fact(self, fact: DiscoveredFact) -> bool:
         """Add a discovered fact, deduplicating by category:key.
@@ -654,6 +682,16 @@ class StructuredContext:
         if header:
             sections.append(header)
 
+        # SECTION 1.5: OPERATOR INSTRUCTIONS（人工干预指令，最高优先级）
+        # 用户经任务控制台追加的运行期指令，supervisor 每轮重建统一上下文时
+        # 必然看到。置于目标之后、其余全部 section 之前；不在 deprioritized
+        # 删除列表内，硬截断从尾部开始，指令不会先于低优先级内容被裁掉。
+        if self.operator_instructions:
+            lines = ["## OPERATOR INSTRUCTIONS（人工干预，最高优先级，须立即纳入后续行动）"]
+            for op in self.operator_instructions:
+                lines.append(f"- {op}")
+            sections.append("\n".join(lines))
+
         # SECTION 2: FLAG FOUND (if any) - with FULL reproduction steps
         flag_facts = [f for f in self.facts.values()
                       if f.category == "validated_exploit" or "flag" in f.key.lower()]
@@ -845,6 +883,7 @@ class StructuredContext:
         self.tested_techniques.clear()
         self.current_task_log = ""
         self.completed_tasks.clear()
+        self.operator_instructions.clear()
 
 class ContextEngine:
     """Context engine for managing workflow state and task coordination.
@@ -1660,6 +1699,21 @@ class ContextEngine:
             self._recon_emit_sync()
         except Exception as exc:  # noqa: BLE001
             logger.warning("RECON 旁路 execution 写入失败（已忽略）: %s", exc)
+
+    def add_operator_instruction(self, instruction: str) -> None:
+        """注入一条人工干预指令（用户经任务控制台追加）。
+
+        指令进入 ``StructuredContext.operator_instructions``，由
+        ``get_unified_context`` 以最高优先级 section 渲染，supervisor 在下一轮
+        迭代重建统一上下文时必然看到。与 ``add_discovered_fact`` 的区别：
+        不写入 RECON 本地库（不污染侦察资产），也不会被当作目标事实参与
+        findings 汇总，仅作为运行期控制指令存在。
+        """
+        self.structured.add_operator_instruction(instruction)
+
+    def get_operator_instructions(self) -> List[str]:
+        """返回当前待生效的人工干预指令（读不改）。"""
+        return self.structured.get_operator_instructions()
 
     def add_discovered_fact(
         self,

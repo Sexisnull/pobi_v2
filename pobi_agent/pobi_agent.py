@@ -561,7 +561,43 @@ class DeadEndAgent:
             detail="Phase 1：收集端点 / 技术栈 / 认证面 / 攻击面",
         )
 
-        target_context =f"Target : {self.context.target}"
+        # 指令检查点（威胁建模阶段，修复 B）：
+        # 1) 冷启动：在 supervisor 启动前消费一次 pending 指令，拼入 agent_context，
+        #    使威胁建模第一轮立即生效（execute_supervisor 首轮 prompt 含 agent_context，
+        #    且后续轮次经 message_history 保留首轮全文）。
+        # 2) 运行中：事件循环内 drain 并注入 ContextEngine（OPERATOR INSTRUCTIONS
+        #    section），进入利用阶段后由 _solve 每轮重建 unified_context 时必然纳入。
+        # 边界说明：威胁建模的 execute_supervisor 是单次调用（内部多轮），运行中到达
+        # 的指令无法中途改写已启动的 supervisor prompt，统一延迟到利用阶段生效，
+        # 但不会静默丢失。
+        cold_start_instructions: list[str] = []
+        try:
+            from pobi_v2.engine.instruction_channel import drain_instructions
+
+            cold_start_instructions = [
+                item.instruction
+                for item in await drain_instructions(self.session_id)
+            ]
+            self._instruction_drain_failures = 0
+        except Exception as _exc:  # noqa: BLE001
+            self._instruction_drain_failures = getattr(
+                self, "_instruction_drain_failures", 0
+            ) + 1
+            logger.warning(
+                "指令检查点读取失败（威胁建模冷启动，连续 %d 次，任务级 warning）: %s",
+                self._instruction_drain_failures,
+                _exc,
+            )
+
+        target_context = f"Target : {self.context.target}"
+        if cold_start_instructions:
+            ops_block = "\n".join(f"- {ins[:300]}" for ins in cold_start_instructions)
+            target_context += (
+                "\n\n## OPERATOR INSTRUCTIONS（人工干预，最高优先级，须立即纳入后续行动）\n"
+                f"{ops_block}\n"
+            )
+            for ins in cold_start_instructions:
+                logger.info("已注入运行指令（威胁建模冷启动）: %s", ins[:80])
         context = {}
         confidence_score = 0.0
         # Run the supervisor directly. Mark as recon phase so the heavy
@@ -573,6 +609,28 @@ class DeadEndAgent:
             usage_limits=UsageLimits(request_limit=None, tool_calls_limit=None),
             phase="recon",
         ):
+            # 指令检查点（威胁建模运行中）：drain 并注入 ContextEngine，
+            # 利用阶段 supervisor 下一轮必然看到（不静默丢失）。
+            try:
+                from pobi_v2.engine.instruction_channel import drain_instructions
+
+                pending = await drain_instructions(self.session_id)
+                for item in pending:
+                    self.context.add_operator_instruction(item.instruction)
+                    logger.info(
+                        "已注入运行指令（威胁建模运行中，利用阶段生效）: %s",
+                        item.instruction[:80],
+                    )
+                self._instruction_drain_failures = 0
+            except Exception as _exc:  # noqa: BLE001
+                self._instruction_drain_failures = getattr(
+                    self, "_instruction_drain_failures", 0
+                ) + 1
+                logger.warning(
+                    "指令检查点读取失败（威胁建模运行中，连续 %d 次，任务级 warning）: %s",
+                    self._instruction_drain_failures,
+                    _exc,
+                )
             if isinstance(event, ValidationStopEvent):
                 stop_result = self._record_validation_stop(event)
                 task_node.confidence_score = event.confidence_score
@@ -853,18 +911,35 @@ The flag that you need to find has the following format : FLAG{{}}.
                 return
             # --- 协作式指令检查点：消费用户对主控 Agent 追加的指令 ---
             # 在每轮 supervisor 迭代之间轮询 pending 指令，注入为新的附加上级目标。
-            # 指令经 exploit_context 透传到 ADaPTAgent.run -> execute_supervisor，
-            # 由 SupervisorAgent 在下一轮决策中自然纳入，无需改写引擎内部状态机。
+            # 指令经 ContextEngine 注入（OPERATOR INSTRUCTIONS section），由 _solve
+            # 每轮重建 unified_context 时纳入，SupervisorAgent 在下一轮决策中
+            # 自然读到，无需改写引擎内部状态机。
             try:
                 from pobi_v2.engine.instruction_channel import drain_instructions
 
-                pending = await drain_instructions(self.agent_id)
+                # 修复 P0（key 一致）：统一用 self.session_id（== task_id，与写入侧
+                # routers/instruction.py 的 queue_instruction(str(task.id)) 一致）。
+                # 原 self.agent_id 是本地持久化的独立 UUID，恒不等于 task_id，
+                # 导致写入的指令永远读不到（对话框"已接受"但实际无任何干预效果）。
+                pending = await drain_instructions(self.session_id)
                 for item in pending:
-                    inject = f"\n\n### Operator追加指令（须纳入后续行动）\n{item.instruction}\n"
-                    exploit_context = exploit_context + inject
+                    # 修复 P0（注入目标）：不再拼接已无读取方的局部变量
+                    # exploit_context（该变量仅用于首轮 planner.expand），改为注入
+                    # ContextEngine——supervisor 每轮重建 unified_context 必然包含。
+                    self.context.add_operator_instruction(item.instruction)
                     logger.info("已注入运行指令: %s", item.instruction[:80])
+                self._instruction_drain_failures = 0
             except Exception as _exc:  # noqa: BLE001
-                logger.debug("指令检查点读取失败，跳过: %s", _exc)
+                # 修复 C（可观测性）：debug 静默吞掉改为 warning + 连续失败计数，
+                # 避免指令通道故障"无痕失效"。
+                self._instruction_drain_failures = getattr(
+                    self, "_instruction_drain_failures", 0
+                ) + 1
+                logger.warning(
+                    "指令检查点读取失败（连续 %d 次，任务级 warning）: %s",
+                    self._instruction_drain_failures,
+                    _exc,
+                )
             # Collect all events for trace saving
             if isinstance(event, BaseModel):
                 traces.append(event.model_dump())
