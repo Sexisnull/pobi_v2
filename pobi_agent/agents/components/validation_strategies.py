@@ -332,8 +332,7 @@ class JudgeAgentStrategy:
             "- valid（true/false）\n"
             "- confidence（浮点数，0.00–1.00）\n"
             "- critique（字符串）\n"
-            "- validation_token —— 若存在，原样复制确切的 FLAG{...}；"
-            "否则留空字符串\n"
+            "- validation_token —— 若验证目标为 CTF flag 且执行轨迹中出现了 flag，原样复制；否则留空字符串\n"
         )
 
         result = await self._agent.run(

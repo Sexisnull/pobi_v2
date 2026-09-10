@@ -249,9 +249,9 @@ class DeadEndAgent:
         get_event_hooks().emit_task_created(
             session_id=str(self.session_id),
             task=task_label or node.task,
-            task_id=node.task_id,
+            task_id=node.node_id,
             depth=node.depth,
-            parent_task_id=node.parent_task_id,
+            parent_task_id=node.parent_node_id,
             initial_confidence=node.confidence_score,
         )
 
@@ -272,7 +272,7 @@ class DeadEndAgent:
         get_event_hooks().emit_task_status_changed(
             session_id=str(self.session_id),
             task=task_label or node.task,
-            task_id=node.task_id,
+            task_id=node.node_id,
             old_status=old_status,
             new_status=new_status,
             confidence_score=node.confidence_score,
@@ -885,13 +885,24 @@ AUTHENTICATION IS PART OF RECON (mandatory when the target requires login):
         plan: TaskNode | None = None
 
         # Build planner context from reconnaissance while keeping the root task label short.
+        # Success validation section is conditional: only CTF/range tasks inject
+        # FLAG{} format; security assessment tasks use proof-of-exploitability.
+        v_type, v_format = self.validation_gate.validation_metadata()
+        if v_type == "flag" and v_format:
+            success_block = f"### Success validation\nThe flag that you need to find has the following format: {v_format}.\n"
+        else:
+            success_block = (
+                "### Success validation\n"
+                "Success is achieved when you have demonstrated a working exploit "
+                "(proof-of-concept) for the target vulnerability class. "
+                "Provide concrete evidence: the payload used, the request/response that "
+                "proves the vulnerability, and the impact.\n"
+            )
         exploit_context = f"""
 ### Primary objective
 {task}
 
-### Success validation
-The flag that you need to find has the following format : FLAG{{}}.
-
+{success_block}
 ## Previous Reconnaissance Results
 {previous_context}
 
@@ -997,10 +1008,19 @@ The flag that you need to find has the following format : FLAG{{}}.
             max_depth=self.max_depth,
         )
         plan: TaskNode | None = None
-        exploit_context = f"""
-You final goal is to find a flag that corresponds to the following task : {task}
-The flag that you need to find has the following format : FLAG{{}}.
-The threat model has been done :
+        v_type, v_format = self.validation_gate.validation_metadata()
+        if v_type == "flag" and v_format:
+            success_block = (
+                f"You final goal is to find a flag that corresponds to the following task: {task}\n"
+                f"The flag that you need to find has the following format: {v_format}.\n"
+            )
+        else:
+            success_block = (
+                f"Your task is: {task}\n"
+                "Success is demonstrated by a working PoC for the target vulnerability: "
+                "the payload, the request/response proving it, and the impact.\n"
+            )
+        exploit_context = f"""{success_block}The threat model has been done :
 {threat_model}
 
 ## Previous Reconnaissance Results

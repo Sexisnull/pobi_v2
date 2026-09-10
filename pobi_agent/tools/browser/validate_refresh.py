@@ -67,6 +67,36 @@ def _build_aiohttp_connector(verify_ssl: bool) -> aiohttp.TCPConnector:
     return aiohttp.TCPConnector(ssl=ssl_ctx)
 
 
+# 登录页语义片段：跟随重定向后落点 URL 命中其一即视为「被弹回登录页」。
+_LOGIN_URL_HINTS = ("login", "signin", "sign-in", "logon", "auth/", "session/new")
+# 登录表单特征：落点响应体命中其一亦视为登录页（应付 URL 无登录语的应用）。
+_LOGIN_BODY_HINTS = (
+    "name=\"password\"",
+    "name='password'",
+    "type=\"password\"",
+    "type='password'",
+)
+
+
+def _looks_like_login_landing(final_url: str, body_preview: str) -> bool:
+    """判断「跟随重定向后的落点」是否像登录页。
+
+    用于把「重定向到登录页 = 会话失效」与「重定向到应用页 = 正常跳转」区分开。
+    后者在登录成功即返回 302 的应用（DVWA 等）中很常见，不应判为会话失效。
+    """
+    lowered = (final_url or "").lower()
+    if any(h in lowered for h in _LOGIN_URL_HINTS):
+        return True
+    body = body_preview or ""
+    if not body:
+        return False
+    lower_body = body.lower()
+    if any(h in lower_body for h in _LOGIN_BODY_HINTS):
+        # 出现密码输入框：进一步要求同时缺少登录后语义，避免误伤含改密表单的页面。
+        return "logout" not in lower_body and "welcome" not in lower_body
+    return False
+
+
 def _attach_cookies_to_jar(jar: aiohttp.CookieJar, ctx: AuthContext) -> None:
     """Seed an aiohttp.CookieJar from saved AuthContext cookies."""
     for cookie in ctx.cookies:
@@ -238,14 +268,19 @@ async def validate_auth_context_service(
         if v:
             headers[k] = v
 
-    # 默认不跟随重定向：3xx 表示会话已失效/被弹回登录页，应判为 expired 而非有效。
-    request_kwargs: dict[str, Any] = {"headers": headers, "allow_redirects": False}
+    # 2026-09-10：改为**跟随重定向**再判定。原实现 `allow_redirects=False` +
+    # "任何 3xx 即 expired"，把「登录成功时返回 302 → /index.php」的正常应用
+    # （DVWA 等）误判为会话失效：authenticator 明明 success=true 且落盘会话有效，
+    # validate 却报 http_302，进而汇总出「凭据均无效」的错误结论并污染 PG 沉淀。
+    # 现在跟随跳转看落点：重定向到登录页才判失效，跳到应用页则视为有效。
+    request_kwargs: dict[str, Any] = {"headers": headers, "allow_redirects": True}
     if proxy_url:
         request_kwargs["proxy"] = proxy_url
 
     status: int | None = None
     final_url: str = effective_url
     response_preview: str = ""
+    redirect_chain: list[str] = []
     try:
         async with aiohttp.ClientSession(
             cookie_jar=jar,
@@ -255,6 +290,8 @@ async def validate_auth_context_service(
             async with session.get(effective_url, **request_kwargs) as resp:
                 status = resp.status
                 final_url = str(resp.url)
+                redirect_chain = [str(h.url) for h in resp.history]
+                redirect_chain.append(final_url)
                 try:
                     text = await resp.text()
                 except Exception:
@@ -286,10 +323,17 @@ async def validate_auth_context_service(
     validated = False
     expired = False
     expired_reason: str | None = None
+    # 落点是否像登录页：跟随重定向后，若最终 URL 含登录语义片段或响应体出现
+    # 登录表单特征，说明会话确实失效（被弹回登录页）。
+    _landed_on_login = _looks_like_login_landing(final_url, response_preview)
     if 300 <= (status or 0) < 400:
-        # 重定向（例如落到登录页）代表当前会话已失效，不应再跟随判定有效。
+        # 仍处 3xx：跟随重定向后依旧停在 3xx（如重定向环），按失效处理。
         expired = True
         expired_reason = f"http_{status}"
+    elif status in expected_status and _landed_on_login and redirect_chain[1:]:
+        # 表面 200 但整条链是「验证URL → 登录页」：会话失效，非有效。
+        expired = True
+        expired_reason = "landed_on_login"
     elif status in failure_status:
         expired = True
         expired_reason = f"http_{status}"

@@ -19,7 +19,7 @@ import { approvalsApi, openTaskStream, tasksApi } from '../api.js'
 import AuthPanel from '../components/AuthPanel.jsx'
 import ReplayBar from '../components/attackflow/ReplayBar.jsx'
 import { categoryOf, describeEvent, eventTone, EVENT_CATEGORY, typeLabel } from '../events.js'
-import { TASK_STATUS, ago, duration, dt, num, statusOf, truncate } from '../format.js'
+import { TASK_STATUS, ago, dt, dtShort, duration, num, statusOf, truncate } from '../format.js'
 
 const FILTERS = [{ value: 'all', label: '全部' }].concat(
   Object.entries(EVENT_CATEGORY).map(([value, def]) => ({ value, label: def.label })),

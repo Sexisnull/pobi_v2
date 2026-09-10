@@ -45,7 +45,10 @@ from pobi_agent.tools.browser.authenticate import authenticate_service
 _MFA_HINTS = ("mfa", "2fa", "two-factor", "two factor", "otp", "totp", "验证码", "二次验证", "短信", "authenticator")
 
 # LLM 前置认证（PreAuthAgent）整体超时（秒）：观察登录面 + LLM 决策 + 登录 + 落盘
-PREAUTH_AGENT_TIMEOUT_S = 180
+# 2026-09-10：原值 180s 实测不足——认证需 3~5 次 LLM 往返（大 prompt 单次 20~60s），
+# 且上游偶发长挂起（观测到单次请求 144s 无响应），同一靶场此前 32s/100s 成功、
+# 现连续两次 180s 超时。放宽到 300s，仍低于 pre_recon 整体预算。
+PREAUTH_AGENT_TIMEOUT_S = 300
 
 
 class PreAuthError(Exception):

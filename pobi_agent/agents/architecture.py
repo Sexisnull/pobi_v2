@@ -90,9 +90,9 @@ class ADaPTAgent:
         get_event_hooks().emit_task_created(
             session_id=self._session_id(),
             task=node.task,
-            task_id=node.task_id,
+            task_id=node.node_id,
             depth=node.depth,
-            parent_task_id=node.parent_task_id,
+            parent_task_id=node.parent_node_id,
             initial_confidence=node.confidence_score,
         )
 
@@ -100,15 +100,15 @@ class ADaPTAgent:
         get_event_hooks().emit_task_expanded(
             session_id=self._session_id(),
             parent_task=parent.task,
-            parent_task_id=parent.task_id,
+            parent_task_id=parent.node_id,
             subtasks=[
                 {
                     "task": subtask.task,
-                    "task_id": subtask.task_id,
+                    "task_id": subtask.node_id,
                     "depth": subtask.depth,
                     "status": subtask.status,
                     "confidence_score": subtask.confidence_score,
-                    "parent_task_id": subtask.parent_task_id,
+                    "parent_task_id": subtask.parent_node_id,
                 }
                 for subtask in subtasks
             ],
@@ -120,7 +120,7 @@ class ADaPTAgent:
         for node in ordered:
             get_event_hooks().emit_plan_step(
                 session_id=self._session_id(),
-                step_id=node.task_id,
+                step_id=node.node_id,
                 seq=seq,
                 title=node.task,
                 status=self._to_plan_status(node.status),
@@ -159,7 +159,7 @@ class ADaPTAgent:
         get_event_hooks().emit_task_status_changed(
             session_id=self._session_id(),
             task=node.task,
-            task_id=node.task_id,
+            task_id=node.node_id,
             old_status=old_status,
             new_status=new_status,
             confidence_score=node.confidence_score,
@@ -167,7 +167,7 @@ class ADaPTAgent:
         # 实时刷新执行计划步骤状态
         get_event_hooks().emit_plan_step(
             session_id=self._session_id(),
-            step_id=node.task_id,
+            step_id=node.node_id,
             seq=-1,  # 状态回填：后端按 step_id 幂等更新，不依赖序号
             title=node.task,
             status=self._to_plan_status(new_status),
@@ -236,7 +236,7 @@ class ADaPTAgent:
         iteration = 0
         logger.info(
             "[ADAPT] _solve 进入 | task_id=%s | task='%s' | depth=%d",
-            getattr(node, "task_id", "?"), node.task[:60], depth,
+            getattr(node, "node_id", "?"), node.task[:60], depth,
         )
 
         # P0-1 修复：退出条件 or → and。原 or 语义下 `should_exit=True`（全局退出已触发）
@@ -252,13 +252,13 @@ class ADaPTAgent:
             # ----- 1. Execute supervisor -----
             logger.info(
                 "[ADAPT] 迭代开始 | task_id=%s | iter=%d",
-                getattr(node, "task_id", "?"), iteration,
+                getattr(node, "node_id", "?"), iteration,
             )
             tasks_context = self.context.get_tasks(depth=0, include_goal=False)
             unified_context = self.context.get_unified_context(max_tokens=6000)
             logger.debug(
                 "[ADAPT] 上下文快照 | task_id=%s | iter=%d | unified_context_len=%d | structured_log_len=%d",
-                getattr(node, "task_id", "?"), iteration,
+                getattr(node, "node_id", "?"), iteration,
                 len(unified_context), len(self.context.structured.current_task_log),
             )
 
@@ -289,7 +289,7 @@ class ADaPTAgent:
                     proofs = new_context.get("proofs", "")
                     logger.info(
                         "[ADAPT] 收到 supervisor 结果 | task_id=%s | confidence=%.2f | task_achieved=%s",
-                        getattr(node, "task_id", "?"), confidence_score, task_achieved,
+                        getattr(node, "node_id", "?"), confidence_score, task_achieved,
                     )
 
                     if task_achieved:
@@ -362,7 +362,7 @@ class ADaPTAgent:
             decision = self._policy(confidence_score)
             logger.info(
                 "[ADAPT] 策略决策 | task_id=%s | confidence=%.2f | decision=%s | 阈值(fail<%.2f,expand>=%.2f)",
-                getattr(node, "task_id", "?"), confidence_score, decision,
+                getattr(node, "node_id", "?"), confidence_score, decision,
                 self.FAIL_THRESHOLD, self.EXPLORE_THRESHOLD,
             )
 
@@ -371,7 +371,7 @@ class ADaPTAgent:
                 self.context.update_task_status(node.task, "failed", confidence_score)
                 logger.info(
                     "[ADAPT] 子任务失败 | task_id=%s | confidence=%.2f",
-                    getattr(node, "task_id", "?"), confidence_score,
+                    getattr(node, "node_id", "?"), confidence_score,
                 )
                 yield emit(f"[POLICY] Task '{node.task[:50]}...' failed with confidence {confidence_score:.2f}")
                 return
@@ -383,7 +383,7 @@ class ADaPTAgent:
                 self.context.mark_task_completed(node.task, confidence_score)
                 logger.info(
                     "[ADAPT] 子任务校验通过 | task_id=%s | confidence=%.2f",
-                    getattr(node, "task_id", "?"), confidence_score,
+                    getattr(node, "node_id", "?"), confidence_score,
                 )
                 yield emit(f"[POLICY] Subtask validated: '{node.task[:50]}...'")
                 return
@@ -426,7 +426,7 @@ class ADaPTAgent:
                     self._set_task_status(node, "refine")
                     logger.info(
                         "[ADAPT] 无可展开子任务, 转 refine | task_id=%s",
-                        getattr(node, "task_id", "?"),
+                        getattr(node, "node_id", "?"),
                     )
                     yield emit(f"[PLANNER] No subtasks generated for '{node.task}', requesting refinement")
                     if node.parent:
@@ -441,7 +441,7 @@ class ADaPTAgent:
                 node.children = subtasks
                 logger.info(
                     "[ADAPT] 展开子任务 | task_id=%s | count=%d | depth=%d",
-                    getattr(node, "task_id", "?"), len(subtasks), depth + 1,
+                    getattr(node, "node_id", "?"), len(subtasks), depth + 1,
                 )
                 yield emit(f"[PLANNER] Generated {len(subtasks)} subtasks for '{node.task}'")
                 for subtask in subtasks:

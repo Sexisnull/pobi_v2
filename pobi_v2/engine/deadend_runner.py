@@ -522,7 +522,8 @@ async def _run_deadend_agent_body(
     # 实时推送安全评估报告到前端聊天流（前端已具备 report_task_event 渲染分支，
     # 此前后端漏发该事件，导致报告仅落库、UI 不展示）。
     if report:
-        hooks.emit_report(task_id=str(task.id), summary=report)
+        # ISSUE-013（2026-09-10）：接口签名为 session_id，勿传 task_id 关键字
+        hooks.emit_report(session_id=str(task.id), summary=report)
     else:
         hooks.emit_log_message(
             session_id=str(task.id),

@@ -72,7 +72,7 @@ class FakePlanner:
 
     async def update_plan(self, task, context, usage, usage_limits):
         new_task = TaskNode(
-            task=task.task, task_id=task.task_id, depth=task.depth,
+            task=task.task, node_id=task.node_id, depth=task.depth,
             confidence_score=0.3, status="refine", parent=task.parent,
         )
         return [new_task], GeneralInfoOutput(), ExploitInfo()

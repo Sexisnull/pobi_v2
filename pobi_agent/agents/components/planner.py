@@ -24,8 +24,11 @@ class TaskNode(BaseModel):
         children: List of child task nodes (subtasks)
     """
     task: str
-    task_id: str = Field(default_factory=lambda: str(uuid4()))
-    parent_task_id: str | None = None
+    # 规划树节点标识（2026-09-10 由 task_id 更名）：原字段名与平台 ``Task.id`` 同名，
+    # 但它只是 ADaPT 分解树里某个节点的随机 UUID，被事件与日志当作"任务 ID"使用时
+    # 会误导排查（一个任务看起来有多个 task id）。更名后语义自解释，与平台任务区分。
+    node_id: str = Field(default_factory=lambda: str(uuid4()))
+    parent_node_id: str | None = None
     status: str
     confidence_score: float
     depth: int
@@ -39,8 +42,27 @@ class TaskNode(BaseModel):
             child: The child TaskNode to add. The child's parent will be set to this node.
         """
         child.parent = self
-        child.parent_task_id = self.task_id
+        child.parent_node_id = self.node_id
         self.children.append(child)
+
+
+# 认证类子任务识别（2026-09-10）：认证属任务前置条件，由 preauth/authenticator 在
+# 进入利用阶段前完成；把它拆成独立子节点只会让节点以全新上下文重复登录（实测每次
+# 多耗 3~4 分钟与数万 token）。规划层直接丢弃这类节点，从源头杜绝重复认证。
+_AUTH_SUBTASK_KEYWORDS = (
+    "认证", "登录", "登陆", "登入", "会话获取", "获取会话", "凭证获取", "获取凭据",
+    "login", "log in", "sign in", "signin", "authenticat", "obtain session",
+    "obtain credential", "get session", "fetch session",
+)
+
+
+def is_auth_subtask(task_text: str) -> bool:
+    """判断子任务描述是否只是「认证/登录/获取会话」这类前置动作。"""
+    lowered = (task_text or "").strip().lower()
+    if not lowered:
+        return False
+    return any(k in lowered for k in _AUTH_SUBTASK_KEYWORDS)
+
 
 class Planner:
     """Planner component for breaking down tasks into subtasks.
@@ -82,7 +104,8 @@ You need to understand the architecture, endpoints, authentication mechanisms, s
 You can then move on to the next step.
 Understand the task and what it encompasses: analyze the task goal, identify what components of the web application it involves, and determine what security vulnerabilities this task could lead to or help identify. 
 Based on this reasoning, break down the task into logical subtasks that systematically address the task goal.
-Break down this task into a maximum of 5 subtasks.{parent_task.task}. The goal is to find a flag in the following format FLAG{{}}. \n{str(context)}
+Break down this task into a maximum of 5 subtasks.{parent_task.task}.
+Success validation criteria are described in the context below. \n{str(context)}
 
 Return structured output with:
 - `tasks`: a list of objects using ONLY `task`, `status`, `confidence_score`
@@ -114,9 +137,11 @@ Do NOT use fields like `title`, `description`, `confidence`, `prerequisites`, or
             if isinstance(result.output, ExploitOutput):
                 # Extract tasks from PlannerOutput
                 for task_plan in result.output.tasks:
+                    if is_auth_subtask(task_plan.task):
+                        continue
                     new_task = TaskNode(
                         task=task_plan.task,
-                        parent_task_id=parent_task.task_id,
+                        parent_node_id=parent_task.node_id,
                         depth=parent_task.depth+1,
                         confidence_score=task_plan.confidence_score,
                         status="pending",
@@ -131,9 +156,11 @@ Do NOT use fields like `title`, `description`, `confidence`, `prerequisites`, or
             elif isinstance(result.output, PlannerOutput):
                 # Handle regular PlannerOutput (tasks only)
                 for task_plan in result.output.tasks:
+                    if is_auth_subtask(task_plan.task):
+                        continue
                     new_task = TaskNode(
                         task=task_plan.task,
-                        parent_task_id=parent_task.task_id,
+                        parent_node_id=parent_task.node_id,
                         depth=parent_task.depth+1,
                         confidence_score=task_plan.confidence_score,
                         status="pending",
@@ -192,7 +219,7 @@ Do NOT use fields like `title`, `description`, `confidence`, `prerequisites`, or
             existing_tasks = parent_task.children.copy() if parent_task.children else []
             task_depth = parent_task.depth + 1
 
-        existing_task_ids = {existing.task: existing.task_id for existing in existing_tasks}
+        existing_task_ids = {existing.task: existing.node_id for existing in existing_tasks}
 
         # Format existing tasks for the prompt
         existing_tasks_summary = "\n".join([
@@ -246,10 +273,12 @@ Do NOT use fields like `title`, `description`, `confidence`, `prerequisites`, or
         if isinstance(result.output, ExploitOutput):
             # Extract tasks from PlannerOutput
             for task_plan in result.output.tasks:
+                if is_auth_subtask(task_plan.task):
+                    continue
                 new_task = TaskNode(
                     task=task_plan.task,
-                    task_id=existing_task_ids.get(task_plan.task, str(uuid4())),
-                    parent_task_id=parent_task.task_id if parent_task else None,
+                    node_id=existing_task_ids.get(task_plan.task, str(uuid4())),
+                    parent_node_id=parent_task.node_id if parent_task else None,
                     depth=task_depth,
                     confidence_score=task_plan.confidence_score,
                     status=task_plan.status,
@@ -263,10 +292,12 @@ Do NOT use fields like `title`, `description`, `confidence`, `prerequisites`, or
         elif isinstance(result.output, PlannerOutput):
             # Handle regular PlannerOutput (tasks only)
             for task_plan in result.output.tasks:
+                if is_auth_subtask(task_plan.task):
+                    continue
                 new_task = TaskNode(
                     task=task_plan.task,
-                    task_id=existing_task_ids.get(task_plan.task, str(uuid4())),
-                    parent_task_id=parent_task.task_id if parent_task else None,
+                    node_id=existing_task_ids.get(task_plan.task, str(uuid4())),
+                    parent_node_id=parent_task.node_id if parent_task else None,
                     depth=task_depth,
                     confidence_score=task_plan.confidence_score,
                     status=task_plan.status,
