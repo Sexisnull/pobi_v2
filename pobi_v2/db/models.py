@@ -384,20 +384,17 @@ class AuditEvent(Base):
     __tablename__ = "audit_events"
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    # 关联实体（可为空，系统级事件）
-    task_id: Mapped[UUID | None] = mapped_column(
-        Uuid, ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True
-    )
-    target_id: Mapped[UUID | None] = mapped_column(
-        Uuid, ForeignKey("targets.id", ondelete="SET NULL"), nullable=True, index=True
-    )
-    # M4 归属（审计证据须长于实体本身，故不随租户级联删除）
-    tenant_id: Mapped[UUID | None] = mapped_column(
-        Uuid, ForeignKey("tenants.id", ondelete="SET NULL"), nullable=True, index=True
-    )
-    actor_id: Mapped[UUID | None] = mapped_column(
-        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
-    )
+    # 关联实体（可为空，系统级事件）。
+    # 注意：以下四列**刻意不建外键**（见迁移 0022_audit_detach_fk）。
+    # 本表装有 append-only 触发器（禁止 UPDATE / DELETE），而任何
+    # ``ON DELETE SET NULL`` 外键在删除父实体时都要对本表执行 UPDATE，
+    # 会直接被触发器拒绝并回滚整个事务（表现为删除任务 500）。
+    # 故此处以「不可变历史引用」代替外键：实体删除后审计行保留原 ID 供追溯，
+    # 与「审计证据须长于实体本身」的设计意图一致。
+    task_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    target_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    tenant_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    actor_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True, index=True)
     actor: Mapped[str] = mapped_column(String(128), nullable=False)
     action: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     # 结果：success / denied / error

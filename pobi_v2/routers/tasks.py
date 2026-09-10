@@ -384,6 +384,9 @@ async def delete_task(
     task = await session.get(Task, task_id)
     if task is None or task.tenant_id != user.tenant_id:
         raise NotFoundError("任务不存在")
+    # 审计先行：任务行删除后其 ID 不再存在，但 audit_events 以不可变引用保留该 ID，
+    # 故需在 delete 之前写入留痕（否则任务名等详情无从取得）。
+    _snapshot = {"name": task.name, "status": task.status.value, "target_id": str(task.target_id)}
     # [DISABLED 2026-09-01] 手动登录分支搁置（MFA 人工流程暂缓），销毁逻辑一并停用
     # 若该任务有运行中的手动登录浏览器，先销毁（避免删除后残留浏览器进程）
     # try:
@@ -395,6 +398,15 @@ async def delete_task(
     #         unregister_manual_session(str(task_id))
     # except Exception:  # noqa: BLE001 — 清理失败不应阻断删除
     #     logger.exception("删除任务 %s 时销毁手动浏览器会话失败", task_id)
+    # 用 record_audit（不自行 commit）与 delete 同事务提交：删除失败则留痕一并回滚，
+    # 避免出现「已记录删除但任务仍在」的误导性审计。
+    await record_audit(
+        session, action="task.deleted", outcome="success",
+        task_id=task.id, target_id=task.target_id, tenant_id=user.tenant_id,
+        actor_id=user.id, actor=user.email,
+        detail=f"删除任务「{task.name}」",
+        meta=_snapshot,
+    )
     await session.delete(task)
     await session.commit()
 
