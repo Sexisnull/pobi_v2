@@ -421,6 +421,10 @@ async def _authenticate_via_browser(
         override_username=override_username,
         override_password=override_password,
     )
+    # 浏览器分支同样需要占位符替换：模型可能在 ``context``（而非 request_body）
+    # 里传入 ``{{username}}`` / ``{{password}}``，若不替换会被当作字面量填进表单，
+    # 表现为登录失败且异常值恰为占位符本身（如 'Browser authentication failed: {{username}}'）。
+    run_context = render_credential_template(run_context, run_context)
 
     callback_observed = False
     popup_callback_observed = False
