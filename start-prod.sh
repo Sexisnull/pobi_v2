@@ -33,7 +33,7 @@ REDIS_URL=redis://redis:6379/0
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 POBI_V2_API_BASE=http://localhost/api/v1
-KALI_IMAGE=xoxruns/sandboxed_kali:latest
+KALI_IMAGE=nmsldd/pobi-kali:1.0.0
 POBI_V2_SANDBOX_NETWORK=pobi_net
 POBI_V2_KALI_CONTAINER_NAME=pobi_kali
 EOF

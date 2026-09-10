@@ -51,7 +51,7 @@ services:
   # 常驻容器，所有 shell 攻击命令与 Python 验证脚本共用同一容器。
   # 生命周期随 compose；api/worker 经 DooD 连接 pobi_kali（容器名固定）。
   kali:
-    image: ${KALI_IMAGE:-${ACR_REGISTRY:-}xoxruns/sandboxed_kali:latest}
+    image: ${KALI_IMAGE:-${ACR_REGISTRY:-}nmsldd/pobi-kali:1.0.0}
     container_name: pobi_kali
     command: ["/bin/bash"]
     stdin_open: true
@@ -79,7 +79,7 @@ services:
       POBI_V2_DATABASE_URL: postgresql+psycopg://${POBI_V2_DB_USER:-pobi}:${POBI_V2_DB_PASSWORD:-pobi}@postgres:5432/${POBI_V2_DB_NAME:-pobi_v2}
       POBI_V2_REDIS_URL: redis://redis:6379/0
       POBI_V2_EVENT_BUS_BACKEND: redis
-      POBI_V2_SANDBOX_IMAGE: ${KALI_IMAGE:-${ACR_REGISTRY:-}xoxruns/sandboxed_kali:latest}
+      POBI_V2_SANDBOX_IMAGE: ${KALI_IMAGE:-${ACR_REGISTRY:-}nmsldd/pobi-kali:1.0.0}
       POBI_V2_SANDBOX_NETWORK: pobi_net
       POBI_V2_KALI_CONTAINER_NAME: pobi_kali
       # 持久化根目录：容器内 Path.home()=/root，统一落盘到 /root/.pobi_v2，
@@ -133,7 +133,7 @@ services:
       POBI_V2_DATABASE_URL: postgresql+psycopg://${POBI_V2_DB_USER:-pobi}:${POBI_V2_DB_PASSWORD:-pobi}@postgres:5432/${POBI_V2_DB_NAME:-pobi_v2}
       POBI_V2_REDIS_URL: redis://redis:6379/0
       POBI_V2_EVENT_BUS_BACKEND: redis
-      POBI_V2_SANDBOX_IMAGE: ${KALI_IMAGE:-${ACR_REGISTRY:-}xoxruns/sandboxed_kali:latest}
+      POBI_V2_SANDBOX_IMAGE: ${KALI_IMAGE:-${ACR_REGISTRY:-}nmsldd/pobi-kali:1.0.0}
       POBI_V2_SANDBOX_NETWORK: pobi_net
       POBI_V2_KALI_CONTAINER_NAME: pobi_kali
       # 持久化根目录：与 api 一致，统一落盘到 /root/.pobi_v2。

@@ -76,8 +76,8 @@ class Settings(BaseSettings):
 
     # ---- 沙箱镜像 ----
     # 渗透验证在 Kali 沙箱中执行（含 sqlmap/nmap 等工具链）。
-    # 默认使用本地已下载的 xoxruns/sandboxed_kali，可通过环境变量覆盖。
-    sandbox_image: str = "xoxruns/sandboxed_kali:latest"
+    # 默认使用 nmsldd/pobi-kali（已预装 katana 等工具链），可通过环境变量覆盖。
+    sandbox_image: str = "nmsldd/pobi-kali:1.0.0"
 
     # ---- 沙箱网络（全面容器化）----
     # 所有组件（api/worker/postgres/redis/kali 沙箱）接入的统一 bridge 网络。

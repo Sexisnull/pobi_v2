@@ -139,15 +139,15 @@ fi
 # 全面容器化后，Kali 作为 docker-compose 常驻 service（容器名 pobi_kali）由
 # 宿主机 daemon 创建，所有 shell 命令与 Python 验证共用同一容器。
 # 此处确保镜像已就绪（运行时若缺失会再次尝试拉取）。
-log "拉取全局共享 Kali 沙箱镜像 xoxruns/sandboxed_kali（compose 常驻 pobi_kali）..."
-if docker images --format '{{.Repository}}:{{.Tag}}' | grep -q "^xoxruns/sandboxed_kali"; then
-  ok "xoxruns/sandboxed_kali 已存在，跳过"
+log "拉取全局共享 Kali 沙箱镜像 nmsldd/pobi-kali:1.0.0（compose 常驻 pobi_kali）..."
+if docker images --format '{{.Repository}}:{{.Tag}}' | grep -q "^nmsldd/pobi-kali:1.0.0"; then
+  ok "nmsldd/pobi-kali:1.0.0 已存在，跳过"
 else
-  if docker pull xoxruns/sandboxed_kali; then
-    ok "xoxruns/sandboxed_kali 拉取完成"
+  if docker pull nmsldd/pobi-kali:1.0.0; then
+    ok "nmsldd/pobi-kali:1.0.0 拉取完成"
   else
-    warn "拉取 xoxruns/sandboxed_kali 失败（可能无外网）。"
-    warn "运行时 sandbox_manager 会再次尝试拉取；或手动执行：docker pull xoxruns/sandboxed_kali"
+    warn "拉取 nmsldd/pobi-kali:1.0.0 失败（可能无外网）。"
+    warn "运行时 sandbox_manager 会再次尝试拉取；或手动执行：docker pull nmsldd/pobi-kali:1.0.0"
   fi
 fi
 
@@ -186,7 +186,7 @@ POBI_V2_TOKEN_ENCRYPTION_KEY=
 
 # ---- 全面容器化：Kali 沙箱（compose 常驻 pobi_kali，DooD 复用宿主机 daemon）----
 # 镜像与网络一般无需修改；仅自定义镜像源时调整
-# KALI_IMAGE=xoxruns/sandboxed_kali:latest
+# KALI_IMAGE=nmsldd/pobi-kali:1.0.0
 # POBI_V2_SANDBOX_NETWORK=pobi_net
 # POBI_V2_KALI_CONTAINER_NAME=pobi_kali
 EOF
