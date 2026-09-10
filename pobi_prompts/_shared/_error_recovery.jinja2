@@ -9,9 +9,17 @@ When a tool call fails, apply the appropriate recovery pattern based on error ty
 - Recovery: Validate HTTP format, check headers, verify Content-Type matches body
 - Max retries: 2 (if still fails, payload likely invalid)
 
+**401 Unauthorized / Redirect to login page**:
+- Issue: Session missing, expired, or invalidated
+- Recovery by path:
+  - `pw_send_payload` / `browser_run_steps`: pass `auth_profile="default"` to reuse the task-wide session. Omit `auth_profile` and it defaults to `default` automatically; pass `auth_profile="__anonymous__"` only when you deliberately need an unauthenticated baseline for comparison.
+  - `shell` / `python_interpreter`: call `read_auth_storage(profile="default", include_secrets=true)` to obtain the cookie / `Authorization` header, then inline it into `curl -b`/`-H` or your generated Python code.
+- Do NOT re-run a full login flow yourself. Credential lifecycle is owned by the `authenticator` agent — report the failure and let the supervisor dispatch it.
+- Important: a single 401 is NOT proof of session loss. It may be the expected response (e.g. testing IDOR / auth bypass). Only treat it as session loss if the same request previously succeeded with the same profile.
+
 **403 Forbidden**:
 - Issue: Endpoint exists but access denied
-- Recovery: Check authentication (use `read_auth_storage`), try different credentials, test auth bypass
+- Recovery: Check authentication (`read_auth_storage` in sandbox paths, `auth_profile` in host-side tools), try different credentials, test auth bypass
 - If still 403: Note as protected endpoint, try alternative approach
 
 **404 Not Found**:

@@ -169,6 +169,61 @@ You may need multiple delegations (action="call_agent") to properly test a task.
 Don't give up after one failed attempt if there are reasonable alternatives.
 Don't keep trying indefinitely if it's clearly not working.
 
+## AUTHENTICATION IS A PRECONDITION, NOT A GOAL
+
+Authentication is owned by the **authenticator** agent and is expected to be **already done**
+before you start. When the task input contains an `## EXISTING AUTH SESSIONS` block, that
+session is confirmed usable:
+
+- Reuse it by passing that `auth_profile` to the tools that accept one; do NOT re-authenticate.
+- **NEVER** delegate to `authenticator` just to "log in again" or to "obtain a session".
+- **NEVER** treat "obtain credentials / log in / fetch a session" as a stand-alone subgoal.
+- Only involve `authenticator` when a tool reports the session has actually expired.
+
+### Credential reuse is the default (both execution paths)
+
+A task-wide session is stored under profile `default`. There are two consumption paths and
+you must know which one each delegation uses:
+
+| Agent | Path | How credentials reach the request |
+|---|---|---|
+| `requester` | host-side tools | Omit `auth_profile` (or pass `"default"`) → the tool layer injects the session automatically. Credential values never enter your context here. |
+| `shell`, `python_interpreter` | Kali sandbox | The sub-agent calls `read_auth_storage(profile="default", include_secrets=true)` and inlines the cookie / `Authorization` header into `curl -b`/`-H` or generated Python code. |
+
+**Default behaviour is "reuse the session", not "go anonymous".** Requests that silently
+fall back to anonymous will see a login page and produce false negatives on
+authenticated-only attack surface.
+
+### Anonymous requests are for comparison, not for convenience
+
+Some vulnerability classes are ONLY confirmable by comparing the authenticated response
+against the unauthenticated one:
+
+- IDOR / broken object-level authorization
+- Authentication bypass
+- Unauthorized access to sensitive resources
+- CSRF / session fixation behaviour differences
+
+For those, deliberately request the same endpoint twice with and without credentials
+(`auth_profile="__anonymous__"` on host-side tools; simply omit credentials in sandbox
+commands) and compare. Do NOT use anonymous mode as a shortcut when you merely failed to
+pass credentials.
+
+### When `auth_required_detected` appears in context
+
+This marker means: pre-recon observed protected endpoints, but NO usable session exists
+(the task was created without credentials). The authenticated attack surface is currently
+invisible. In this case you MAY delegate to `authenticator` once to attempt login with
+default/well-known credentials (e.g. `admin/admin`). If that fails, proceed with the
+unauthenticated surface and note the blind spot in your final assessment.
+
+### When a tool reports the session became invalid
+
+If a tool reports `auth_invalid` (consecutive 401/redirect-to-login after previously
+succeeding) or `expired`, that IS the signal to delegate to `authenticator` — it will
+`validate` → `refresh` → re-authenticate as needed. Note that a single 401 is not proof
+of expiry: it may be the expected response for the test in progress.
+
 ## CRITICAL: BEFORE DELEGATING
 
 **Always check FIRST:**
@@ -176,6 +231,7 @@ Don't keep trying indefinitely if it's clearly not working.
 1. **Is the information already in the context or user input?** → Use it directly, don't delegate
 2. **Was this already tested?** → Don't repeat the same request
 3. **Did a previous agent already report on this target?** → Don't ask for "more testing"
+4. **Is authentication already available?** → Reuse the existing `auth_profile`, don't re-login
 
 **Rules:**
 - Read the context and previous results before delegating

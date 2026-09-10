@@ -11,6 +11,7 @@ tools and sub-agents can reuse the same browser session artefacts.
 
 from __future__ import annotations
 from pobi_agent.constants import REUSABLE_CREDENTIALS_FILE, DEADEND_AGENTS_PATH
+from pobi_agent.logging import logger
 from pobi_agent.storage_context import get_task_root
 from pobi_agent.utils.network import slugify_target
 
@@ -327,6 +328,62 @@ class CredentialsStore:
 
 
 # ---------------------------------------------------------------------------
+# Profile 语义解析（工具层统一入口）
+# ---------------------------------------------------------------------------
+
+# 默认 profile：任务内凭证的初始版本（由 ``preauth`` 复刻而来）。
+DEFAULT_PROFILE: str = "default"
+# 显式匿名哨兵：用于「认证态 vs 匿名态」对照验证（越权/IDOR、认证绕过、
+# 未授权访问等漏洞必须靠两者差异才能确认）。与 ``None`` 的区别在于
+# ``None`` 是「未指定」语义，会被解析为 ``DEFAULT_PROFILE``。
+ANONYMOUS_PROFILE: str = "__anonymous__"
+
+
+def resolve_auth_profile(
+    target: str,
+    auth_profile: str | None,
+    *,
+    default_profile: str = DEFAULT_PROFILE,
+) -> str | None:
+    """把工具入参 ``auth_profile`` 解析为规范 profile 名。
+
+    语义（2026-09-10 统一）：
+
+    - ``None`` / ``""``        -> ``DEFAULT_PROFILE``（默认复用任务内统一凭证）
+    - ``ANONYMOUS_PROFILE``    -> ``None``（显式匿名，用于对照验证）
+    - 其他具名值                -> 原样返回
+
+    降级规则：解析为 ``DEFAULT_PROFILE`` 时，若该会话尚未落盘，则返回
+    ``None``。这样改造前「不传 auth_profile = 匿名」的调用在无 default
+    会话时行为完全不变，保证既有匿名用例不回归。
+
+    Args:
+        target: 授权目标 URL（用于定位该任务的 auth_context 目录）。
+        auth_profile: 工具入参原始值。
+        default_profile: 默认 profile 名（测试可覆盖）。
+
+    Returns:
+        规范 profile 名，或 ``None`` 表示匿名请求。
+    """
+    raw = (auth_profile or "").strip()
+    if raw == ANONYMOUS_PROFILE:
+        return None
+    if raw and raw != default_profile:
+        return raw
+    # 未指定（None / ""）或显式写了 default：以磁盘会话存在性为准降级。
+    try:
+        handler = AuthContextHandler(
+            target=target, agent_id=None, session_id=None
+        )
+        if handler.load_context(default_profile) is None:
+            return None
+    except Exception as exc:  # noqa: BLE001 - 解析失败降级匿名，不阻断请求
+        logger.debug("resolve_auth_profile 降级匿名（忽略）: %s", exc)
+        return None
+    return default_profile
+
+
+# ---------------------------------------------------------------------------
 # AuthContextHandler — persist / load / enumerate auth contexts
 # ---------------------------------------------------------------------------
 
@@ -443,6 +500,29 @@ class AuthContextHandler:
             "path": str(path),
         }
         self._save_index()
+
+    def ensure_default_from_preauth(self) -> bool:
+        """任务启动时把 ``preauth`` 会话复刻为 ``default``，作为任务内凭证的初始版本。
+
+        职责划分（2026-09-10）：``preauth`` 由任务创建期 LLM 前置认证产出，语义上是
+        「一次性初始化凭证」；任务内的凭证生命周期归 authenticator 管——过期只更新
+        ``default``，不回写 ``preauth``。
+
+        此前两者是互不相通的两套 profile：preauth 落盘成功却无人消费（子 agent 默认
+        ``auth_profile=None`` 即匿名），authenticator 一旦失败 ``default`` 就不存在，
+        全部子 agent 降级匿名，需登录的漏洞面（如 DVWA 的 /vulnerabilities/xss_r/）
+        完全测不到。复刻让任务内从一开始就有可用的默认凭证。
+
+        Returns:
+            True 表示本次发生了复刻；False 表示 default 已存在或 preauth 不存在。
+        """
+        if self.load_context("default") is not None:
+            return False
+        preauth = self.load_context("preauth")
+        if preauth is None:
+            return False
+        self.save_context("default", preauth)
+        return True
 
     def update_context(self, profile: str, **kwargs: Any) -> AuthContext | None:
         """Merge *kwargs* into an existing context and re-save.

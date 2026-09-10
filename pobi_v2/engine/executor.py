@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -264,6 +265,49 @@ async def _run_probe_branch(tid, task, target, hooks, session) -> dict:
     return outcome
 
 
+async def _wait_for_preauth_context(
+    handler,
+    tid: UUID,
+    log,
+    timeout: float | None = None,
+    interval: float = 1.0,
+) -> bool:
+    """等待 api 侧后台 PreAuth 认证会话落盘。
+
+    时序根因：PreAuth 认证在 api 侧后台异步执行，worker 侧 ``_run_task_body``
+    与之并行；若不等就复刻 ``preauth`` → ``default``，认证未落盘时复刻扑空，
+    ``default`` 不存在 → 全部子 agent 降级匿名，需登录的漏洞面完全测不到。
+    （与 ``pre_recon._wait_for_auth_context`` 是同一类抢跑问题的两处体现。）
+
+    Args:
+        handler: 已绑定 task_root 的 ``AuthContextHandler``。
+        tid: 任务 UUID（仅日志用）。
+        log: 任务 logger。
+        timeout: 等待上限（秒），默认取 pre_recon 的 PREAUTH_WAIT_TIMEOUT。
+        interval: 轮询间隔（秒）。
+
+    Returns:
+        True 表示 preauth 会话已就绪。
+    """
+    from pobi_v2.engine.pre_recon import PREAUTH_WAIT_TIMEOUT
+
+    deadline = time.monotonic() + (timeout or PREAUTH_WAIT_TIMEOUT)
+    while True:
+        try:
+            if handler.load_context("preauth") is not None:
+                log.info("[TASK-LIFECYCLE] PreAuth 会话已就绪 | task_id=%s", tid)
+                return True
+        except Exception as _exc:  # noqa: BLE001 - 读取异常按未就绪处理
+            log.debug("[TASK-LIFECYCLE] PreAuth 会话读取异常（继续等待）: %s", _exc)
+        if time.monotonic() >= deadline:
+            log.warning(
+                "[TASK-LIFECYCLE] 等待 PreAuth 会话超时（%.0fs），按无凭据继续 | task_id=%s",
+                timeout or PREAUTH_WAIT_TIMEOUT, tid,
+            )
+            return False
+        await asyncio.sleep(interval)
+
+
 async def _run_pre_recon_branch(tid, task, target, hooks) -> None:
     """前置侦查分支：任务启动后自动执行指纹识别 + WAF 识别。
 
@@ -356,6 +400,36 @@ async def _run_task_body(tid: UUID) -> dict:
             # 前置侦查（平台层自动，deadend/ScanWorkflow 共用）：任务启动后、
             # 智能体侦查前，自动执行指纹识别 + WAF 识别并落库。失败不阻断主流程。
             await _run_pre_recon_branch(tid, task, target, hooks)
+            # preauth → default 复刻（2026-09-10）：任务创建期 LLM 前置认证产出的
+            # preauth 语义上是「一次性初始化凭证」，任务内凭证生命周期归 authenticator
+            # 管（过期只更新 default，不回写 preauth）。此前两套 profile 互不相通：
+            # preauth 落盘成功却无人消费，authenticator 一失败 default 就不存在，
+            # 子 agent 全部降级匿名，需登录的漏洞面完全测不到。
+            try:
+                from pobi_agent.auth_resolver import AuthContextHandler
+                from pobi_agent.storage_context import clear_task_root, set_task_root
+                from pobi_v2.engine.recon_access import task_root as _task_root
+
+                _token = set_task_root(_task_root(tid))
+                try:
+                    handler = AuthContextHandler(
+                        target=target.url, agent_id=None, session_id=None
+                    )
+                    # 时序保障：preauth 由 api 侧后台异步认证产出，与 worker 侧
+                    # 本流程并行。若此处立即复刻，preauth 尚未落盘就会扑空，
+                    # default 不存在 → 全部子 agent 降级匿名（与 pre_recon 抢跑
+                    # 是同一类 bug）。仅在有认证任务且 preauth/default 均缺失时
+                    # 等待，超时降级保持原行为。
+                    if task.auth_username and handler.load_context("preauth") is None:
+                        await _wait_for_preauth_context(handler, tid, log)
+                    if handler.ensure_default_from_preauth():
+                        log.info(
+                            "[TASK-LIFECYCLE] preauth 会话已复刻为 default | task_id=%s", tid
+                        )
+                finally:
+                    clear_task_root(_token)
+            except Exception as _exc:  # noqa: BLE001 - 复刻失败不阻断主流程
+                log.warning("[TASK-LIFECYCLE] preauth→default 复刻失败（已忽略）: %s", _exc)
             # 主路径：直接驱动原 pobi_agent.DeadEndAgent（完整 AI 自主渗透系统，
             # 含 Docker 沙箱执行验证、多智能体协作、ADaPT 规划、ValidationGate、
             # ReporterAgent）。沙箱为必需依赖；若不可用时回退到轻量 ScanWorkflow。

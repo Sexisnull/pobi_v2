@@ -65,11 +65,19 @@ async def read_auth_storage(
 
     By default this returns a *safe* summary (cookie names, storage keys,
     header names, final URL). Real cookie/token values are only returned when
-    ``include_secrets=True`` and should be reserved for sandboxed code paths
-    that strictly need the raw material.
+    ``include_secrets=True``。
+
+    ``include_secrets=True`` 的用途（沙箱明文通道，2026-09-10）：shell /
+    python_interpreter 子 agent 在 Kali 容器内执行 curl / Python 脚本时，
+    需要把 cookie / Authorization header 内联进命令或代码。该模式下模型
+    会看到凭据明文——这是有意的取舍。使用约束：
+
+    - 仅用于生成发给目标的请求，禁止写入报告正文、memory 摘要或任务产物文件；
+    - 禁止把凭据原文回显到 ``detailed_summary`` / ``proofs`` 等输出字段。
 
     The function accepts either a ``RunContext`` (with ``deps.target``,
-    ``deps.agent_id``, ``deps.session_id``) or a plain string treated as
+    ``deps.agent_id``, ``deps.session_id``), a plain object exposing those
+    same attributes (e.g. ``RequesterDeps``), or a plain string treated as
     ``session_id`` for backward compatibility.
     """
     target: str | None = None
@@ -78,51 +86,78 @@ async def read_auth_storage(
 
     deps = getattr(ctx, "deps", None) if ctx is not None else None
     if deps is not None:
-        target = getattr(deps, "target", None)
-        agent_id = getattr(deps, "agent_id", None)
-        session_id = getattr(deps, "session_id", None)
-    elif isinstance(ctx, str):
-        session_id = ctx
-    elif ctx is None:
-        return json.dumps({"available": False, "note": "No context provided"})
-
-    if not target or agent_id is None or session_id is None:
-        # Backward-compatible fallback: walk the legacy session-only directory
-        # and report what we find without secrets.
-        if isinstance(ctx, str):
-            legacy_dir = DEADEND_AGENTS_PATH / ctx / "auth_context"
-            index_file = legacy_dir / "index.json"
-            if index_file.exists():
-                try:
-                    return json.dumps({
-                        "available": True,
-                        "legacy": True,
-                        "index": json.loads(index_file.read_text(encoding="utf-8")),
-                    })
-                except json.JSONDecodeError:
-                    pass
+        # RunContext[RequesterDeps]
+        ctx = deps
+    if ctx is not None and not isinstance(ctx, str):
+        # RequesterDeps / ShellDeps 等直接传参，或上面解包后的 deps
+        target = getattr(ctx, "target", None)
+        agent_id = getattr(ctx, "agent_id", None)
+        session_id = getattr(ctx, "session_id", None)
+        # 未注入 task_root 时依赖 get_task_root() 定位；handler 构造时自行解析。
+        if target and session_id is not None:
+            try:
+                return _load_auth_storage_payload(
+                    target=target,
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    profile=profile,
+                    include_secrets=include_secrets,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("read_auth_storage failed: %s", exc)
+                return json.dumps({"available": False, "error": str(exc)})
         return json.dumps({
             "available": False,
-            "note": "target, agent_id and session_id are required to resolve auth context",
+            "note": "deps 缺少 target/session_id，无法定位 auth context",
         })
 
-    try:
-        handler = AuthContextHandler(target=target, agent_id=agent_id, session_id=session_id)
-        context = handler.load_context(profile)
-        if context is None:
-            return json.dumps({
-                "available": False,
-                "profile": profile,
-                "target": target,
-                "agent_id": str(agent_id),
-                "session_id": str(session_id),
-            })
-        if include_secrets:
-            return context.model_dump_json()
-        return json.dumps(safe_auth_summary(context))
-    except Exception as exc:
-        logger.warning("read_auth_storage failed: %s", exc)
-        return json.dumps({"available": False, "error": str(exc)})
+    # 字符串：仅 legacy 兼容（旧 session-only 目录），新路径无法定位。
+    if isinstance(ctx, str):
+        legacy_dir = DEADEND_AGENTS_PATH / ctx / "auth_context"
+        index_file = legacy_dir / "index.json"
+        if index_file.exists():
+            try:
+                return json.dumps({
+                    "available": True,
+                    "legacy": True,
+                    "index": json.loads(index_file.read_text(encoding="utf-8")),
+                })
+            except json.JSONDecodeError:
+                pass
+        return json.dumps({
+            "available": False,
+            "legacy": True,
+            "note": (
+                f"legacy session {ctx!r} 下无 auth_context/index.json；"
+                "请改传 RequesterDeps（含 target/agent_id/session_id）"
+            ),
+        })
+
+    return json.dumps({"available": False, "note": "No context provided"})
+
+
+def _load_auth_storage_payload(
+    *,
+    target: str,
+    agent_id: Any,
+    session_id: Any,
+    profile: str,
+    include_secrets: bool,
+) -> str:
+    """按 ``RequesterDeps`` 定位并读取 auth context（新路径优先）。"""
+    handler = AuthContextHandler(target=target, agent_id=agent_id, session_id=session_id)
+    context = handler.load_context(profile)
+    if context is None:
+        return json.dumps({
+            "available": False,
+            "profile": profile,
+            "target": target,
+            "agent_id": str(agent_id),
+            "session_id": str(session_id),
+        })
+    if include_secrets:
+        return context.model_dump_json()
+    return json.dumps(safe_auth_summary(context))
 
 @with_tool_events("run_python_file")
 async def run_python_file(

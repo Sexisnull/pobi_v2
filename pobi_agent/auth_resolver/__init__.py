@@ -10,6 +10,8 @@ and loads auth snapshots to/from disk.
 """
 
 from pobi_agent.auth_resolver.auth_resolver import (
+    ANONYMOUS_PROFILE,
+    DEFAULT_PROFILE,
     AuthContext,
     AuthContextHandler,
     AuthCredentials,
@@ -21,6 +23,7 @@ from pobi_agent.auth_resolver.auth_resolver import (
     CredentialsStore,
     StorageSnapshot,
     TargetCredentials,
+    resolve_auth_profile,
 )
 from pobi_agent.auth_resolver.auth_context_utils import (
     auth_context_from_api_response,
@@ -42,6 +45,8 @@ from pobi_agent.auth_resolver.auth_context_utils import (
 )
 
 __all__ = [
+    "ANONYMOUS_PROFILE",
+    "DEFAULT_PROFILE",
     "AuthContext",
     "AuthContextHandler",
     "AuthCredentials",
@@ -67,6 +72,7 @@ __all__ = [
     "parse_jwt_payload",
     "playwright_storage_state_from_auth_context",
     "render_credential_template",
+    "resolve_auth_profile",
     "safe_auth_summary",
     "write_playwright_storage_state",
 ]

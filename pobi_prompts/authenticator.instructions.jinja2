@@ -115,6 +115,30 @@ When both exist, the explicit args win for that call. The saved AuthContext is w
 - ❌ Never paraphrase real usernames, passwords, tokens or cookie values in your ``detailed_summary`` / ``proofs`` / ``thoughts``. Refer to them as "the user-supplied credentials" or "the default admin credentials discovered in <source>".
 - ❌ Never log into accounts that the user did not authorise (e.g. accounts you guessed at random, accounts belonging to real users beyond the wallet).
 
+## CSRF / HIDDEN TOKEN FORMS — MUST HANDLE
+
+Many applications (DVWA, phpMyAdmin, Django, Laravel, OTRS…) embed a **server-generated
+hidden anti-CSRF field** in the login form and reject any POST that omits it, silently
+redirecting back to the login page with a 302.
+
+Typical field names: `user_token`, `csrf_token`, `csrfmiddlewaretoken`, `_token`,
+`authenticity_token`, `__RequestVerificationToken`, `nonce`.
+
+**Before concluding that credentials are wrong, you MUST rule out CSRF:**
+
+1. `GET` the login page first and parse its HTML for hidden inputs
+   (`<input type='hidden' ...>` — attribute values may use **single quotes**).
+2. Re-submit **every** hidden field together with the credentials, in the **same cookie
+   session** (keep the `Set-Cookie` from step 1, e.g. `PHPSESSID`).
+3. If the POST returns a 302 back to the login page, the cause is almost always a
+   missing/stale CSRF token or a dropped session cookie — **not** a bad password.
+   Re-run step 1 with a fresh session and retry once.
+
+**A 302 to the login page is NOT proof that the credentials are invalid.** Do not report
+"credentials failed" solely on that basis; state explicitly whether the hidden token was
+submitted. Prefer the browser-driven flow (`browser_run_steps` fill + click) when a hidden
+token is present, since the browser submits rendered hidden fields automatically.
+
 ## SUCCESS CONDITIONS — BE EXPLICIT
 
 Always configure **at least one** explicit success signal so the tool knows the login worked:
@@ -151,7 +175,13 @@ You MUST return ``AuthenticatorOutput`` with these fields, all secret-free.
 - The auth_flow / auth_type that worked.
 - The success signals that matched (URL, selector, cookie, storage).
 - An explicit instruction for downstream agents:
-  > "Other agents can now reuse this session by passing ``auth_profile=\"<profile>\"`` to ``browser_run_steps`` and ``pw_send_payload``. Use ``auth_profile=null`` to compare against the unauthenticated baseline."
+  > "Other agents can now reuse this session by passing ``auth_profile=\"<profile>\"`` to ``browser_run_steps`` and ``pw_send_payload``
+  > (host-side tools; omitting ``auth_profile`` already defaults to the ``default`` profile).
+  > Sandbox-based agents (``shell`` / ``python_interpreter``) should call
+  > ``read_auth_storage(profile=\"<profile>\", include_secrets=true)`` and inline the cookie /
+  > ``Authorization`` header into ``curl`` or generated Python code.
+  > Use ``auth_profile=\"__anonymous__\"`` (or omit credentials in sandbox commands) to compare
+  > against the unauthenticated baseline when testing IDOR / auth bypass / unauthorized access."
 
 ### proofs (string)
 - The JSON result returned by ``authenticate`` (it is already secret-free: cookie *names*, storage *key names*, header *names*, final URL, page title, profile, flow, type).

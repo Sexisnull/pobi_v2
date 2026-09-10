@@ -11,7 +11,11 @@ from pydantic import BaseModel, Field, TypeAdapter
 from pobi_agent.tools.browser.browser import BrowserSession
 from pobi_agent.tools.tool_wrappers import with_tool_events
 from pobi_agent.utils.structures import RequesterDeps
-from pobi_agent.auth_resolver import AuthContextHandler, browser_state_from_auth_context
+from pobi_agent.auth_resolver import (
+    AuthContextHandler,
+    browser_state_from_auth_context,
+    resolve_auth_profile,
+)
 from pobi_agent.tools.browser.validate_refresh import auto_validate_before_consume
 from pobi_agent.logging import logger
 
@@ -350,6 +354,10 @@ async def browser_run_steps(
     guess paths. This tool does not substitute credential placeholders in HTTP bodies; values must
     appear in ``context`` and be wired via ``key`` on each step.
     """
+    # 语义解析：未指定（None/"") → 默认复用 default 会话；__anonymous__ → 显式匿名。
+    # default 会话不存在时降级匿名，保证与改造前行为一致。
+    auth_profile = resolve_auth_profile(ctx.deps.target, auth_profile)
+
     auth_state: dict[str, Any] | None = None
     if auth_profile:
         if getattr(ctx.deps, "agent_id", None) is None:

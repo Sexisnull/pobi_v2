@@ -45,7 +45,11 @@ PREAUTH_PROFILE: str = "preauth"
 
 # 等待 PreAuth 认证会话落盘的超时与轮询间隔（有认证任务由 executor 传入；
 # 避免 pre_recon 抢跑在后台认证完成前导致 sitemap 无凭证爬取）。
-PREAUTH_WAIT_TIMEOUT: float = 60.0
+# 2026-09-10：原值 60s 小于 PreAuth 自身超时（preauth.PREAUTH_AGENT_TIMEOUT_S），
+# 认证在 61s~超时窗口内成功时 pre_recon 仍降级为匿名爬取，配置自相矛盾。
+# 对齐为 150s：覆盖绝大多数成功认证（实测 32s~100s），又不为终将失败的认证
+# 拖满整个 pre_recon 预算（PRE_RECON_TIMEOUT=400s）。
+PREAUTH_WAIT_TIMEOUT: float = 150.0
 PREAUTH_WAIT_INTERVAL: float = 1.0
 
 
@@ -106,6 +110,55 @@ async def _wait_for_auth_context(
             )
             return {}, {}, auth_mode
         await asyncio.sleep(PREAUTH_WAIT_INTERVAL)
+
+
+def _mark_auth_required_if_needed(
+    store: ReconStore,
+    task_key: str,
+    auth_mode: str,
+) -> bool:
+    """匿名探测发现「目标需登录」时打结构化标记。
+
+    触发条件：认证会话未就绪（``auth_mode`` 非 ``authenticated:*``）且站点观测
+    到需认证端点。此时任务对登录后漏洞面是盲区，需回流让 supervisor 有机会
+    委派 authenticator 尝试默认口令（如 DVWA 的 admin/admin）。
+
+    写入 ``recon_facts(category="authentication")``，由 L0/L1 注入下游。
+
+    Returns:
+        True 表示本次打了标记。
+    """
+    if auth_mode.startswith("authenticated"):
+        return False
+    try:
+        overview = store.build_site_overview(task_key)
+        count = int(overview.get("auth_required_endpoint_count") or 0)
+        if count <= 0:
+            return False
+        store.upsert_fact(
+            task_id=task_key,
+            category="authentication",
+            key="auth_required_detected",
+            value=(
+                f"匿名探测观测到 {count} 个需认证端点，但任务无可用认证会话"
+                "（auth_mode=%s）；登录后漏洞面当前不可见" % auth_mode
+            ),
+            confidence=0.8,
+            source="pre_recon",
+            details={
+                "auth_mode": auth_mode,
+                "auth_required_endpoint_count": count,
+                "action": "consider_authenticator_with_default_credentials",
+            },
+        )
+        logger.info(
+            "[pre_recon %s] 标记需认证但无凭据 | auth_mode=%s | 需认证端点=%d",
+            task_key, auth_mode, count,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 - 标记失败不阻断前置侦查
+        logger.warning("[pre_recon %s] 需认证标记写入失败（已忽略）: %s", task_key, exc)
+        return False
 
 
 def _summary(result) -> dict[str, Any]:
@@ -235,12 +288,19 @@ async def run_pre_recon(
         # 后统一派生 recon_endpoints（避免双写不一致，并收敛 PG 同步唯一键）。
         task_root.mkdir(parents=True, exist_ok=True)
         derive_store = ReconStore.for_task(task_key, str(task_root))
+        auth_required_detected = False
         try:
             await derive_store.derive_endpoints_from_transactions(task_key)
+            auth_required_detected = _mark_auth_required_if_needed(
+                derive_store, task_key, auth_mode
+            )
         except Exception as exc:  # noqa: BLE001 - 派生失败不阻断前置侦查
             logger.warning("[pre_recon %s] 端点派生失败（已忽略）: %s", task_key, exc)
         finally:
             derive_store.close()
+
+        if auth_required_detected:
+            summary["auth_required_detected"] = True
 
         return {
             "phase": "pre_recon",
@@ -249,6 +309,7 @@ async def run_pre_recon(
             "target": target_url,
             "host": host,
             "auth_mode": auth_mode,
+            "auth_required_detected": auth_required_detected,
             "matched_count": result.matched_count,
             "summary": summary,
             "sitemap": sitemap_result.get("summary") or {},

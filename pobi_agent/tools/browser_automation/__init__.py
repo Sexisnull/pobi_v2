@@ -18,6 +18,7 @@ from pobi_agent.tools.tool_wrappers import with_tool_events
 from pobi_agent.auth_resolver import (
     AuthContextHandler,
     inject_headers_into_raw_request,
+    resolve_auth_profile,
     write_playwright_storage_state,
 )
 from pobi_agent.tools.browser.validate_refresh import auto_validate_before_consume
@@ -165,6 +166,118 @@ def _persist_http_tx(
         logger.debug("HTTP 事务结构化写入失败（忽略）: %s", exc)
 
 
+# 连续认证失败触发重认证的阈值。单次 401 可能是业务语义（如越权测试的
+# 预期响应），必须连续多次 + 曾有成功基线才判定为「会话失效」。
+AUTH_FAILURE_THRESHOLD: int = 3
+
+
+def _now_iso() -> str:
+    """UTC ISO 时间戳（与 validate_refresh 的 metadata 时间字段同口径）。"""
+    import datetime as _dt
+
+    return _dt.datetime.now(_dt.timezone.utc).isoformat()
+
+
+def _detect_auth_failure(responses: list) -> bool:
+    """判断本次响应是否表现为「凭据失效」（401/403/407 或重定向到登录页）。
+
+    单次命中不代表会话失效，仅作为连续计数的一票；是否升级为事件由
+    :func:`_track_auth_failure` 按阈值 + 成功基线共同决定。
+    """
+    for response in responses or []:
+        text = (
+            response.decode("utf-8", errors="replace")
+            if isinstance(response, bytes)
+            else str(response)
+        )
+        parsed = _parse_response_text(text)
+        if parsed is None:
+            continue
+        status = int(parsed["status_code"])
+        headers = parsed["headers"]
+        if status in (401, 403, 407):
+            return True
+        if status in (301, 302, 303, 307, 308):
+            location = urlparse(headers.get("location", "")).path or ""
+            if _LOGIN_LOCATION_RE.search(location):
+                return True
+    return False
+
+
+def _track_auth_failure(
+    ctx: RunContext["RequesterDeps"],
+    profile: str,
+    failed: bool,
+) -> None:
+    """维护 per-profile 连续失败计数，达阈值且曾有成功基线时写 auth_invalid 事件。
+
+    真源为 ``AuthContext.metadata``（磁盘），与 ``validate_auth_context_service``
+    写入的 ``validated`` / ``expired`` 同处，避免多处状态分歧。
+
+    事件经 ``context.add_discovered_fact(category="authentication")`` 进入共享
+    上下文，supervisor 下一轮迭代即可读到并委派 authenticator 修复。
+    """
+    if not profile:
+        return
+    try:
+        handler = AuthContextHandler(
+            target=getattr(ctx.deps, "target", ""),
+            agent_id=getattr(ctx.deps, "agent_id", None),
+            session_id=getattr(ctx.deps, "session_id", None),
+        )
+        auth_context = handler.load_context(profile)
+        if auth_context is None:
+            return
+        metadata = auth_context.metadata
+        if failed:
+            metadata["consecutive_auth_failures"] = (
+                int(metadata.get("consecutive_auth_failures", 0) or 0) + 1
+            )
+        else:
+            # 成功响应：清零连续计数，并记录成功基线（阈值触发的前提）。
+            metadata["consecutive_auth_failures"] = 0
+            metadata.setdefault("first_success_baseline", _now_iso())
+
+        failures = int(metadata.get("consecutive_auth_failures", 0) or 0)
+        should_report = (
+            failures >= AUTH_FAILURE_THRESHOLD
+            and bool(metadata.get("first_success_baseline"))
+            and not metadata.get("auth_invalid_reported_at")
+        )
+        if should_report:
+            metadata["auth_invalid_reported_at"] = _now_iso()
+        handler.save_context(profile, auth_context)
+
+        if not should_report:
+            return
+        context = getattr(ctx.deps, "context", None)
+        if context is None or not hasattr(context, "add_discovered_fact"):
+            return
+        context.add_discovered_fact(
+            category="authentication",
+            key=f"auth_invalid:{profile}",
+            value=(
+                f"auth_profile {profile!r} 连续 {failures} 次请求返回 "
+                "401/403 或被重定向到登录页（此前曾成功），判定会话已失效"
+            ),
+            confidence=0.8,
+            source_task=str(getattr(ctx.deps, "session_id", "")),
+            actionable=True,
+            details={
+                "profile": profile,
+                "consecutive_failures": failures,
+                "first_success_baseline": metadata.get("first_success_baseline"),
+                "action": "validate_then_refresh_or_reauth",
+            },
+        )
+        logger.warning(
+            "[AUTH] 判定会话失效并上报事件 | profile=%s | 连续失败=%d",
+            profile, failures,
+        )
+    except Exception as exc:  # noqa: BLE001 - 计数闭环失败不阻断请求
+        logger.debug("认证失败计数写入失败（忽略）: %s", exc)
+
+
 def _record_payload_footprint(
     ctx: RunContext[RequesterDeps],
     endpoint: str,
@@ -254,6 +367,12 @@ async def pw_send_payload(
 
     is_tls = port == 443 or effective_target.startswith('https://')
     proxy_url = ctx.deps.proxy_url
+
+    # 语义解析：未指定（None/"") → 默认复用 default 会话；__anonymous__ → 显式匿名。
+    # default 会话不存在时降级匿名，保证与改造前行为一致。
+    # 解析结果同时用于 storage_state 定位与 Playwright 会话缓存键，
+    # 避免 None（匿名）与 "default" 落到不同会话实例导致 cookie 不继承。
+    auth_profile = resolve_auth_profile(effective_target, auth_profile)
 
     # Resolve optional saved auth profile -> Playwright storage_state file.
     auth_storage_state_path: str | None = None
@@ -375,6 +494,14 @@ async def pw_send_payload(
             auth_used=auth_profile is not None,
             responses=responses,
         )
+
+        # 请求后认证失效闭环：仅在本次确实用了凭据时统计。连续 N 次
+        # 401/302→login 且此前曾有成功响应，才升级为 auth_invalid 事件，
+        # 避免把靶场正常的鉴权响应（如越权测试的预期 401）误判为会话失效。
+        if auth_profile:
+            _track_auth_failure(
+                ctx, auth_profile, failed=_detect_auth_failure(responses)
+            )
 
         # Convert bytes responses to strings before truncation
         string_responses = []

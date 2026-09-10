@@ -176,6 +176,35 @@ Tenant / User / Target / Task / ApprovalRequest / Finding / AuditEvent / TaskEve
 - 统一异常处理：`core/exceptions.py` 注册 HTTP 映射。
 - Schema 校验：`schemas/` 下 Pydantic（task 含 `PlanStep`/`TaskLiveState`/`TaskInstructionIn`/`TaskUsage`/`UsageSummary`）。
 
+## 工具参数契约：`auth_profile`（2026-09-10 统一）
+
+宿主侧请求类工具（`pw_send_payload`、`browser_run_steps`）的 `auth_profile` 入参语义经
+`auth_resolver.resolve_auth_profile(target, auth_profile)` 统一解析，**变更点如下**：
+
+| 入参值 | 解析结果 | 说明 |
+|---|---|---|
+| 未传 / `None` / `""` | `default`（会话不存在则 `None`） | **默认复用任务内统一会话**（改造前默认匿名） |
+| `"__anonymous__"` | `None` | 显式匿名，用于认证态 vs 匿名态对照验证 |
+| `"default"` 或其他具名值 | 原样 | 指定 profile；`default` 不存在时降级匿名 |
+
+- **向后兼容**：`default` 会话不存在时降级为匿名，等价于改造前行为，既有匿名用例不回归。
+- **缓存键约束**：解析后的规范名参与 `pw_session_manager` 会话缓存键；匿名分支使用
+  `{session_key}::auth=__anonymous__`，与认证态实例隔离（避免匿名请求复用带凭据会话）。
+- **沙箱侧工具**：`read_auth_storage(ctx, profile="default", include_secrets=False)`。
+  `include_secrets=True` 返回含明文 cookie / `Authorization` 的完整 `AuthContext`
+  （`context.model_dump_json()`），仅限 shell / python_interpreter 沙箱路径使用；
+  `ctx` 必须传带 `target`/`agent_id`/`session_id` 的依赖对象（`RequesterDeps`），
+  传字符串仅走 legacy 索引（无新路径、无明文）。
+- **新增认证相关 fact 契约**（写 `recon_facts`，category=`authentication`）：
+  - `key="auth_required_detected"`：匿名探测发现需认证端点但任务无可用会话（source=`pre_recon`），
+    驱动 supervisor 考虑以默认口令委派 authenticator。
+  - `key="auth_invalid:<profile>"`：连续 3 次请求返回 401/403 或重定向登录页**且此前曾成功**
+    （`details.consecutive_failures` / `details.first_success_baseline` /
+    `details.action="validate_then_refresh_or_reauth"`），supervisor 据此委派 authenticator。
+- **`AuthContext.metadata` 新增字段**（可用性真源，落盘）：`consecutive_auth_failures`（连续失败计数）、
+  `first_success_baseline`（首次成功时间戳，阈值触发前提）、`auth_invalid_reported_at`（防重复上报）。
+- **pre_recon 返回结构新增字段**：`auth_required_detected: bool`。
+
 ## 本地 RECON 旁路落库（运行期）
 侦察/利用阶段产物在 agent 运行期旁路写入本地 SQLite（非 PG 主库），供后续任务快速建立认知：
 - 路径（任务级单一库）：`~/.pobi_v2/tasks/<task_id>/<task_id>.db`。侦察与利用阶段产物共用此单一库，以不同表（`recon_sessions` / `recon_facts` / `recon_endpoints` / `recon_techniques` / `recon_threats`）区分，不再使用 `recon/` 子目录。

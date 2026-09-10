@@ -1,6 +1,26 @@
-This tool returns the raw `storage.json` captured by Playwright sessions.
-Always run this tool to gather the information for the current session and authentication information. 
-Use cases:
-- Retrieve saved cookies/tokens before calling `run_python_file`.
-- Share session auth artifacts with the Python interpreter so generated code can reuse authenticated contexts.
-- Inspect/parse stored credentials or CSRF tokens when crafting follow-up requests.
+Read a saved authentication context (cookies / localStorage / Authorization headers).
+
+Arguments:
+- `profile` (str): profile name. Default `"default"` is the task-wide session
+  produced by pre-authentication or the authenticator agent. Use it unless you
+  deliberately need a different profile.
+- `include_secrets` (bool): **set to `true` when you need the real cookie /
+  token values to inline into sandbox commands or generated code**. When
+  `false` (default) only a secret-free summary is returned (cookie names,
+  storage keys, header names) — useful for inspection but NOT enough to
+  authenticate a request.
+
+Call `include_secrets=true` before generating requests, e.g.:
+- build a `Cookie` header for `curl -b` / `curl -H`
+- seed a `requests.Session` / `httpx.Client` in generated Python
+- reuse an `Authorization: Bearer ...` header
+
+Rules when secrets are returned:
+- Use the values ONLY to build requests against the authorized target.
+- NEVER write credential values into report bodies, memory summaries, or task
+  artifact files.
+- NEVER echo credential values in your `detailed_summary` / `proofs` output
+  fields — refer to them as e.g. "session cookie" instead.
+
+If the result is `{"available": false}`, no session is stored for that profile:
+do not fabricate credentials, and instead report that authentication is needed.

@@ -43,7 +43,10 @@ class PlaywrightSessionManager:
         Returns:
             PlaywrightRequester: Session instance
         """
-        cache_key = f"{session_key}::auth={auth_profile}" if auth_profile else session_key
+        # 认证态与匿名态必须落到不同缓存键：匿名请求复用带凭据的会话会污染
+        # 对照验证（越权/未授权类漏洞依赖「同请求的认证态 vs 匿名态」差异）。
+        # 匿名分支显式加 ::auth=anonymous 后缀，不再回退裸 session_key。
+        cache_key = f"{session_key}::auth={auth_profile or '__anonymous__'}"
         async with cls._lock:
             if cache_key not in cls._instances:
                 cls._instances[cache_key] = PlaywrightRequester(

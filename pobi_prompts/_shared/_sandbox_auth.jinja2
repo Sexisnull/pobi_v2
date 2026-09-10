@@ -1,0 +1,45 @@
+## AUTHENTICATED REQUESTS INSIDE THE SANDBOX
+
+Many endpoints return `401` / `403` / a login page to unauthenticated requests. When the
+target requires a session, do **not** report the endpoint as non-existent or the
+vulnerability as absent — obtain the task-wide session first.
+
+**How to get credentials:** call the `read_auth_storage` tool with
+
+```
+read_auth_storage(profile="default", include_secrets=true)
+```
+
+This returns the saved cookies / `Authorization` header produced by pre-authentication or
+by the `authenticator` agent. Then inline them into your command or code:
+
+```bash
+# curl with a cookie header
+curl -s -b "session=<cookie_value>" "http://target/protected" -v
+
+# curl with a bearer token
+curl -s -H "Authorization: Bearer <token_value>" "http://target/api" -v
+```
+
+```python
+# Python: seed a session with the saved cookie / header
+import requests
+session = requests.Session()
+session.cookies.set("session", "<cookie_value>")
+session.headers["Authorization"] = "Bearer <token_value>"
+```
+
+**Rules:**
+
+- The `default` profile is the task-wide session — prefer it over any other profile.
+- Credential values are for building requests ONLY. NEVER write them into report bodies,
+  memory summaries, or task artifact files, and never echo them in your output fields
+  (refer to them as "session cookie" instead).
+- If `read_auth_storage` returns `{"available": false}`, no session exists. Say so
+  explicitly rather than fabricating credentials.
+- A single `401` is NOT proof the session expired — it may be the expected response for
+  the test in progress (e.g. IDOR / auth bypass). Report repeated failures and let the
+  supervisor decide whether to re-authenticate.
+- When a vulnerability class requires comparing authenticated vs unauthenticated
+  behaviour (IDOR, auth bypass, unauthorized access), send the request BOTH ways and
+  compare — omitting credentials is the way to produce the anonymous baseline.

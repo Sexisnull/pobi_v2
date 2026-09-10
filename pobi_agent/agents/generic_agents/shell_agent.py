@@ -14,7 +14,7 @@ from pydantic_ai import Tool, DeferredToolRequests, DeferredToolResults
 from pydantic_ai.usage import RunUsage, UsageLimits
 from pobi_agent.config.settings import ModelSpec
 from pobi_agent.agents.factory import AgentRunner, AgentOutput
-from pobi_agent.tools import sandboxed_shell_tool
+from pobi_agent.tools import read_auth_storage, sandboxed_shell_tool
 from pobi_prompts import render_agent_instructions, render_tool_description
 
 
@@ -43,6 +43,10 @@ class ShellAgent(AgentRunner):
     ):
         tools_metadata = {
             "sandboxed_shell_tool": render_tool_description("sandboxed_shell_tool"),
+            # 沙箱明文通道（2026-09-10，路线 B）：shell 与 python 共用同一 Kali
+            # 容器，凭据口径一致。注册后模型可主动取 cookie / Authorization
+            # 并内联进 curl -b/-H，而非只能盲发匿名请求。
+            "read_auth_storage": render_tool_description("read_auth_storage"),
         }
 
         self.instructions = render_agent_instructions(
@@ -56,7 +60,10 @@ class ShellAgent(AgentRunner):
             instructions=self.instructions,
             deps_type=deps_type,
             output_type=[ShellOutput, DeferredToolRequests],
-            tools=[Tool(sandboxed_shell_tool, requires_approval=requires_approval)],
+            tools=[
+                Tool(sandboxed_shell_tool, requires_approval=requires_approval),
+                Tool(read_auth_storage, requires_approval=requires_approval),
+            ],
             phase=phase,
         )
 

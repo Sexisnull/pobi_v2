@@ -1427,6 +1427,24 @@ class ReconStore:
                     )
                 )
             ).scalars().all()
+            # 2026-09-10：认证态禁止跨任务复用（架构约定：每次任务重新发起认证）。
+            # PG 沉淀中的 authentication 类 fact 多为上一任务的瞬时结论，却带
+            # confidence=1.0：实测出现过 "authenticated session available" 但会话目录为空、
+            # "全部凭据均无效" 与事实相反。回灌会让新任务带着错误前提开工。
+            _AUTH_KEYS_EXCLUDED = {
+                "auth_profile",
+                "auth_mode",
+                "auth_status",
+                "authenticator_summary",
+                "authenticator_proofs",
+            }
+            fact_aggs = [
+                f
+                for f in fact_aggs
+                if getattr(f, "category", None) != "authentication"
+                and not str(getattr(f, "key", "")).startswith("auth:")
+                and str(getattr(f, "key", "")) not in _AUTH_KEYS_EXCLUDED
+            ]
             threat_aggs = (
                 await pg.execute(
                     select(ReconThreatAgg).where(

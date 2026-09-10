@@ -9,10 +9,12 @@ vulnerability assessment, and exploit development, then executes the code in the
 container used for shell-based attack operations).
 """
 from typing import Any
+import json
 from pydantic_ai import Tool, DeferredToolResults
 from pydantic_ai.usage import RunUsage, UsageLimits
 from pobi_agent.config.settings import ModelSpec
 from pobi_agent.agents.factory import AgentRunner, AgentOutput
+from pobi_agent.logging import logger
 from pobi_agent.tools import read_auth_storage, run_python_file
 from pobi_prompts import render_agent_instructions, render_tool_description
 
@@ -51,7 +53,7 @@ class PythonInterpreterAgent(AgentRunner):
             tools: Optional list of additional tools (defaults to run_python_file).
         """
         tools_metadata = {
-            # "read_auth_storage": render_tool_description("read_auth_storage"),
+            "read_auth_storage": render_tool_description("read_auth_storage"),
             "run_python_file" : render_tool_description("run_python_file"),
 
         }
@@ -68,6 +70,7 @@ class PythonInterpreterAgent(AgentRunner):
             deps_type=deps_type,
             output_type=PythonInterpreterOutput,
             tools=[
+                Tool(read_auth_storage),
                 Tool(run_python_file),
             ]
         )
@@ -82,6 +85,7 @@ class PythonInterpreterAgent(AgentRunner):
         deferred_tool_results: DeferredToolResults | None = None,
         *args,
         session_key: str | None = None,
+        auth_deps: Any | None = None,
         **kwargs
     ):
         """Execute the agent with a user prompt and optional memory handling.
@@ -97,16 +101,34 @@ class PythonInterpreterAgent(AgentRunner):
             usage: Optional usage tracking information.
             usage_limits: Optional usage limits for the execution.
             deferred_tool_results: Optional deferred tool results from previous runs.
-            memory: Optional memory handler for persisting execution results.
+            session_key: Legacy session key (host:port)，仅用于旧目录兼容回退。
+            auth_deps: 承载 target/agent_id/session_id 的依赖对象（``RequesterDeps``），
+                用于经 ``AuthContextHandler`` 定位 tasks/<task_id>/agent/auth_context/
+                下的新路径会话。``deps`` 本身是 ``MemoryWorkspaceDeps``，不含这些字段。
         
         Returns:
             AgentRunResult containing the PythonInterpreterOutput with execution results.
         """
-        if session_key:
-            auth_info = await read_auth_storage(ctx=session_key)
+        # 沙箱明文通道（2026-09-10，路线 B）：按 RequesterDeps 定位
+        # tasks/<task_id>/agent/auth_context/default.json 并取明文，
+        # 使模型能把 cookie / Authorization 内联进生成的 Python 代码。
+        # 此前传的是字符串 session_key，会走 legacy 分支读旧目录 → 恒返回
+        # available=False；且 include_secrets 未显式开启，取不到明文。
+        auth_info = json.dumps({"available": False, "note": "no auth deps provided"})
+        try:
+            if auth_deps is not None:
+                auth_info = await read_auth_storage(
+                    ctx=auth_deps, profile="default", include_secrets=True
+                )
+            elif session_key:
+                # 退化路径：无 auth_deps 时只能走 legacy 索引（无明文）。
+                auth_info = await read_auth_storage(ctx=session_key)
+        except Exception as exc:  # noqa: BLE001 - 凭据注入失败不阻断代码生成
+            logger.warning("read_auth_storage 注入失败（忽略）: %s", exc)
+            auth_info = json.dumps({"available": False, "error": str(exc)})
         prompt_with_auth = f"""\
 # Authentication, cookies and other information retrieved from previous tasks
-{str(auth_info)}
+{auth_info}
 # Objective and context
 {prompt}
 """
