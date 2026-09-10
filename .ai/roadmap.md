@@ -3,6 +3,7 @@
 > **以源码为准**。本文件是演进计划的唯一清单：早期引用的 `docs/PROJECT_GOAL.md`（§2.4 工程治理 / §2.5 扫描内核优化）**该文件已不存在**，其条目已内联至下方「待办」的 A1–A7 与 S1–S6，勿再按原路径引用。
 
 ## 已落地（本轮更新确认）
+- [x] **人工干预指令通道 P0 修复（2026-09-10，运行期指令注入审计）**：审计确认「对话框发得出、后端存得下、Agent 永远读不到」——写入 key=task_id、消费 key=agent_id（恒不匹配）；指令拼入无消费方的局部变量 `exploit_context`；威胁建模阶段无检查点。修复：① 消费统一 `self.session_id`；② 注入改走 `ContextEngine.add_operator_instruction` → `get_unified_context` SECTION 1.5（最高优先级，supervisor 每轮重建必然看到）；③ `threat_model` 冷启动 + 运行中双检查点；④ `scan_workflow` 回退路径每轮检查点；⑤ 异常分级 warning + 连续失败计数。测试 `tests/test_instruction_channel.py` 9 项 + 全量 148 passed / 1 skipped。
 - [x] **threat_model 注入 covered_block（2026-09-09，威胁建模文档 B1）**：验证 `.ai/threat-model-context-efficiency.md` 问题 A/B 后实施第一优先修复。
   - **验证结论**：问题 A（上下文注入为与任务无关的确定性 top-N，`build_index_view` 的 `objective` 参数从未消费）与问题 B（threat_model 与 pre_recon 重复侦察）均成立，文档行号与结论和源码一致。补充发现：`executor.execute_supervisor` 已对所有 supervisor 注入 pre_recon JSON + 复用指引（`build_pre_recon_json`），threat_model 缺的是「历史任务已覆盖资产」硬约束（covered_block），B1 增量成立。
   - **B1 落地**：`_build_recon_prompt(task, covered_block="")` 支持注入 covered 清单 + 跳过规则；`threat_model`/`threat_model_stream` 复用该方法（消除原 536-563 与 `_build_recon_prompt` 完全重复的硬编码 prompt）并传 `_build_covered_block(token_budget=1000)`。生产链路 deadend_runner（seed → threat_model → run_exploitation）中 threat_model 阶段不再对历史已覆盖端点重复侦察。
@@ -133,6 +134,14 @@
   - [ ] **M4 威胁闭环**：executor 旁路补威胁创建入口（**复用** `upsert_threat` / `record_threat_status`，不重建状态机），利用阶段注入「待验证威胁清单」逐条推进状态机 → PG 同步 → 前端威胁列表。验收：真实任务 `recon_threats` 有 agent 自产记录，前端态势条非空。
   - **明确不做（红线）**：① 另起一套 L0/L1/L2 注入逻辑（已上线，只扩展 `build_index_view`）；② 给 `recon_http_transactions` 加 `(uri_template, body_md5)` 唯一索引去重（破坏 append-only 流水语义，去重只在 PG `recon_http_transactions_agg` 层）；③ 引入 LanceDB/Chroma（沿用 `SqliteRagConnector`，保持零外部依赖 + 任务隔离）；④ 新建独立 `memory_storage/` 目录（破坏任务隔离与 PG 聚合闭环）。完整红线见 `.ai/constraints.md`「上下文与记忆分层」条目。
 
+- [ ] **威胁建模上下文效率遗留项（源自 `.ai/threat-model-context-efficiency.md`，2026-09-10 评估）**：B1（注入 covered_block）+ B2（pre_recon 基线优先）已落地，以下问题 A、B3 及 executor 复用指引仍待度量后实施。
+  - [ ] **问题 A：上下文相关性选取（整体未动）**：`get_unified_context` / `build_index_view` 仍为「与当前子任务无关的确定性 top-N 截断」，非「相关性检索」。`build_index_view(task_id, objective="")` 的 `objective` 参数签名预留但函数体从未消费，仍是纯 `confidence` 排序前 N 条（文档 §1.2 / §6.1 核对 `store.py:692`）。
+    - [ ] **A1 相关性检索注入**：让 `build_index_view` 真正消费 `objective`，用 embedding/关键词对端点/事实/威胁做相似度排序取 top-N（可复用 `SqliteRagConnector`），根治「无关资产占预算 / 相关资产被裁」。
+    - [ ] **A2 分阶段动态预算**：`L1_TOKEN_BUDGET=500` / `L2_TOKEN_BUDGET=1500` 写死常量（`store.py:61-62`）改为按 phase 权重（recon 重 L1、exploit 重 L2）；需透传 phase 到 `get_unified_context` 的 7+ 调用点（executor/architecture/pobi_agent），侵入面大。
+    - [ ] **A3 按需 lazy 检索**：保留 L0 基线全注入，L1/L2 改为「索引 + 检索指令」，prompt 内引导 LLM 调 `query_recon(keyword)` 主动拉细节，彻底解除 top-N 截断信息丢失。
+  - [ ] **B3 两阶段侦察职责拆分**：明确契约 `pre_recon` 负责「资产发现」、`threat_model` 只做「基于已知资产的攻击面推理与排序」并禁止广谱爬取类请求；从设计上消除重叠（supervisor prompt 契约层变更，影响面最大，须先度量 threat_model 重复请求占比）。
+  - [ ] **executor 层复用指引升级**：`executor.execute_supervisor` 对全 supervisor 的「复用指引」目前仅针对 `historical_threats` 存在性验证，未改为「全基线优先」（影响 exploitation 阶段所有 supervisor），留待 B3 一并处理（文档 §6.5 遗留）。
+  - **前置度量（先度量后治理，文档 §4）**：在 `deadend_runner.py` 各 phase 边界落 `duration_ms` + `prompt_tokens`；统计 threat_model 子 agent 请求与 pre_recon 已落库端点重叠比例（>30% 则 B 收益可观）、`get_unified_context` 注入 token 中与当前 task 无关占比（高则 A1 收益可观）。
 - [ ] **manual 认证分支残留清理（2026-09-01 依源码校正确认）**：手动登录分支已搁置，残留物未清理——① ~~`webapp/src/pages/Tasks.jsx` 的 `auth_mode === 'manual'` 渲染分支与表单选项~~ **已于 2026-09-02 注释**（hint 同步更新）；② `webapp/src/components/AuthPanel.jsx`（随搁置未启用，手动状态/函数/UI 已注释，保留状态展示）；③ `pobi_v2/engine/preauth.py` 的 `ManualAuthSession` 及相关函数注释块；④ `tests/test_preauth.py` 的 `test_manual_session_ttl_*` 注释用例。
   - **决策点**：永久放弃手动分支 → 删除 ①②③④；计划重启（MFA / 验证码场景）→ 保留 ③ 作设计参考，仅清理 ①② 死代码，且重启前须先解决多 worker 下进程内注册表失效问题。
 

@@ -127,6 +127,7 @@ engine/scan_tools.py 越权拦截                    ┘
 | SECTION | 内容 | 截断语义 |
 |---|---|---|
 | 1 | Target + Goal（`:642`） | 全量 |
+| 1.5 | **OPERATOR INSTRUCTIONS（人工干预指令，P0 修复 2026-09-10 新增）**：用户经任务控制台追加的运行期指令，`StructuredContext.operator_instructions`（最多 8 条、每条 300 字符，`add_operator_instruction` 写入） | 裁剪：只留最近 8 条；不在 deprioritized 删除列表，硬截断从尾部开始，指令优先保留 |
 | 2 | FLAG/EXPLOIT FOUND 复现步骤（`:650`） | 全量 |
 | 3 | COMPLETE TEST HISTORY（按 endpoint 分组的全部 executions，`:677`） | **无截断**（注释 `exhaustive, no truncation`） |
 | 4 | KEY DISCOVERIES（finding/technology/attack_vector/feature，`:708`） | **无截断**（注释 `full text, no truncation`） |
@@ -138,6 +139,22 @@ engine/scan_tools.py 越权拦截                    ┘
 
 > **SECTION 3/4 是主膨胀源**：随任务推进线性增长且全文入 prompt，`max_tokens` 未作用于这两块。
 > **SECTION 7 已提供「最近 5 条 insights」注入**（读内存 `thoughts`），故「摘要注入」并非从零缺失——缺的是落盘摘要与注入之间的**结构化桥梁**（见下）。
+
+### 人工干预指令流（2026-09-10 P0 修复）
+
+```
+[前端 TaskConsole] POST /api/v1/tasks/{id}/instructions
+   └─ routers/instruction.py  queue_instruction(str(task.id))      ← key = task_id
+        └─ instruction_channel.py（memory/redis per-task 队列）
+             └─ 消费端（三处检查点，key 一律 session_id == task_id）：
+                  ① pobi_agent.run_exploitation 的 adapt_agent 事件循环
+                  ② pobi_agent.threat_model 冷启动（拼入 agent_context）+ 运行中事件循环
+                  ③ scan_workflow.run_exploitation 每轮迭代（回退路径）
+                      └─ ContextEngine.add_operator_instruction → StructuredContext.operator_instructions
+                           └─ get_unified_context SECTION 1.5（supervisor 每轮重建必然包含）
+```
+
+**硬约束**：消费 key 必须 `session_id`（== task_id），**禁止**用 `agent_id`（本地持久化独立 UUID，恒不等于 task_id）；指令注入**必须**进 ContextEngine（OPERATOR INSTRUCTIONS section），**禁止**拼接 `exploit_context` 局部变量（该变量仅用于 `planner.expand` 首轮，无下游读取）。
 
 ### 长期记忆（已上线，勿重复建设）
 
