@@ -533,34 +533,10 @@ class DeadEndAgent:
 
         validation_token: str = ""
 
-        prompt_task = f"""
-Prepare the necessary information (reconnaissance) to achieve the following task: {task}
-
-Focus on gathering ONLY the information needed for this specific task. Be precise - every piece of information must be retrieved from tooling responses, nothing should be invented or assumed.
-
-What to discover:
-- Endpoints relevant to the task and how to use them
-- What data/parameters each endpoint needs
-- Authentication requirements (which endpoints need auth, which don't)
-- Session management and authentication mechanisms
-- Any suspicious or interesting behavior related to the task
-
-Critical rules:
-- Do NOT use nmap or similar scanning on localhost (127.0.0.1)
-- Make requests to the target and analyze responses
-- Follow forms, links, and endpoints to discover relevant information
-- Extract endpoints, authentication info, and secrets from actual tool responses
-- Do NOT invent or guess endpoints - only use what is discovered
-- Return when you have gathered sufficient information to proceed with the task
-
-AUTHENTICATION IS PART OF RECON (mandatory when the target requires login):
-- If any endpoint requires authentication, you MUST establish the session during this phase.
-- Call the `authenticate` tool to log in (e.g. DVWA-style: `auth_flow="form"`, `auth_type="session_cookie"`),
-  and persist the result as an AuthContext profile (e.g. `profile="target_session"`).
-- The returned `auth_profile` name MUST be recorded in your recon output so that all later
-  detection and exploitation steps reuse the same authenticated session via `auth_profile="<profile>"`.
-- Do NOT proceed to later phases with only an anonymous session when the task endpoint needs auth.
-"""
+        # 已覆盖资产清单（第三阶）：威胁建模阶段同样跳过历史已覆盖资产的重复侦察。
+        # 无历史覆盖/渲染失败时为空串（_build_recon_prompt 直接忽略）。
+        covered_block = self._build_covered_block(token_budget=1000)
+        prompt_task = self._build_recon_prompt(task, covered_block=covered_block)
 
         # Create a simple task node for the threat model
         task_node = TaskNode(
@@ -670,7 +646,9 @@ IMPORTANT:
             yield self.stop_result.reporter_output
             return
 
-        prompt_task = self._build_recon_prompt(task)
+        # 已覆盖资产清单（第三阶）：威胁建模阶段同样跳过历史已覆盖资产的重复侦察。
+        covered_block = self._build_covered_block(token_budget=1000)
+        prompt_task = self._build_recon_prompt(task, covered_block=covered_block)
         task_root = TaskNode(
             task=prompt_task,
             depth=0,
@@ -723,13 +701,33 @@ IMPORTANT:
     # 共享提示词构造：消除各 workflow 方法中的重复硬编码 prompt 段
     # ------------------------------------------------------------------ #
     @staticmethod
-    def _build_recon_prompt(task: str) -> str:
-        return f"""
+    def _build_recon_prompt(task: str, covered_block: str = "") -> str:
+        """构建威胁建模（recon 阶段）supervisor 任务单。
+
+        Args:
+            task: 当前安全测试目标任务。
+            covered_block: 历史任务已覆盖资产清单（build_covered_block 渲染）；
+                非空时追加「跳过重复工作」硬约束，避免对已覆盖端点重复侦察。
+        """
+        prompt = f"""
 Prepare the necessary information (reconnaissance) to achieve the following task: {task}
+
+## Pre-recon baseline FIRST
+Your supervisor prompt already includes a `<pre_recon_json>` block with the platform's automated pre-reconnaissance baseline:
+target / fingerprint (server, backend, frontend, cms) / WAF / site_overview (known endpoints, auth-required endpoints, input points, tech stack) / historical_threats (previously modeled vulnerabilities).
+
+**Workflow - judge first, request only gaps:**
+1. Judge whether the baseline ALREADY satisfies this task's threat modeling needs:
+   - Are the relevant endpoints and how to use them known?
+   - Are authentication requirements known?
+   - Is the attack surface / candidate vulnerability space sufficiently defined?
+2. Request the target ONLY for gaps the baseline does not cover, or for NEW attack surfaces not present in it.
+3. Do NOT re-request endpoints, fingerprints, or WAF conclusions already in the baseline (or in the covered assets list below).
+4. In your final output, state which gaps (if any) required new requests.
 
 Focus on gathering ONLY the information needed for this specific task. Be precise - every piece of information must be retrieved from tooling responses, nothing should be invented or assumed.
 
-What to discover:
+What to discover (only when missing from the baseline):
 - Endpoints relevant to the task and how to use them
 - What data/parameters each endpoint needs
 - Authentication requirements (which endpoints need auth, which don't)
@@ -738,11 +736,12 @@ What to discover:
 
 Critical rules:
 - Do NOT use nmap or similar scanning on localhost (127.0.0.1)
-- Make requests to the target and analyze responses
-- Follow forms, links, and endpoints to discover relevant information
+- PRIORITIZE the pre-recon baseline: make requests to the target ONLY when the baseline is insufficient or a new attack surface is identified
+- Do NOT repeat requests for endpoints / fingerprints / WAF conclusions already listed in <pre_recon_json> or the covered assets
+- Follow forms, links, and endpoints only to fill gaps missing from the baseline
 - Extract endpoints, authentication info, and secrets from actual tool responses
 - Do NOT invent or guess endpoints - only use what is discovered
-- Return when you have gathered sufficient information to proceed with the task
+- Return when the baseline (plus any gap-filling requests) is sufficient to proceed with the task
 
 AUTHENTICATION IS PART OF RECON (mandatory when the target requires login):
 - If any endpoint requires authentication, you MUST establish the session during this phase.
@@ -752,6 +751,16 @@ AUTHENTICATION IS PART OF RECON (mandatory when the target requires login):
   detection and exploitation steps reuse the same authenticated session via `auth_profile="<profile>"`.
 - Do NOT proceed to later phases with only an anonymous session when the task endpoint needs auth.
 """
+        if covered_block:
+            prompt += f"""
+
+{covered_block}
+### 跳过重复工作规则（历史任务已覆盖，禁止重复劳动）
+- 上述「已覆盖资产」来自同一授权目标的历史任务沉淀。除非本任务目标明确指向它们，禁止重复扫描、重复枚举、重复验证。
+- 已确认/已利用的漏洞直接引用历史 evidence 作为依据，不再重复尝试利用验证。
+- 聚焦新增资产与未测试攻击面；如需变更结论，必须先说明与历史记录的差异。
+"""
+        return prompt
 
     def _build_report_prompt(self, context: str, intro: str) -> str:
         return f"""\

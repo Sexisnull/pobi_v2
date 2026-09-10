@@ -4,17 +4,17 @@
 > - **问题 A**：`get_unified_context()` 是"全量注入"还是"按需检索"？
 > - **问题 B**：`threat_model` 阶段是否重复做了 `pre_recon` 已完成的侦察？
 >
-> 性质：代码探查 + 根因分析 + 顶层方案设计。**不含任何代码实现改动。**
+> 性质：代码探查 + 根因分析 + 顶层方案设计。**B1（2026-09-09）、B2（2026-09-10）已验证并实施**（见 §6）；A1/A2/B3 仍为方案设计，待度量后实施。
 > 探查基于 `pobi_agent/context/context_engine.py`、`pobi_agent/recon/store.py`、`pobi_agent/pobi_agent.py` 当前实现。
 
 ---
 
 ## 0. 结论速览（先给结论）
 
-| 问题 | 上一轮判断 | 探查后修正结论 |
-|------|-----------|---------------|
-| **A. 上下文全量 vs 按需** | "似乎把沉淀全量拼进 prompt，会撑大 token、截断关键资产" | **部分正确但机制判断偏了**：已有分层预算 + `max_tokens` 截断保护，不会无限膨胀；**真正问题是"确定性 top-N 截取，不做相关性检索"**——注入内容与"当前子任务在做什么"无关，导致无关资产占用预算、相关资产被裁掉。 |
-| **B. threat_model 重复侦察** | "威胁建模没消费 pre_recon，空想计划" | **该判断已推翻**（见历史对话）。真实情况是：资产已通过 `get_unified_context` 流入 LLM；**但 `threat_model` 与 `run_exploitation` 的 supervisor prompt 都命令 LLM"用工具去侦察"，而 `pre_recon` 已是平台层自动侦察 —— 两阶段各自做一次侦察，存在重复劳动。** 且 `covered_block`（跳过重复工作）**只注入到 `run_exploitation`，未注入 `threat_model`**。 |
+| 问题 | 上一轮判断 | 探查后修正结论 | 状态 |
+|------|-----------|---------------|------|
+| **A. 上下文全量 vs 按需** | "似乎把沉淀全量拼进 prompt，会撑大 token、截断关键资产" | **部分正确但机制判断偏了**：已有分层预算 + `max_tokens` 截断保护，不会无限膨胀；**真正问题是"确定性 top-N 截取，不做相关性检索"**——注入内容与"当前子任务在做什么"无关，导致无关资产占用预算、相关资产被裁掉。 | 验证成立；A1/A2 待度量后实施 |
+| **B. threat_model 重复侦察** | "威胁建模没消费 pre_recon，空想计划" | **该判断已推翻**（见历史对话）。真实情况是：资产已通过 `get_unified_context` 流入 LLM；**但 `threat_model` 与 `run_exploitation` 的 supervisor prompt 都命令 LLM"用工具去侦察"，而 `pre_recon` 已是平台层自动侦察 —— 两阶段各自做一次侦察，存在重复劳动。** 且 `covered_block`（跳过重复工作）**只注入到 `run_exploitation`，未注入 `threat_model`**。补充：`executor.execute_supervisor` 已对所有 supervisor 注入 pre_recon JSON + 复用指引，threat_model 缺的是"历史任务已覆盖资产"的硬性跳过约束。 | 验证成立；**B1+B2 已实施**（§6） |
 
 **真正影响效率与速度的根因不是"有没有消费 pre_recon"，而是：**
 1. 上下文注入是**与当前任务无关的确定性 top-N**，而非"针对当前子任务的相关性检索"；
@@ -151,10 +151,10 @@ Critical rules:
 
 ### 2.5 解决方案（顶层，不实现）
 
-| 方案 | 描述 | 预期收益 | 改动量 |
-|------|------|---------|--------|
-| **B1. threat_model 注入 covered_block** | 把 `run_exploitation` 已有的 `{covered_block}` + "禁止重复枚举"规则，同样注入 `threat_model` 的 prompt（`pobi_agent.py:536` 处）。让威胁建模阶段"信任 pre_recon 结论，只在缺口处补探"。 | 消除 threat_model 对 pre_recon 已覆盖端点的重复请求，省一轮侦察时间。 | 小 |
-| **B2. pre_recon 结论作为 threat_model 的"只读基线"** | 在 `threat_model` 启动前，把 `pre_recon` 落库的端点/技术栈/WAF 结论以结构化"已知基线"块注入，并显式指令"这些已探明，仅对新发现的攻击面发起请求"。 | 让 LLM 从"重新侦察"转为"校验+补充"，轮次显著下降。 | 小 |
+| 方案 | 描述 | 预期收益 | 改动量 | 状态 |
+|------|------|---------|--------|------|
+| **B1. threat_model 注入 covered_block** | 把 `run_exploitation` 已有的 `{covered_block}` + "禁止重复枚举"规则，同样注入 `threat_model` 的 prompt（`pobi_agent.py:536` 处）。让威胁建模阶段"信任 pre_recon 结论，只在缺口处补探"。 | 消除 threat_model 对 pre_recon 已覆盖端点的重复请求，省一轮侦察时间。 | 小 | **已实施（2026-09-09，见 §6）** |
+| **B2. pre_recon 结论作为 threat_model 的"只读基线"** | 在 `threat_model` 启动前，把 `pre_recon` 落库的端点/技术栈/WAF 结论以结构化"已知基线"块注入，并显式指令"这些已探明，仅对新发现的攻击面发起请求"。 | 让 LLM 从"重新侦察"转为"校验+补充"，轮次显著下降。 | 小 | **已实施（2026-09-10，见 §6）** |
 | **B3. 两阶段侦察职责拆分** | 明确契约：`pre_recon` 负责"资产发现"（端点/技术栈/认证面），`threat_model` 只负责"基于已知资产做攻击面推理与优先级排序"，禁止 threat_model 发起广谱爬取类请求。 | 从设计上消除重叠，而非靠 prompt 约束。 | 中 |
 
 ---
@@ -188,3 +188,61 @@ A 与 B 并非独立：
 
 - `context-explosion-analysis.md`：上下文窗口超限（L2 重渲染无上限 + L3 跨轮累积无刹车），本文是其"内容选取策略"维度的补充。
 - `architecture.md` / `constraints.md`：若后续落地 A1/B3，涉及 supervisor prompt 契约与 recon 选取逻辑变更，应同步更新。
+- `roadmap.md`：B1 落地记录（2026-09-09）。
+
+---
+
+## 6. 验证结果与实施记录（2026-09-09）
+
+### 6.1 验证结论（源码核对）
+
+全部引用行号与结论已对照当前源码逐项核实，**无失实**：
+
+| 文档断言 | 源码核对 |
+|---------|---------|
+| `StructuredContext.get_unified_context` 固定 section + max_tokens 预算（context_engine.py:642-835） | ✅ 642 定义，811-834 预算删除与硬截断 |
+| `ContextEngine.get_unified_context` 挂载 RECON 块（1132-1176） | ✅ 1132 定义、1156-1161 挂载、1163 `_build_recon_index_block` |
+| `build_index_view` 的 `objective` 参数形同虚设（store.py:692-798） | ✅ 692 签名含 `objective`，函数体零消费；`_build_recon_index_block` 调用亦未传 |
+| L1/L2 预算写死常量（store.py:61-62） | ✅ `L1_TOKEN_BUDGET=500` / `L2_TOKEN_BUDGET=1500` |
+| threat_model prompt 命令主动侦察（pobi_agent.py:536-563） | ✅ "Make requests to the target" / "Follow forms, links, and endpoints" |
+| covered_block 仅注入 run_exploitation（831/905/1087） | ✅ 831（run_exploitation）、925（start_testing_stream，文档原写 905 为 `_build_covered_block` 调用行，注入点实为 925）、1087（start_supervisor） |
+| threat_model 无 covered_block | ✅ 536-563 prompt 无占位符；`execute_supervisor` 仅传 `agent_context=target_context` |
+
+**补充发现（文档未覆盖）**：`executor.py:1076-1097` 的 `execute_supervisor` 已对**所有** supervisor（含 threat_model）注入 `build_pre_recon_json` 结构化块（指纹/WAF/端点综述/历史威胁）+ 复用指引（"禁止对已有结论的端点做重复全量侦查"）。因此 threat_model 并非"完全看不到 pre_recon"，缺的是**历史任务已覆盖资产（covered_endpoints/techniques/threats）的结构化清单 + 硬性跳过规则**——B1 增量仍成立。
+
+**生产链路确认**：`deadend_runner.py:454-480` 在 threat_model **之前**执行 `seed_from_pg` + `seed_local_artifacts`（任务级单库 `tasks/<id>/<id>.db`，与 agent 内 `ReconStore.for_task` 同一路径）→ 490 `threat_model`（此前无 covered_block）→ 498 `run_exploitation`（有 covered_block）。B1 修复直接作用于真实主链路。
+
+### 6.2 B1 实施内容
+
+1. **`_build_recon_prompt(task, covered_block="")`**：covered_block 非空时追加 `### 跳过重复工作规则` 块（措辞与 start_supervisor 一致：禁止重复扫描/枚举/验证、已确认漏洞直接引用 evidence、聚焦新增攻击面）。
+2. **`threat_model`**：`prompt_task` 改为 `self._build_recon_prompt(task, covered_block=self._build_covered_block(token_budget=1000))`；同时消除原 536-563 与 `_build_recon_prompt` 完全重复的硬编码 prompt。
+3. **`threat_model_stream`**：同步注入 covered_block。
+
+### 6.3 测试与验证
+
+- `tests/recon/test_prompt_skip.py` 新增 2 项：`test_recon_prompt_without_covered_block_unchanged`（无覆盖时行为不变）、`test_recon_prompt_embeds_covered_block`（有覆盖时注入清单 + 跳过规则）。
+- recon 全量 109 passed / 1 skipped；`test_lookup_p99_under_50ms` 批量跑时环境波动（P99 89ms>50ms，单独重跑通过，与本次改动无关——该用例测 `store.lookup` SQLite 查询延迟，未触达 prompt 构建路径）。
+- `python -m py_compile` 通过。
+
+### 6.4 遗留（待度量后实施，见 §4 度量建议）
+
+| 方案 | 阻塞原因 |
+|------|---------|
+| A2 phase 动态预算 | L1/L2 预算需 phase 语义，`get_unified_context` 有 7+ 调用点（executor/architecture/pobi_agent），全部透传 phase 侵入面大；收益未度量 |
+| A1 objective 相关性检索 | 需 embedding/关键词相似度排序，改动中等；收益（无关资产占比）未度量 |
+| B3 两阶段职责拆分 | supervisor prompt 契约设计层变更，影响面最大，须先度量 threat_model 重复请求占比 |
+
+### 6.5 B2 实施记录（2026-09-10）
+
+**需求**：① agent 自行判断现有侦查结果是否满足威胁建模要求，不满足/认为有新攻击面时才新请求；② 优先使用前置侦查结果。
+
+**落地**：重写 `_build_recon_prompt`（threat_model / threat_model_stream 共用任务单）：
+- 新增 `## Pre-recon baseline FIRST` 工作流段：明确 supervisor prompt 已含 `<pre_recon_json>` 基线（target / fingerprint / WAF / site_overview / historical_threats），**先判断**（相关端点是否已知 / 认证要求是否已知 / 攻击面是否足够定义），**仅对基线缺口或新攻击面发起请求**；
+- Critical rules 从"Make requests to the target"改为"PRIORITIZE the pre-recon baseline: request ONLY when the baseline is insufficient or a new attack surface is identified"，并新增"Do NOT repeat requests for endpoints / fingerprints / WAF already in <pre_recon_json> or the covered assets"；
+- 输出要求标注"哪些缺口触发了新请求"（服务 §4 重叠率度量）。
+
+**数据侧无需改动**：pre_recon_json 已由 `executor.execute_supervisor`（executor.py:1076-1097）对所有 supervisor 注入，`build_pre_recon_json`（store.py:2017-2102）读时现算（target/fingerprint/waf/site_overview/historical_threats），threat_model 启动时序在 pre_recon 落库之后（`pobi_v2/engine/executor.py:358`）。
+
+**测试**：`tests/recon/test_prompt_skip.py` 新增 `test_recon_prompt_prioritizes_pre_recon_baseline`；recon 全量 89 passed / 1 skipped。
+
+**遗留**：executor 层"复用指引"仅针对 historical_threats（存在性验证），未改为全基线优先——因其影响 exploitation 阶段所有 supervisor，超出本次威胁建模范围，留待 B3 一并处理。

@@ -85,3 +85,42 @@ def test_start_testing_stream_includes_previous_context():
     text = Path(mod.__file__).read_text(encoding="utf-8")
     # start_testing_stream 补齐 previous_context：模板含 Previous Reconnaissance Results。
     assert text.count("## Previous Reconnaissance Results") >= 2
+
+
+# ---------------------------------------------------------------------------
+# B1: threat_model / threat_model_stream 注入 covered_block（历史覆盖跳过重复侦察）
+# ---------------------------------------------------------------------------
+
+
+def test_recon_prompt_without_covered_block_unchanged():
+    """无历史覆盖时 recon prompt 不注入跳过规则（保持原行为）。"""
+    prompt = DeadEndAgent._build_recon_prompt("test task")
+    assert "Prepare the necessary information" in prompt
+    assert "### 跳过重复工作规则" not in prompt
+
+
+def test_recon_prompt_embeds_covered_block(tmp_path):
+    """有历史覆盖时 recon prompt 注入 covered 清单与跳过规则。"""
+    agent = _lightweight_agent(tmp_path, seed=True)
+    block = agent._build_covered_block(token_budget=1000)
+    prompt = DeadEndAgent._build_recon_prompt("test task", covered_block=block)
+    assert "/login" in prompt
+    assert "CVE-2024-3001" in prompt
+    assert "### 跳过重复工作规则（历史任务已覆盖，禁止重复劳动）" in prompt
+    assert "禁止重复扫描、重复枚举、重复验证" in prompt
+
+
+# ---------------------------------------------------------------------------
+# B2: threat_model 基线优先 —— 判断缺口后才请求（2026-09-10）
+# ---------------------------------------------------------------------------
+
+
+def test_recon_prompt_prioritizes_pre_recon_baseline():
+    """recon prompt 以前置侦查基线优先：先判断缺口，仅对缺口/新攻击面发起请求。"""
+    prompt = DeadEndAgent._build_recon_prompt("test task")
+    assert "Pre-recon baseline FIRST" in prompt
+    assert "<pre_recon_json>" in prompt
+    assert "PRIORITIZE the pre-recon baseline" in prompt
+    assert "judge first, request only gaps" in prompt
+    assert "Request the target ONLY for gaps" in prompt
+    assert "Do NOT repeat requests for endpoints / fingerprints / WAF" in prompt

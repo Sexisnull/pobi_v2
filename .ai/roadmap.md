@@ -3,6 +3,16 @@
 > **以源码为准**。本文件是演进计划的唯一清单：早期引用的 `docs/PROJECT_GOAL.md`（§2.4 工程治理 / §2.5 扫描内核优化）**该文件已不存在**，其条目已内联至下方「待办」的 A1–A7 与 S1–S6，勿再按原路径引用。
 
 ## 已落地（本轮更新确认）
+- [x] **threat_model 注入 covered_block（2026-09-09，威胁建模文档 B1）**：验证 `.ai/threat-model-context-efficiency.md` 问题 A/B 后实施第一优先修复。
+  - **验证结论**：问题 A（上下文注入为与任务无关的确定性 top-N，`build_index_view` 的 `objective` 参数从未消费）与问题 B（threat_model 与 pre_recon 重复侦察）均成立，文档行号与结论和源码一致。补充发现：`executor.execute_supervisor` 已对所有 supervisor 注入 pre_recon JSON + 复用指引（`build_pre_recon_json`），threat_model 缺的是「历史任务已覆盖资产」硬约束（covered_block），B1 增量成立。
+  - **B1 落地**：`_build_recon_prompt(task, covered_block="")` 支持注入 covered 清单 + 跳过规则；`threat_model`/`threat_model_stream` 复用该方法（消除原 536-563 与 `_build_recon_prompt` 完全重复的硬编码 prompt）并传 `_build_covered_block(token_budget=1000)`。生产链路 deadend_runner（seed → threat_model → run_exploitation）中 threat_model 阶段不再对历史已覆盖端点重复侦察。
+  - 测试：`tests/recon/test_prompt_skip.py` 新增 2 项（无覆盖行为不变 / 有覆盖注入跳过规则），recon 全量 109 passed / 1 skipped；`test_lookup_p99_under_50ms` 批量跑时环境波动（单独重跑通过，与本次改动无关）。
+  - **遗留（待度量后实施）**：A2 phase 动态预算（L1/L2 预算写死常量，需 phase 语义透传 7+ 上下文调用点）、A1 objective 相关性检索、B3 两阶段职责拆分——均需先补 phase 级耗时与 token 度量（文档 §4）。
+- [x] **threat_model 基线优先改造（2026-09-10，威胁建模文档 B2）**：threat_model 任务单从"命令主动侦察"改为"前置侦查基线优先 → 自行判断缺口 → 仅缺口/新攻击面发起请求"。
+  - `_build_recon_prompt` 新增 `## Pre-recon baseline FIRST` 工作流段（先判断：相关端点/认证要求/攻击面是否已由 `<pre_recon_json>` 基线覆盖；仅对缺口或新攻击面请求；禁止重复请求基线/covered 资产中的端点/指纹/WAF；输出标注触发新请求的缺口），Critical rules 同步改为 PRIORITIZE baseline。数据侧无需改动（executor 已注入 pre_recon_json）。
+  - 测试：`tests/recon/test_prompt_skip.py` 新增 `test_recon_prompt_prioritizes_pre_recon_baseline`；recon 全量 89 passed / 1 skipped。
+  - **遗留**：executor 层"复用指引"仅针对 historical_threats，未改全基线优先（影响 exploitation 阶段所有 supervisor，留待 B3）。
+
 - [x] **agent 循环 P2 低危项修复（2026-09-09）**：循环收敛性外的三类健壮性修复。
   - **P2-1 role 序列净化**：`executor.py` 驱动循环在 `window_messages` 后剔除末尾 `role=="tool"` 消息——CoreAgent 因 `max_iterations=50` 自然退出且最后一条为 tool 结果时，窗口化后的 history 以 tool 结尾，下一轮 `messages=[..., tool, user]` 触发 API 400。测试 `test_driver_loop_strips_trailing_tool_message`。
   - **P2-2 字段名澄清**：`context["supervisor_history"]` 更名 `context["agent_context"]`（实际存的是入参 agent_context = unified_context + task_state + tasks_context，非驱动循环对话历史），`_build_validation_input` 同步读取；`ValidationInput.supervisor_history` 字段名保留（公共接口）。
