@@ -214,6 +214,47 @@ engine/scan_tools.py 越权拦截                    ┘
 - **M-L3b 刹车（零自研）**：`_DEFAULT_SUPERVISOR_LOOP_CONFIG` 经 `SupervisorLoopConfig.usage_limits` 透传 `UsageLimits(request_limit=40)`；框架层 `FallbackAgentResult`（UsageLimitExceeded 被 `AgentRunner` 捕获）触发即终止循环，立即止血。
 - **跨 ADaPT 轮持久**：`architecture.py` 外层 `while` 维护 `supervisor_history: list[dict]`，同 node 迭代间传递；换节点时重建空列表（节点间不复用，避免污染）。
 - **落库零改动**：`_add_agent_output_to_context` / `_persist_agent_summary` / `_register_auth_facts_in_context` 仍在 `_run_sub_agent` 内调用，findings 无回归。
+- **认证短路复用（2026-09-10）**：`_run_sub_agent` 在 `agent=authenticator` 时先经 `_reuse_existing_auth()` 读本地 `auth_context/index.json`；存在 `validated=true` 的会话（优先 `default`）则**直接返回复用结论、不进入 LLM**（`asyncio.to_thread` 读盘，异常降级为正常委派）。同时 supervisor 首轮 prompt 注入 `## 已有认证会话（已确认可用，禁止重复认证）` 区块。
+
+## 认证生命周期（2026-09-10 确立）
+
+认证分两段，职责严格分离，**认证态不跨任务复用**：
+
+| 阶段 | 执行者 | 落盘 profile | 触发时机 |
+|---|---|---|---|
+| 前置认证 | `PreAuthAgent`（任务创建期，平台固定调度，不经 supervisor 规划） | `preauth` | 任务启动、pre_recon 之前 |
+| 任务内认证 | `AuthenticatorAgent`（按需） | `default` | 会话实际失效时 |
+
+- **复刻链路**：`pobi_v2/engine/executor.py` 在 pre_recon 分支后调用 `AuthContextHandler.ensure_default_from_preauth()`，把 `preauth` 复刻为 `default` 作为任务内凭证的初始版本；此后过期只更新 `default`，**不回写 `preauth`**。
+  - **时序保障（2026-09-10）**：PreAuth 认证在 api 侧后台异步执行，与 worker 侧 `_run_task_body` 并行。复刻前经 `_wait_for_preauth_context()` 轮询等待 `preauth` 落盘（仅在 `task.auth_username` 存在且 `preauth` 缺失时等待，超时 `PREAUTH_WAIT_TIMEOUT` 降级保持原行为），避免抢跑导致 `default` 不存在、全部子 agent 降级匿名。
+- **禁止重复认证（三层防护）**：①驱动层短路（`_run_sub_agent`，硬边界）；②prompt 注入已有会话清单 + `supervisor.instructions.jinja2` 的 `AUTHENTICATION IS A PRECONDITION` 章节；③规划层 `planner.is_auth_subtask()` 在 `expand`/`update_plan` 丢弃认证类子节点。
+- **缓存 TTL**：消费侧 `auto_validate_before_consume`（`validate_refresh.py`）在 `validation_ttl_s=60s` 内直接放行，仅超时才发起网络探测。
+- **PG 沉淀过滤**：`recon/store.py seed_from_pg` 排除 `category=authentication` 与 `auth:` 前缀 fact，避免上一任务的瞬时认证结论污染新任务。
+
+### 凭据消费双通道（2026-09-10 确立）
+
+任务内所有请求路径默认复用 `default` 会话，按执行位置分两条消费通道：
+
+| 通道 | 消费者 | 凭据传递方式 | 明文可见性 |
+|---|---|---|---|
+| 宿主侧 | `requester`（`pw_send_payload` / `browser_run_steps`） | 工具层 `resolve_auth_profile()` 解析 profile → `AuthContextHandler.load_context` 物化 storage_state → `inject_headers_into_raw_request` 注入；raw_request 中可用 `<dummy_*>` 占位符，由 `replace_credential_placeholders` 自动替换 | **LLM 不可见明文** |
+| 沙箱侧 | `shell` / `python_interpreter`（共用同一 Kali 容器，`_get_shared_kali_sandbox`） | 模型主动调 `read_auth_storage(profile="default", include_secrets=true)` 取明文 → 内联进 `curl -b`/`-H` 或生成的 Python 代码 | **LLM 可见明文**（有意取舍，路线 B） |
+
+- **`auth_profile` 语义（`auth_resolver.resolve_auth_profile`，唯一解析点）**：`None`/`""` → `default`（会话不存在则降级匿名，保证既有匿名用例不回归）；`"__anonymous__"` → 匿名；具名值 → 原样。解析后的规范名同时用于 storage_state 定位与 `pw_session_manager` 缓存键，避免认证态与匿名态会话实例分裂。
+- **匿名对照保留**：越权/IDOR、认证绕过、未授权访问、CSRF/会话固定等漏洞类**必须**靠「认证态 vs 匿名态」差异确认，故不强制全认证；`__anonymous__` 是显式对照入口。
+- **失效闭环（请求后）**：`pw_send_payload` 在 `auth_used=True` 前提下，按 `_detect_auth_failure()`（401/403/407 或 3xx→登录页）连续计数至 `AUTH_FAILURE_THRESHOLD=3` 且存在 `first_success_baseline` 时，经 `context.add_discovered_fact(category="authentication", key="auth_invalid:<profile>")` 上报，supervisor 下一轮读取后委派 authenticator。单次 401 不触发（可能是业务语义，如越权测试的预期响应）。
+- **匿名探测的需登录感知**：`pre_recon._mark_auth_required_if_needed()` 在 `auth_mode` 非 `authenticated:*` 且站点观测到需认证端点时，写 `recon_facts`（`key="auth_required_detected"`）并回传 `auth_required_detected=true`，supervisor 据此可委派 authenticator 尝试默认口令。
+- **认证可用性真源**：`AuthContext.metadata`（磁盘），新增 `consecutive_auth_failures` / `first_success_baseline` / `auth_invalid_reported_at` 三字段。
+- **委派 prompt 认证注入（2026-09-10 补，ISSUE-011）**：`executor._build_auth_prefix` 为 `requester`/`shell`/`python_interpreter` 委派 prompt 注入「已有认证会话可用，auth_profile=[...]」提示，防止子 agent 匿名请求被 302 弹回后再手工构造登录（DVWA 缺 CSRF user_token 必失败）。**preauth（API 侧 `POST /auth/auto`）认证不注册 context authentication facts**（未走 `call_authenticator_agent`），故该提示构造必须**磁盘兜底**：context facts 为空时直接探测任务 `auth_context` 的 `default` 会话（`validated=true` 即注入）。preauth 路径下此注入是 requester 知晓可用会话的唯一来源；提示同时禁止手工构造登录请求、限定 `__anonymous__` 仅用于对照验证。
+
+## 规划树节点标识（node_id，2026-09-10 更名）
+
+`TaskNode` 是 ADaPT 分解树的节点，其身份字段由 `task_id` 更名为 **`node_id`**（父指针 `parent_task_id` → `parent_node_id`）。
+
+- **动因**：原字段名与平台 `Task.id` 同名，却在日志与事件中被当作"任务 ID"输出，排查时出现"一个任务有多个 task id"的误导（实测 `task_id=7bdb7a65` 经 API 查询返回"任务不存在"）。
+- **语义边界**：`node_id` 只在**同一平台任务内部**唯一，标识规划树节点，与平台 `Task.id`（`tasks` 表主键）无关。
+- **事件契约不变**：`emit_task_created(task_id=)` / `emit_plan_step(step_id=)` / `emit_task_status_changed(task_id=)` 的**字段名保持原样**（那是平台事件契约，前端 `PlanStep.step_id` 仅作字符串标识），仅把**取值来源**从 `node.task_id` 改为 `node.node_id`。
+- **同步范围**：`planner.py`、`architecture.py`、`pobi_agent.py`、`agents/components/executor.py` 及 `tests/test_adapt_loop.py`。
 
 ### 数据流
 

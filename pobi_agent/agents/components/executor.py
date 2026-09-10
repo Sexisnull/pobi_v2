@@ -3,6 +3,7 @@ import json
 import re
 from typing import Any, Literal, AsyncGenerator
 import asyncio
+from urllib.parse import urlparse
 from pydantic import BaseModel
 from pydantic_ai import DeferredToolResults, RunContext, UsageLimits, RunUsage, UsageLimitExceeded
 from pobi_agent.agents import (
@@ -58,6 +59,17 @@ _DEFAULT_SUPERVISOR_LOOP_CONFIG = SupervisorLoopConfig()
 # 导致后续轮次该子 agent 一调用即触顶、永久降级为 FallbackAgentResult。
 _SUB_AGENT_REQUEST_LIMIT = 200
 _SUB_AGENT_USAGE_LIMITS = UsageLimits(request_limit=_SUB_AGENT_REQUEST_LIMIT, tool_calls_limit=None)
+
+# 单轮 supervisor 决策允许的最大 LLM 请求数（2026-09-10）。正常决策只需 1~2 次
+# 请求（实测首轮 5 次迭代即产出决策）；留足 12 次余量以容纳少量 recon_lookup 后
+# 仍能收口，超过即由 UsageLimits 触发 FallbackAgentResult 终止该轮。
+_MAX_SUPERVISOR_ROUND_REQUESTS = 12
+
+# 单轮 supervisor 决策允许的最大 recon_lookup 调用次数（2026-09-10）。
+# supervisor 仅持此一个工具，实测会在单轮内连续调用 40+ 次反复检索同一批 facts
+# 而不产出 SupervisorDecision，导致单轮耗时 4~13 分钟、上下文膨胀至 30 万+ token
+# 且任务不推进。触顶后工具返回强制收口提示，迫使模型产出决策。
+_MAX_RECON_LOOKUP_PER_ROUND = 3
 
 
 class LogEvent(BaseModel):
@@ -772,6 +784,81 @@ class AgentExecutor:
                     )
 
             # Create tool functions using RunContext for agent delegation
+
+            def _build_auth_prefix(context_obj: Any, target: str | None = None) -> str:
+                """构造「已有认证会话可用」提示前缀（宿主侧工具用）。
+
+                authenticator 已落库 ``category="authentication"`` fact 时返回提示，
+                告知子 agent 传 ``auth_profile`` 复用会话而非重新登录。
+
+                磁盘兜底（2026-09-10，ISSUE-011）：preauth 在 API 侧完成认证时
+                （``POST /auth/auto``）不会经过 ``call_authenticator_agent``，
+                authentication facts 从未注册到 context，但 default 会话已落盘。
+                此时直接从任务 auth_context 检测有效（validated）会话，
+                否则 requester 对认证会话一无所知 → 匿名请求被 302 弹回、
+                再手工构造登录（DVWA 缺 CSRF user_token 必失败）→ XSS 验证失效。
+
+                无可用 fact / 无有效会话 / 异常时返回空串（零副作用）。
+                """
+                try:
+                    if context_obj is None:
+                        return ""
+                    auth_facts = [
+                        f for f in getattr(context_obj, "facts", {}).values()
+                        if getattr(f, "category", None) == "authentication"
+                    ]
+                    profiles: list[str] = []
+                    if auth_facts:
+                        profiles = sorted({
+                            str((f.details or {}).get("profile", "?"))
+                            for f in auth_facts
+                        })
+                    else:
+                        # 磁盘兜底：直接探测任务 auth_context 的有效会话。
+                        try:
+                            from pobi_agent.auth_resolver.auth_resolver import (
+                                AuthContextHandler,
+                                DEFAULT_PROFILE,
+                            )
+                            handler = AuthContextHandler(
+                                target=target or "", agent_id=None, session_id=None
+                            )
+                            ctx = handler.load_context(DEFAULT_PROFILE)
+                            if ctx is not None and (ctx.metadata or {}).get("validated") is True:
+                                profiles = [DEFAULT_PROFILE]
+                        except Exception as _disk_exc:  # noqa: BLE001
+                            logger.debug("认证会话磁盘探测失败（忽略）: %s", _disk_exc)
+                    if not profiles:
+                        return ""
+                    return (
+                        "\n[已有认证会话可用，auth_profile="
+                        f"{profiles}。访问受保护页面时：省略 auth_profile 参数即自动复用"
+                        " default 会话；显式 __anonymous__ 仅用于对照验证，验证后必须回到"
+                        " 认证态；禁止手工构造登录请求（如 POST login.php），"
+                        "登录动作由 preauth 会话承担且会因 CSRF 校验被拒。]\n"
+                    )
+                except Exception as _auth_exc:  # noqa: BLE001
+                    logger.debug("认证会话提示构造失败（忽略）: %s", _auth_exc)
+                    return ""
+
+            def _build_sandbox_auth_prefix(context_obj: Any, target: str | None = None) -> str:
+                """构造「沙箱凭据取用」提示前缀（shell / python_interpreter 用）。
+
+                沙箱路径与宿主侧机制不同：宿主侧靠 ``auth_profile`` 由工具层注入
+                （明文不过 LLM），沙箱侧靠模型自己调 ``read_auth_storage`` 取明文
+                再内联进 curl / Python 代码。故提示内容也不同。
+                """
+                base = _build_auth_prefix(context_obj, target=target)
+                if not base:
+                    return ""
+                return (
+                    base
+                    + "[沙箱路径] 需要认证态的请求：先调 read_auth_storage(profile="
+                    '"default", include_secrets=true) 取 cookie / Authorization，'
+                    "再内联进 curl -b/-H 或生成的 Python 代码。"
+                    "凭据仅用于构造请求，禁止写入报告正文、memory 摘要或落盘文件。\n"
+                )
+
             async def call_authenticator_agent(ctx: RunContext[SupervisorDeps], prompt: str) -> str:
                 """Call the authenticator agent to log in and persist a reusable auth context.
 
@@ -829,25 +916,10 @@ class AgentExecutor:
                     logger.debug("requester 足迹摘要注入失败（忽略）: %s", _fp_exc)
                 # 认证会话复用：authenticator 已落库 authentication facts 时，
                 # 告知 requester 已有可用 auth_profile，避免重复登录（ISSUE-002）。
-                auth_prefix = ""
-                try:
-                    if ctx.deps.context is not None:
-                        auth_facts = [
-                            f for f in getattr(ctx.deps.context, "facts", {}).values()
-                            if getattr(f, "category", None) == "authentication"
-                        ]
-                        if auth_facts:
-                            profiles = sorted({
-                                str((f.details or {}).get("profile", "?"))
-                                for f in auth_facts
-                            })
-                            auth_prefix = (
-                                "\n[已有认证会话可用，auth_profile="
-                                f"{profiles}。访问受保护页面时必须在工具参数中传 "
-                                "auth_profile 复用会话，禁止重新登录。]\n"
-                            )
-                except Exception as _auth_exc:  # noqa: BLE001
-                    logger.debug("requester 认证会话注入失败（忽略）: %s", _auth_exc)
+                # 磁盘兜底：preauth（API 侧）认证时不注册 facts，仍应注入 default 会话提示。
+                auth_prefix = _build_auth_prefix(
+                    ctx.deps.context, target=getattr(ctx.deps, "target", None)
+                )
                 result = await ctx.deps.requester_agent.run(
                     f"{memory_prefix}{footprint_prefix}{auth_prefix}{prompt}",
                     deps=ctx.deps.requester_deps,
@@ -879,8 +951,11 @@ class AgentExecutor:
                 if ctx.deps.shell_agent is None or ctx.deps.shell_deps is None:
                     return "Shell agent dependencies not configured."
                 memory_prefix = _memory_prompt_prefix(ctx.deps.memory_context)
+                auth_prefix_shell = _build_sandbox_auth_prefix(
+                    ctx.deps.context, target=getattr(ctx.deps, "target", None)
+                )
                 result = await ctx.deps.shell_agent.run(
-                    f"{memory_prefix}{prompt}",
+                    f"{memory_prefix}{auth_prefix_shell}{prompt}",
                     deps=ctx.deps.shell_deps,
                     message_history=ctx.deps.message_history,
                     usage=ctx.usage,
@@ -924,10 +999,17 @@ class AgentExecutor:
             async def call_python_interpreter_agent(ctx: RunContext[SupervisorDeps], prompt: str) -> str:
                 """Call the python interpreter agent to execute Python scripts."""
                 memory_prefix = _memory_prompt_prefix(ctx.deps.memory_context)
+                auth_prefix_sandbox = _build_sandbox_auth_prefix(
+                    ctx.deps.context, target=getattr(ctx.deps, "target", None)
+                )
                 result = await ctx.deps.python_interpreter_agent.run(
-                    f"{memory_prefix}{prompt}",
+                    f"{memory_prefix}{auth_prefix_sandbox}{prompt}",
                     deps=ctx.deps.memory_deps,
                     session_key=ctx.deps.auth_session_key,
+                    # 沙箱明文通道：python_interpreter 的 deps 是 MemoryWorkspaceDeps
+                    # （无 target/agent_id/session_id），必须显式传 RequesterDeps
+                    # 才能定位 tasks/<task_id>/agent/auth_context/default.json。
+                    auth_deps=ctx.deps.requester_deps,
                     message_history=ctx.deps.message_history,
                     usage=ctx.usage,
                     usage_limits=ctx.deps.usage_limits,
@@ -968,6 +1050,11 @@ class AgentExecutor:
                     return str(output.model_dump())
                 return str(output)
 
+            # 单轮 recon_lookup 调用闸门（2026-09-10）：supervisor 唯一工具即 recon_lookup，
+            # 实测单轮可连续调用 40+ 次反复查同一批 facts 而不输出 SupervisorDecision，
+            # 撑爆上下文（318K prompt tokens）且不推进任务。按轮计数硬闸门强制收敛。
+            recon_lookup_state = {"round_calls": 0}
+
             @supervisor.agent.tool
             async def call_recon_lookup(
                 ctx: RunContext[SupervisorDeps],
@@ -991,6 +1078,27 @@ class AgentExecutor:
                     keyword: 关键词全文检索（FTS5 模糊召回）
                     limit: 返回上限（默认 20）
                 """
+                recon_lookup_state["round_calls"] += 1
+                if recon_lookup_state["round_calls"] > _MAX_RECON_LOOKUP_PER_ROUND:
+                    logger.info(
+                        "[EXEC] supervisor recon_lookup 单轮触顶 | task_id=%s | calls=%d，强制要求产出决策",
+                        getattr(task_node, "node_id", "?"),
+                        recon_lookup_state["round_calls"],
+                    )
+                    return json.dumps(
+                        {
+                            "found": False,
+                            "count": 0,
+                            "results": [],
+                            "hint": (
+                                f"本轮 recon_lookup 调用已达上限（{_MAX_RECON_LOOKUP_PER_ROUND} 次），"
+                                "禁止再次调用。侦察信息已足够，必须立即输出 SupervisorDecision JSON "
+                                "（action=call_agent 委派子 agent 去实测，或 action=complete 收尾），"
+                                "不得继续查询。"
+                            ),
+                        },
+                        ensure_ascii=False,
+                    )
                 empty = json.dumps(
                     {"found": False, "count": 0, "results": [], "hint": "无匹配侦察资产"},
                     ensure_ascii=False,
@@ -1043,19 +1151,89 @@ class AgentExecutor:
                     self.deps = deps
                     self.usage = usage
 
+            def _valid_auth_profile(profiles: list[dict[str, Any]]) -> dict[str, Any] | None:
+                """从 index.json 摘要中挑出可直接复用的有效 profile（优先 default）。"""
+                valid = [p for p in profiles if p.get("validated") is True]
+                if not valid:
+                    return None
+                for p in valid:
+                    if p.get("name") == "default":
+                        return p
+                return valid[0]
+
+            async def _reuse_existing_auth() -> dict[str, Any] | None:
+                """读本地 auth_context/index.json，返回可用于短路的有效会话摘要。
+
+                supervisor 常把「认证与会话获取」规划成一个 TaskNode，该节点以全新上下文
+                执行、看不到已落盘的会话，于是重复登录（实测每次重复认证耗时 3~4 分钟并
+                消耗数万 token，且引入 CSRF/302 等失败面）。有效会话已存在时，驱动层直接
+                短路复用，根本不给模型重新认证的机会。
+                """
+                deps = supervisor_deps.requester_deps
+                target = getattr(deps, "target", None)
+                agent_id = getattr(deps, "agent_id", None)
+                session_id = getattr(deps, "session_id", None)
+                if not target or agent_id is None or session_id is None:
+                    return None
+                handler = AuthContextHandler(
+                    target=target, agent_id=agent_id, session_id=session_id
+                )
+                if not handler.list_profiles():
+                    return None
+                summaries = await asyncio.to_thread(handler.list_context_summaries)
+                profiles = [
+                    summary for summary in summaries.values() if summary.get("available")
+                ]
+                return _valid_auth_profile(profiles)
+
             async def _run_sub_agent(agent_name: str, prompt: str) -> str:
                 """驱动层直调子 agent（替代 supervisor 工具调用），复用既有 call_* 逻辑。
 
                 每次调用 message_history=None（独立，不污染 supervisor 历史），
                 usage_limits 取自 effective_limits（有界刹车）。落库闭环不变。
                 """
+                # 2026-09-10：supervisor 委派 prompt 常只写相对路径（如 /login.php）或目标
+                # 代号（如 "dvwa"/"web"），子 agent 拿不到绝对基址只能臆造主机名，实测出现
+                # http://dvwa/login.php / http://localhost/login.php → ERR_NAME_NOT_RESOLVED
+                # 导致认证必然失败。驱动层兜底注入基址，不依赖 LLM 自觉携带。
+                base = (getattr(self.context, "target", "") or "").strip()
+                if base and prompt:
+                    host = urlparse(base).netloc or base
+                    if host and host not in prompt:
+                        prompt = (
+                            f"[目标基址] {base}\n"
+                            "所有 URL 必须基于该基址拼成绝对地址（如 /login.php → "
+                            f"{base.rstrip('/')}/login.php）。禁止臆造主机名、禁止使用 localhost。\n\n"
+                            f"{prompt}"
+                        )
                 logger.info(
                     "[EXEC] 委派子 agent | task_id=%s | agent=%s | prompt=%s",
-                    getattr(task_node, "task_id", "?"), agent_name, (prompt or "")[:120],
+                    getattr(task_node, "node_id", "?"), agent_name, (prompt or "")[:120],
                 )
                 ctx = _ToolCtx(supervisor_deps, usage)
                 name = (agent_name or "").lower()
                 if name == "authenticator":
+                    # 有效会话短路：认证已完成时直接复用，不进入 LLM 重新登录。
+                    try:
+                        reusable = await _reuse_existing_auth()
+                    except Exception as _auth_exc:  # noqa: BLE001 - 索引异常时降级为正常委派
+                        reusable = None
+                        logger.debug("认证复用检查失败（降级为正常委派）: %s", _auth_exc)
+                    if reusable is not None:
+                        profile = reusable.get("name")
+                        logger.info(
+                            "[EXEC] 认证短路复用 | task_id=%s | profile=%s | validated=true",
+                            getattr(task_node, "node_id", "?"), profile,
+                        )
+                        return (
+                            f"已有有效认证会话，直接复用，无需重新认证。\n"
+                            f"- auth_profile: {profile}\n"
+                            f"- 目标: {getattr(self.context, 'target', '')}\n"
+                            f"- 会话端点: {reusable.get('final_url')}\n"
+                            f"- Cookie 数: {reusable.get('cookies_count')}\n"
+                            "后续所有请求请显式传入该 auth_profile；禁止重新执行登录，"
+                            "认证由 AuthenticatorAgent 统一管理，会话过期时才需刷新。"
+                        )
                     return await call_authenticator_agent(ctx, prompt)
                 if name == "requester":
                     return await call_requester_agent(ctx, prompt)
@@ -1100,6 +1278,27 @@ class AgentExecutor:
 
             if supervisor_deps.memory_context:
                 supervisor_prompt += f"## Persistent Memory Context:\n{supervisor_deps.memory_context}\n"
+            # 已有认证会话清单（2026-09-10）：认证属于任务前置条件而非可规划目标。
+            # 此前 supervisor 看不到已落盘的会话，会把「认证与会话获取」当成新的可求解
+            # 目标重新委派 authenticator（实测每个任务因此多一次 3~4 分钟的真实登录）。
+            # 把「已有什么、该怎么用」显式写进首轮 prompt，从规划源头消除重复认证。
+            try:
+                _existing_auth = await _reuse_existing_auth()
+            except Exception as _ea_exc:  # noqa: BLE001 - 注入失败不阻断主流程
+                _existing_auth = None
+                logger.debug("认证会话清单注入失败（忽略）: %s", _ea_exc)
+            if _existing_auth is not None:
+                _auth_profile = _existing_auth.get("name")
+                supervisor_prompt += (
+                    "## 已有认证会话（已确认可用，禁止重复认证）:\n"
+                    f"- auth_profile: {_auth_profile}\n"
+                    f"- 会话端点: {_existing_auth.get('final_url')}\n"
+                    f"- Cookie 数: {_existing_auth.get('cookies_count')}\n"
+                    "## 认证使用指引：\n"
+                    "认证已完成，后续所有需要登录的测试直接显式传入上述 auth_profile 即可复用；"
+                    "禁止委派 authenticator 重新登录，也禁止把「认证/登录」规划为独立子任务——"
+                    "认证是任务前置条件，不是可求解目标。仅当工具返回会话失效时才需要刷新。\n"
+                )
             if agent_context:
                 supervisor_prompt += f"## Traces: \n{agent_context}\n"
             # 证据驱动收敛：注入失败足迹摘要，主控据此转向而非死磕同一攻击面
@@ -1132,7 +1331,7 @@ class AgentExecutor:
             history = message_history if message_history is not None else []
             logger.info(
                 "[EXEC] execute_supervisor 启动 | task_id=%s | is_root=%s | initial_history=%d",
-                getattr(task_node, "task_id", "?"),
+                getattr(task_node, "node_id", "?"),
                 "yes" if getattr(task_node, "is_root", False) else "no",
                 len(history),
             )
@@ -1143,24 +1342,40 @@ class AgentExecutor:
             outcome_for_next: str = ""
             for _round in range(max_rounds):
                 windowed = window_messages(history, cfg.history_max_messages, cfg.history_max_tokens)
+                # 每轮重置 recon_lookup 闸门：限制的是「单轮内」重复检索，
+                # 跨轮委派后需要新侦察信息时仍可正常查询。
+                recon_lookup_state["round_calls"] = 0
                 prompt = supervisor_prompt if first_round else outcome_for_next
                 first_round = False
                 emit(f"[SUPERVISOR-LOOP] round={_round + 1} history={len(history)} windowed={len(windowed)}")
                 logger.info(
                     "[EXEC] supervisor 第 %d 轮 | task_id=%s | history=%d | windowed=%d",
-                    _round + 1, getattr(task_node, "task_id", "?"), len(history), len(windowed),
+                    _round + 1, getattr(task_node, "node_id", "?"), len(history), len(windowed),
+                )
+                # 单轮请求刹车（2026-09-10）：share 的 effective_limits.request_limit
+                # 是跨轮总预算，单轮内 CoreAgent 可跑满 max_iterations=50；实测 supervisor
+                # 单轮空转 29+ 次、prompt 涨到 73 万 token 仍不产出决策。按「已用 + 单轮额度」
+                # 逐轮收紧，单轮触顶即 FallbackAgentResult 收口，不再无限空转。
+                used_requests = int(getattr(usage, "requests", 0) or 0)
+                round_budget = used_requests + _MAX_SUPERVISOR_ROUND_REQUESTS
+                overall = getattr(effective_limits, "request_limit", None)
+                round_limits = UsageLimits(
+                    request_limit=(
+                        min(round_budget, overall) if overall else round_budget
+                    ),
+                    tool_calls_limit=None,
                 )
                 result = await supervisor.run(
                     prompt=prompt,
                     deps=supervisor_deps,
                     message_history=windowed,
                     usage=usage,
-                    usage_limits=effective_limits,
+                    usage_limits=round_limits,
                     deferred_tool_results=deferred_tool_results,
                 )
                 if isinstance(result, FallbackAgentResult):
                     emit("[SUPERVISOR-LOOP] usage limit / error reached; terminating loop.")
-                    logger.info("[EXEC] supervisor 触顶/错误终止 | task_id=%s", getattr(task_node, "task_id", "?"))
+                    logger.info("[EXEC] supervisor 触顶/错误终止 | task_id=%s", getattr(task_node, "node_id", "?"))
                     confidence_score = 0.5
                     context["task_achieved"] = False
                     context["detailed_summary"] = (
@@ -1175,7 +1390,7 @@ class AgentExecutor:
                     confidence_score = decision.confidence_score
                     logger.info(
                         "[EXEC] supervisor complete | task_id=%s | task_achieved=%s | confidence=%.2f",
-                        getattr(task_node, "task_id", "?"), decision.task_achieved, decision.confidence_score,
+                        getattr(task_node, "node_id", "?"), decision.task_achieved, decision.confidence_score,
                     )
                     context["task_achieved"] = decision.task_achieved
                     context["detailed_summary"] = decision.detailed_summary
